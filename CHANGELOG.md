@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-01-13
+
+### Changed
+- Updated `@modelcontextprotocol/sdk` to 1.25.2
+- Updated `@types/node` to 20.19.29
+
+### Fixed
+- Security vulnerability in `qs` dependency (GHSA-6rw7-vpxm-498p)
+
+### Added
+- `CLAUDE.md` for Claude Code contributors
+
 ## [1.4.0] - 2025-12-01
 
 ### Added

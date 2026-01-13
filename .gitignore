@@ -4,6 +4,5 @@ dist/
 .DS_Store
 .mcpregistry_*
 
-# Claude Code local files
-.claude/memory/
-.claude/settings.local.json
+# Claude Code local config (CLAUDE.md stays tracked)
+.claude/
