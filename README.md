@@ -11,7 +11,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io)
 
-MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, Readarr, and Prowlarr.
+MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, Readarr, Prowlarr, plus [Overseerr](https://overseerr.dev/) for request management.
 
 ## Why Use This?
 
@@ -33,6 +33,7 @@ MCP server for the [*arr media management suite](https://wiki.servarr.com/) - So
 | **Readarr (Books)** | List authors, view books, search writers, trigger downloads, check queue, view calendar, review setup |
 | **Prowlarr (Indexers)** | List indexers, search across all trackers, test health, view statistics |
 | **Tautulli (Plex)** | Activity, history, libraries, users, recently added, server status, terminate session |
+| **Overseerr (Requests)** | List requests, approve/decline, view users, search media, request management |
 | **Cross-Service** | Status check, unified search across all configured services |
 | **Configuration** | Quality profiles, download clients, naming conventions, health checks, storage info |
 | **TRaSH Guides** | Reference quality profiles, custom formats, naming conventions, compare against recommendations |
@@ -43,6 +44,7 @@ MCP server for the [*arr media management suite](https://wiki.servarr.com/) - So
 - At least one of:
   - *arr application(s) with API access: [Sonarr](https://sonarr.tv/), [Radarr](https://radarr.video/), [Lidarr](https://lidarr.audio/), [Readarr](https://readarr.com/), [Prowlarr](https://prowlarr.com/)
   - [Tautulli](https://tautulli.com/) (Plex monitoring and statistics)
+  - [Overseerr](https://overseerr.dev/) (request management for Plex)
 
 ## Installation
 
@@ -98,7 +100,9 @@ Add to your Claude Desktop config file:
         "PROWLARR_URL": "http://localhost:9696",
         "PROWLARR_API_KEY": "your-prowlarr-api-key",
         "TAUTULLI_URL": "http://localhost:8181",
-        "TAUTULLI_API_KEY": "your-tautulli-api-key"
+        "TAUTULLI_API_KEY": "your-tautulli-api-key",
+        "OVERSEERR_URL": "http://localhost:5055",
+        "OVERSEERR_API_KEY": "your-overseerr-api-key"
       }
     }
   }
@@ -275,6 +279,23 @@ When `TAUTULLI_URL` and `TAUTULLI_API_KEY` are set:
 | `tautulli_terminate_session` | Terminate a streaming session |
 
 `arr_status` includes Tautulli connection status when configured.
+
+### Overseerr Tools (Requests)
+
+When `OVERSEERR_URL` and `OVERSEERR_API_KEY` are set:
+
+| Tool | Description |
+|------|-------------|
+| `overseerr_get_requests` | List media requests with status, requester, and media details. Filter by status (pending, approved, etc.) |
+| `overseerr_get_request_count` | Get request counts by status (pending, approved, declined, etc.) |
+| `overseerr_get_users` | List Overseerr users with their request counts |
+| `overseerr_get_user_requests` | Get all requests made by a specific user |
+| `overseerr_approve_request` | Approve a pending media request |
+| `overseerr_decline_request` | Decline a pending media request |
+| `overseerr_search` | Search for movies and TV shows (uses TMDB) |
+| `overseerr_status` | Get Overseerr server status and version |
+
+`arr_status` includes Overseerr connection status when configured.
 
 ### Configuration Review Tools
 

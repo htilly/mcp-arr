@@ -4,5 +4,8 @@ dist/
 .DS_Store
 .mcpregistry_*
 
+# Local test config (API keys)
+test-config.txt
+
 # Claude Code local config (CLAUDE.md stays tracked)
 .claude/

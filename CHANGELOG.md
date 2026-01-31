@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Sorting options** for `sonarr_get_series` and `radarr_get_movies`:
   - `sortDir` parameter: 'asc' (ascending) or 'desc' (descending)
   - Default: 'asc' for dateAdded, 'desc' for sizeOnDisk
+- **Overseerr integration** – request management for Plex:
+  - `overseerr_get_requests` – List media requests with status, requester, and media details
+  - `overseerr_get_request_count` – Get request counts by status
+  - `overseerr_get_users` – List Overseerr users with request counts
+  - `overseerr_get_user_requests` – Get all requests made by a specific user
+  - `overseerr_approve_request` – Approve a pending media request
+  - `overseerr_decline_request` – Decline a pending media request
+  - `overseerr_search` – Search for movies and TV shows (uses TMDB)
+  - `overseerr_status` – Get Overseerr server status and version
 
 ## [1.4.1] - 2026-01-13
 

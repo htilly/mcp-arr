@@ -169,6 +169,8 @@ export interface Movie {
   genres: string[];
   tags: number[];
   added: string;
+  /** Radarr API returns dateAdded (camelCase); added may be absent. */
+  dateAdded?: string;
   ratings: { votes: number; value: number };
   movieFile?: {
     id: number;
@@ -471,12 +473,14 @@ export class ArrClient {
       headers,
     });
 
+    const text = await response.text();
     if (!response.ok) {
-      const text = await response.text();
       throw new Error(`${this.serviceName} API error: ${response.status} ${response.statusText} - ${text}`);
     }
-
-    return response.json() as Promise<T>;
+    if (!text || text.trim() === '') {
+      return undefined as T;
+    }
+    return JSON.parse(text) as T;
   }
 
   /**
@@ -668,6 +672,37 @@ export class SonarrClient extends ArrClient {
       }),
     });
   }
+
+  async deleteSeries(
+    id: number,
+    options: { deleteFiles?: boolean; addImportListExclusion?: boolean } = {}
+  ): Promise<void> {
+    const { deleteFiles = true, addImportListExclusion = false } = options;
+    const params = new URLSearchParams({
+      deleteFiles: String(deleteFiles),
+      addImportListExclusion: String(addImportListExclusion),
+    });
+    await this['request']<void>(`/series/${id}?${params.toString()}`, { method: 'DELETE' });
+  }
+
+  async getEpisodeFileIds(seriesId: number, seasonNumber?: number): Promise<number[]> {
+    const episodes = await this.getEpisodes(seriesId, seasonNumber);
+    return episodes
+      .filter((e) => e.hasFile && e.episodeFileId > 0)
+      .map((e) => e.episodeFileId);
+  }
+
+  async deleteEpisodeFiles(episodeFileIds: number[]): Promise<void> {
+    if (episodeFileIds.length === 0) return;
+    if (episodeFileIds.length === 1) {
+      await this['request']<void>(`/episodefile/${episodeFileIds[0]}`, { method: 'DELETE' });
+      return;
+    }
+    await this['request']<void>('/episodefile/bulk', {
+      method: 'DELETE',
+      body: JSON.stringify({ episodeFileIds }),
+    });
+  }
 }
 
 export class RadarrClient extends ArrClient {
@@ -723,6 +758,18 @@ export class RadarrClient extends ArrClient {
         movieIds: [movieId],
       }),
     });
+  }
+
+  async deleteMovie(
+    id: number,
+    options: { deleteFiles?: boolean; addImportExclusion?: boolean } = {}
+  ): Promise<void> {
+    const { deleteFiles = true, addImportExclusion = false } = options;
+    const params = new URLSearchParams({
+      deleteFiles: String(deleteFiles),
+      addImportExclusion: String(addImportExclusion),
+    });
+    await this['request']<void>(`/movie/${id}?${params.toString()}`, { method: 'DELETE' });
   }
 }
 

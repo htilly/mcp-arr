@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * MCP Server for *arr Media Management Suite + Tautulli
+ * MCP Server for *arr Media Management Suite + Tautulli + Overseerr
  *
  * Environment variables:
  * - SONARR_URL, SONARR_API_KEY, RADARR_URL, RADARR_API_KEY, etc.
  * - TAUTULLI_URL, TAUTULLI_API_KEY
+ * - OVERSEERR_URL, OVERSEERR_API_KEY
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -24,6 +25,7 @@ import {
 } from "./arr-client.js";
 import { trashClient, TrashService } from "./trash-client.js";
 import { TautulliClient } from "./tautulli-client.js";
+import { OverseerrClient } from "./overseerr-client.js";
 
 // Configuration from environment
 interface ServiceConfig {
@@ -45,9 +47,12 @@ const configuredServices = services.filter(s => s.url && s.apiKey);
 const tautulliUrl = process.env.TAUTULLI_URL;
 const tautulliApiKey = process.env.TAUTULLI_API_KEY;
 const tautulliConfigured = Boolean(tautulliUrl && tautulliApiKey);
+const overseerrUrl = process.env.OVERSEERR_URL;
+const overseerrApiKey = process.env.OVERSEERR_API_KEY;
+const overseerrConfigured = Boolean(overseerrUrl && overseerrApiKey);
 
-if (configuredServices.length === 0 && !tautulliConfigured) {
-  console.error("Error: No services configured. Set at least one of: *arr (SONARR_URL+API_KEY, etc.) or Tautulli (TAUTULLI_URL+TAUTULLI_API_KEY)");
+if (configuredServices.length === 0 && !tautulliConfigured && !overseerrConfigured) {
+  console.error("Error: No services configured. Set at least one of: *arr (SONARR_URL+API_KEY, etc.), Tautulli (TAUTULLI_URL+TAUTULLI_API_KEY), or Overseerr (OVERSEERR_URL+OVERSEERR_API_KEY)");
   process.exit(1);
 }
 
@@ -62,6 +67,11 @@ const clients: {
 let tautulliClient: TautulliClient | undefined;
 if (tautulliConfigured) {
   tautulliClient = new TautulliClient({ url: tautulliUrl!, apiKey: tautulliApiKey! });
+}
+
+let overseerrClient: OverseerrClient | undefined;
+if (overseerrConfigured) {
+  overseerrClient = new OverseerrClient({ url: overseerrUrl!, apiKey: overseerrApiKey! });
 }
 
 for (const service of configuredServices) {
@@ -87,6 +97,7 @@ for (const service of configuredServices) {
 
 const statusParts = configuredServices.map(s => s.displayName);
 if (tautulliConfigured) statusParts.push('Tautulli (Plex)');
+if (overseerrConfigured) statusParts.push('Overseerr (Requests)');
 const TOOLS: Tool[] = [
   {
     name: "arr_status",
@@ -744,6 +755,106 @@ if (tautulliClient) {
   );
 }
 
+// Overseerr tools (request management)
+if (overseerrClient) {
+  TOOLS.push(
+    {
+      name: "overseerr_get_requests",
+      description: "Get media requests from Overseerr. Shows who requested what, status (pending/approved/declined), and media details.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          filter: {
+            type: "string",
+            enum: ["all", "pending", "approved", "declined", "processing", "available"],
+            description: "Filter by request status (default: all)",
+          },
+          take: {
+            type: "number",
+            description: "Number of requests to return (default: 20, max: 100)",
+          },
+          requestedBy: {
+            type: "number",
+            description: "Filter by user ID who made the request",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "overseerr_get_request_count",
+      description: "Get request counts by status (pending, approved, declined, etc.)",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    },
+    {
+      name: "overseerr_get_users",
+      description: "Get all Overseerr users with their request counts",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          take: { type: "number", description: "Number of users to return (default: 20)" },
+          sort: {
+            type: "string",
+            enum: ["displayname", "requestcount", "created"],
+            description: "Sort by field (default: displayname)",
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "overseerr_get_user_requests",
+      description: "Get all requests made by a specific user",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          userId: { type: "number", description: "User ID to get requests for" },
+          take: { type: "number", description: "Number of requests to return (default: 20)" },
+        },
+        required: ["userId"],
+      },
+    },
+    {
+      name: "overseerr_approve_request",
+      description: "Approve a pending media request",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          requestId: { type: "number", description: "Request ID to approve" },
+        },
+        required: ["requestId"],
+      },
+    },
+    {
+      name: "overseerr_decline_request",
+      description: "Decline a pending media request",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          requestId: { type: "number", description: "Request ID to decline" },
+        },
+        required: ["requestId"],
+      },
+    },
+    {
+      name: "overseerr_search",
+      description: "Search for movies and TV shows in Overseerr (uses TMDB)",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          query: { type: "string", description: "Search term" },
+        },
+        required: ["query"],
+      },
+    },
+    {
+      name: "overseerr_status",
+      description: "Get Overseerr server status and version",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    }
+  );
+}
+
 // Cross-service search tool
 TOOLS.push({
   name: "arr_search_all",
@@ -972,6 +1083,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         } else {
           statuses.tautulli = { configured: false };
+        }
+        if (overseerrConfigured) {
+          try {
+            if (overseerrClient) {
+              const status = await overseerrClient.getStatus();
+              statuses.overseerr = {
+                configured: true,
+                connected: true,
+                version: status.version,
+                updateAvailable: status.updateAvailable,
+              };
+            } else {
+              statuses.overseerr = { configured: true, connected: false };
+            }
+          } catch (error) {
+            statuses.overseerr = {
+              configured: true,
+              connected: false,
+              error: error instanceof Error ? error.message : String(error),
+            };
+          }
+        } else {
+          statuses.overseerr = { configured: false };
         }
         return {
           content: [{ type: "text", text: JSON.stringify(statuses, null, 2) }],
@@ -2051,6 +2185,166 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { session_key, session_id } = args as { session_key: string; session_id: string };
         const data = await tautulliClient.terminateSession(session_key, session_id);
         return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+      }
+
+      // Overseerr handlers
+      case "overseerr_get_requests": {
+        if (!overseerrClient) throw new Error("Overseerr not configured");
+        const a = args as {
+          filter?: 'all' | 'pending' | 'approved' | 'declined' | 'processing' | 'available';
+          take?: number;
+          requestedBy?: number;
+        };
+        const take = Math.min(a.take ?? 20, 100);
+        const data = await overseerrClient.getRequests({
+          take,
+          filter: a.filter,
+          requestedBy: a.requestedBy,
+        });
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              totalRequests: data.pageInfo.results,
+              returned: data.results.length,
+              requests: data.results.map(r => ({
+                id: r.id,
+                type: r.type,
+                status: OverseerrClient.formatRequestStatus(r.status),
+                is4k: r.is4k,
+                requestedBy: r.requestedBy?.username || r.requestedBy?.plexUsername || r.requestedBy?.email,
+                requestedAt: r.createdAt,
+                media: {
+                  tmdbId: r.media?.tmdbId,
+                  tvdbId: r.media?.tvdbId,
+                  status: OverseerrClient.formatMediaStatus(r.media?.status ?? 1),
+                },
+                ...(r.seasonCount && { seasons: r.seasonCount }),
+              })),
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "overseerr_get_request_count": {
+        if (!overseerrClient) throw new Error("Overseerr not configured");
+        const data = await overseerrClient.getRequestCount();
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(data, null, 2),
+          }],
+        };
+      }
+
+      case "overseerr_get_users": {
+        if (!overseerrClient) throw new Error("Overseerr not configured");
+        const a = args as { take?: number; sort?: 'displayname' | 'requestcount' | 'created' };
+        const data = await overseerrClient.getUsers({
+          take: a.take ?? 20,
+          sort: a.sort,
+        });
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              totalUsers: data.pageInfo.results,
+              returned: data.results.length,
+              users: data.results.map(u => ({
+                id: u.id,
+                username: u.username || u.plexUsername || u.email,
+                email: u.email,
+                requestCount: u.requestCount,
+                createdAt: u.createdAt,
+              })),
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "overseerr_get_user_requests": {
+        if (!overseerrClient) throw new Error("Overseerr not configured");
+        const { userId, take } = args as { userId: number; take?: number };
+        const data = await overseerrClient.getUserRequests(userId, { take: take ?? 20 });
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              userId,
+              totalRequests: data.pageInfo.results,
+              returned: data.results.length,
+              requests: data.results.map(r => ({
+                id: r.id,
+                type: r.type,
+                status: OverseerrClient.formatRequestStatus(r.status),
+                is4k: r.is4k,
+                requestedAt: r.createdAt,
+                media: {
+                  tmdbId: r.media?.tmdbId,
+                  tvdbId: r.media?.tvdbId,
+                  status: OverseerrClient.formatMediaStatus(r.media?.status ?? 1),
+                },
+              })),
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "overseerr_approve_request": {
+        if (!overseerrClient) throw new Error("Overseerr not configured");
+        const { requestId } = args as { requestId: number };
+        const data = await overseerrClient.approveRequest(requestId);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: "Request approved",
+              requestId,
+              newStatus: OverseerrClient.formatRequestStatus(data.status),
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "overseerr_decline_request": {
+        if (!overseerrClient) throw new Error("Overseerr not configured");
+        const { requestId } = args as { requestId: number };
+        const data = await overseerrClient.declineRequest(requestId);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: "Request declined",
+              requestId,
+              newStatus: OverseerrClient.formatRequestStatus(data.status),
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "overseerr_search": {
+        if (!overseerrClient) throw new Error("Overseerr not configured");
+        const { query } = args as { query: string };
+        const data = await overseerrClient.search(query);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(data, null, 2),
+          }],
+        };
+      }
+
+      case "overseerr_status": {
+        if (!overseerrClient) throw new Error("Overseerr not configured");
+        const data = await overseerrClient.getStatus();
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(data, null, 2),
+          }],
+        };
       }
 
       // Cross-service search
