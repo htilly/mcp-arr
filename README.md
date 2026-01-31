@@ -32,6 +32,7 @@ MCP server for the [*arr media management suite](https://wiki.servarr.com/) - So
 | **Lidarr (Music)** | List artists, view albums, search musicians, trigger downloads, check queue, view calendar, review setup |
 | **Readarr (Books)** | List authors, view books, search writers, trigger downloads, check queue, view calendar, review setup |
 | **Prowlarr (Indexers)** | List indexers, search across all trackers, test health, view statistics |
+| **Tautulli (Plex)** | Activity, history, libraries, users, recently added, server status, terminate session |
 | **Cross-Service** | Status check, unified search across all configured services |
 | **Configuration** | Quality profiles, download clients, naming conventions, health checks, storage info |
 | **TRaSH Guides** | Reference quality profiles, custom formats, naming conventions, compare against recommendations |
@@ -39,12 +40,9 @@ MCP server for the [*arr media management suite](https://wiki.servarr.com/) - So
 ## Prerequisites
 
 - Node.js 18+
-- At least one *arr application running with API access:
-  - [Sonarr](https://sonarr.tv/) for TV series
-  - [Radarr](https://radarr.video/) for movies
-  - [Lidarr](https://lidarr.audio/) for music
-  - [Readarr](https://readarr.com/) for books
-  - [Prowlarr](https://prowlarr.com/) for indexer management
+- At least one of:
+  - *arr application(s) with API access: [Sonarr](https://sonarr.tv/), [Radarr](https://radarr.video/), [Lidarr](https://lidarr.audio/), [Readarr](https://readarr.com/), [Prowlarr](https://prowlarr.com/)
+  - [Tautulli](https://tautulli.com/) (Plex monitoring and statistics)
 
 ## Installation
 
@@ -98,7 +96,9 @@ Add to your Claude Desktop config file:
         "READARR_URL": "http://localhost:8787",
         "READARR_API_KEY": "your-readarr-api-key",
         "PROWLARR_URL": "http://localhost:9696",
-        "PROWLARR_API_KEY": "your-prowlarr-api-key"
+        "PROWLARR_API_KEY": "your-prowlarr-api-key",
+        "TAUTULLI_URL": "http://localhost:8181",
+        "TAUTULLI_API_KEY": "your-tautulli-api-key"
       }
     }
   }
@@ -178,6 +178,18 @@ Add to `~/.claude.json`:
 - "Check status of all my *arr services"
 - "Search for 'comedy' across all services"
 
+## Discovering tools and options
+
+The MCP server exposes every tool with its full **inputSchema** (parameters, types, enums, descriptions). When your client connects, it receives this via **ListTools**, so the AI already knows what each tool does and which options it accepts.
+
+You can ask in plain language, for example:
+- *"What tools does the arr server have?"*
+- *"What parameters does radarr_get_movies accept?"*
+- *"How do I get only the first 100 movies from Radarr?"*
+- *"Can I sort Sonarr series by size on disk?"*
+
+The AI will answer from the tool definitions (sortBy, limit, etc.) without needing to read this README.
+
 ## Available Tools
 
 ### General Tools
@@ -191,23 +203,27 @@ Add to `~/.claude.json`:
 
 | Tool | Description |
 |------|-------------|
-| `sonarr_get_series` | List all TV series in your library |
+| `sonarr_get_series` | List all TV series. Optional: sortBy (dateAdded, sizeOnDisk), sortDir (asc, desc), limit (e.g. 100) |
 | `sonarr_search` | Search for TV series to add |
 | `sonarr_get_queue` | View current download queue |
 | `sonarr_get_calendar` | See upcoming episodes |
-| `sonarr_get_episodes` | List episodes for a series (shows missing vs available) |
+| `sonarr_get_episodes` | List episodes for a series (shows missing vs available; includes episodeFileId for delete) |
 | `sonarr_search_missing` | Trigger search for all missing episodes in a series |
 | `sonarr_search_episode` | Trigger search for specific episode(s) |
+| `sonarr_delete_series` | Delete a whole series (optionally delete files, add import list exclusion) |
+| `sonarr_delete_season` | Delete all episode files for a specific season |
+| `sonarr_delete_episode_files` | Delete specific episode file(s) by episode file ID |
 
 ### Radarr Tools (Movies)
 
 | Tool | Description |
 |------|-------------|
-| `radarr_get_movies` | List all movies in your library |
+| `radarr_get_movies` | List all movies. Optional: sortBy (dateAdded, sizeOnDisk), sortDir (asc, desc), limit (e.g. 100) |
 | `radarr_search` | Search for movies to add |
 | `radarr_get_queue` | View current download queue |
 | `radarr_get_calendar` | See upcoming releases |
 | `radarr_search_movie` | Trigger search to download a movie in your library |
+| `radarr_delete_movie` | Delete a movie (optionally delete files from disk, add import exclusion) |
 
 ### Lidarr Tools (Music)
 
@@ -241,6 +257,24 @@ Add to `~/.claude.json`:
 | `prowlarr_search` | Search across all indexers |
 | `prowlarr_test_indexers` | Test all indexers and return health status |
 | `prowlarr_get_stats` | Get indexer statistics (queries, grabs, failures) |
+
+### Tautulli Tools (Plex)
+
+When `TAUTULLI_URL` and `TAUTULLI_API_KEY` are set:
+
+| Tool | Description |
+|------|-------------|
+| `tautulli_get_activity` | Current Plex activity (now playing) |
+| `tautulli_get_history` | Watch history. With title: search by movie/series – shows who watched and when (or empty if no one in last ~2000 plays) |
+| `tautulli_get_libraries` | Plex libraries |
+| `tautulli_get_server_info` | Plex server info |
+| `tautulli_get_home_stats` | Home stats (plays, duration) |
+| `tautulli_get_users` | Plex users |
+| `tautulli_get_recently_added` | Recently added media |
+| `tautulli_server_status` | Tautulli/Plex server status |
+| `tautulli_terminate_session` | Terminate a streaming session |
+
+`arr_status` includes Tautulli connection status when configured.
 
 ### Configuration Review Tools
 
@@ -292,9 +326,14 @@ npm run watch
 # Build TypeScript
 npm run build
 
+# Test connections to all configured services (reads test-config.txt or env)
+npm run test
+
 # Run locally
 SONARR_URL="http://localhost:8989" SONARR_API_KEY="your-key" node dist/index.js
 ```
+
+For `npm run test`, set URL and API key in `test-config.txt` (project root, .env-style) or as environment variables. The script tests Sonarr, Radarr, Lidarr, Readarr, Prowlarr, and Tautulli; Tautulli gets a detailed output (recent history, users) when configured.
 
 ## Troubleshooting
 

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Tautulli (Plex) integration** – optional; server can run with only Tautulli configured:
+  - `tautulli_get_activity` – Current Plex activity (now playing)
+  - `tautulli_get_history` – Watch history (optional filters)
+  - `tautulli_get_libraries` – Plex libraries
+  - `tautulli_get_server_info` – Plex server info
+  - `tautulli_get_home_stats` – Home stats (plays, duration)
+  - `tautulli_get_users` – Plex users
+  - `tautulli_get_recently_added` – Recently added media
+  - `tautulli_server_status` – Tautulli/Plex server status
+  - `tautulli_terminate_session` – Terminate a streaming session
+- **Delete tools** for Radarr and Sonarr:
+  - `radarr_delete_movie` – Delete a movie (optionally delete files from disk, add import exclusion)
+  - `sonarr_delete_series` – Delete a whole series (optionally delete files, add import list exclusion)
+  - `sonarr_delete_season` – Delete all episode files for a specific season
+  - `sonarr_delete_episode_files` – Delete specific episode file(s) by episode file ID
+- `sonarr_get_episodes` response now includes `episodeFileId` (when the episode has a file) for use with `sonarr_delete_episode_files`
+- **Sorting options** for `sonarr_get_series` and `radarr_get_movies`:
+  - `sortDir` parameter: 'asc' (ascending) or 'desc' (descending)
+  - Default: 'asc' for dateAdded, 'desc' for sizeOnDisk
+
 ## [1.4.1] - 2026-01-13
 
 ### Changed

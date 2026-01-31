@@ -1,16 +1,10 @@
 #!/usr/bin/env node
 /**
- * MCP Server for *arr Media Management Suite
- *
- * Provides tools for managing Sonarr (TV), Radarr (Movies), Lidarr (Music),
- * Readarr (Books), and Prowlarr (Indexers) through Claude Code.
+ * MCP Server for *arr Media Management Suite + Tautulli
  *
  * Environment variables:
- * - SONARR_URL, SONARR_API_KEY
- * - RADARR_URL, RADARR_API_KEY
- * - LIDARR_URL, LIDARR_API_KEY
- * - READARR_URL, READARR_API_KEY
- * - PROWLARR_URL, PROWLARR_API_KEY
+ * - SONARR_URL, SONARR_API_KEY, RADARR_URL, RADARR_API_KEY, etc.
+ * - TAUTULLI_URL, TAUTULLI_API_KEY
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -29,6 +23,7 @@ import {
   ArrService,
 } from "./arr-client.js";
 import { trashClient, TrashService } from "./trash-client.js";
+import { TautulliClient } from "./tautulli-client.js";
 
 // Configuration from environment
 interface ServiceConfig {
@@ -46,16 +41,16 @@ const services: ServiceConfig[] = [
   { name: 'prowlarr', displayName: 'Prowlarr (Indexers)', url: process.env.PROWLARR_URL, apiKey: process.env.PROWLARR_API_KEY },
 ];
 
-// Check which services are configured
 const configuredServices = services.filter(s => s.url && s.apiKey);
+const tautulliUrl = process.env.TAUTULLI_URL;
+const tautulliApiKey = process.env.TAUTULLI_API_KEY;
+const tautulliConfigured = Boolean(tautulliUrl && tautulliApiKey);
 
-if (configuredServices.length === 0) {
-  console.error("Error: No *arr services configured. Set at least one pair of URL and API_KEY environment variables.");
-  console.error("Example: SONARR_URL and SONARR_API_KEY");
+if (configuredServices.length === 0 && !tautulliConfigured) {
+  console.error("Error: No services configured. Set at least one of: *arr (SONARR_URL+API_KEY, etc.) or Tautulli (TAUTULLI_URL+TAUTULLI_API_KEY)");
   process.exit(1);
 }
 
-// Initialize clients for configured services
 const clients: {
   sonarr?: SonarrClient;
   radarr?: RadarrClient;
@@ -63,6 +58,11 @@ const clients: {
   readarr?: ReadarrClient;
   prowlarr?: ProwlarrClient;
 } = {};
+
+let tautulliClient: TautulliClient | undefined;
+if (tautulliConfigured) {
+  tautulliClient = new TautulliClient({ url: tautulliUrl!, apiKey: tautulliApiKey! });
+}
 
 for (const service of configuredServices) {
   const config = { url: service.url!, apiKey: service.apiKey! };
@@ -85,12 +85,12 @@ for (const service of configuredServices) {
   }
 }
 
-// Build tools based on configured services
+const statusParts = configuredServices.map(s => s.displayName);
+if (tautulliConfigured) statusParts.push('Tautulli (Plex)');
 const TOOLS: Tool[] = [
-  // General tool available for all
   {
     name: "arr_status",
-    description: `Get status of all configured *arr services. Currently configured: ${configuredServices.map(s => s.displayName).join(', ')}`,
+    description: `Get status of all configured services. Currently configured: ${statusParts.join(', ')}`,
     inputSchema: {
       type: "object" as const,
       properties: {},
@@ -182,10 +182,25 @@ if (clients.sonarr) {
   TOOLS.push(
     {
       name: "sonarr_get_series",
-      description: "Get all TV series in Sonarr library",
+      description: "Get all TV series in Sonarr library. Optional sortBy: 'dateAdded' or 'sizeOnDisk'. Optional sortDir: 'asc' or 'desc'. Optional limit: return only the first N items.",
       inputSchema: {
         type: "object" as const,
-        properties: {},
+        properties: {
+          sortBy: {
+            type: "string",
+            enum: ["dateAdded", "sizeOnDisk"],
+            description: "Sort by date added or size on disk. Omit for default order.",
+          },
+          sortDir: {
+            type: "string",
+            enum: ["asc", "desc"],
+            description: "Sort direction: 'asc' (ascending) or 'desc' (descending). Default: 'asc' for dateAdded, 'desc' for sizeOnDisk.",
+          },
+          limit: {
+            type: "number",
+            description: "Return only the first N series (e.g. 100). Omit for all. Max 1000.",
+          },
+        },
         required: [],
       },
     },
@@ -272,6 +287,46 @@ if (clients.sonarr) {
         },
         required: ["episodeIds"],
       },
+    },
+    {
+      name: "sonarr_delete_series",
+      description: "Delete a TV series from Sonarr (optionally delete files from disk)",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          seriesId: { type: "number", description: "Series ID to delete" },
+          deleteFiles: { type: "boolean", description: "Delete files from disk (default: true)" },
+          addImportListExclusion: { type: "boolean", description: "Add to import list exclusion (default: false)" },
+        },
+        required: ["seriesId"],
+      },
+    },
+    {
+      name: "sonarr_delete_season",
+      description: "Delete all episode files for a specific season of a series",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          seriesId: { type: "number", description: "Series ID" },
+          seasonNumber: { type: "number", description: "Season number to delete" },
+        },
+        required: ["seriesId", "seasonNumber"],
+      },
+    },
+    {
+      name: "sonarr_delete_episode_files",
+      description: "Delete specific episode file(s). Use episodeFileId from sonarr_get_episodes.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          episodeFileIds: {
+            type: "array",
+            items: { type: "number" },
+            description: "Episode file ID(s) to delete",
+          },
+        },
+        required: ["episodeFileIds"],
+      },
     }
   );
 }
@@ -281,10 +336,25 @@ if (clients.radarr) {
   TOOLS.push(
     {
       name: "radarr_get_movies",
-      description: "Get all movies in Radarr library",
+      description: "Get all movies in Radarr library. Optional sortBy: 'dateAdded' or 'sizeOnDisk'. Optional sortDir: 'asc' or 'desc'. Optional limit: return only the first N movies.",
       inputSchema: {
         type: "object" as const,
-        properties: {},
+        properties: {
+          sortBy: {
+            type: "string",
+            enum: ["dateAdded", "sizeOnDisk"],
+            description: "Sort by date added or size on disk. Omit for default order.",
+          },
+          sortDir: {
+            type: "string",
+            enum: ["asc", "desc"],
+            description: "Sort direction: 'asc' (ascending) or 'desc' (descending). Default: 'asc' for dateAdded, 'desc' for sizeOnDisk.",
+          },
+          limit: {
+            type: "number",
+            description: "Return only the first N movies (e.g. 100). Omit for all. Max 1000.",
+          },
+        },
         required: [],
       },
     },
@@ -335,6 +405,19 @@ if (clients.radarr) {
             type: "number",
             description: "Movie ID to search for",
           },
+        },
+        required: ["movieId"],
+      },
+    },
+    {
+      name: "radarr_delete_movie",
+      description: "Delete a movie from Radarr (optionally delete files from disk)",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          movieId: { type: "number", description: "Movie ID to delete" },
+          deleteFiles: { type: "boolean", description: "Delete files from disk (default: true)" },
+          addImportExclusion: { type: "boolean", description: "Add to import exclusion (default: false)" },
         },
         required: ["movieId"],
       },
@@ -578,6 +661,89 @@ if (clients.prowlarr) {
   );
 }
 
+// Tautulli tools (Plex monitoring)
+if (tautulliClient) {
+  TOOLS.push(
+    {
+      name: "tautulli_get_activity",
+      description: "Get current Plex activity (now playing) from Tautulli",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    },
+    {
+      name: "tautulli_get_history",
+      description: "Get Plex watch history from Tautulli. With title: search by movie/series name – response shows if that media appears in watch history and, for each match, who watched it and when. No matches means no one has watched it in the last ~2000 plays. Without title: returns recent history. Optional: user_id, length, media_type, order_column, order_dir",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          title: { type: "string", description: "Search by title (e.g. 'Bad Boys for Life'). Response: matching plays with who (friendly_name) and when (date). Empty = no one has watched that title in the searched history window." },
+          user_id: { type: "number", description: "Filter by Tautulli user ID" },
+          length: { type: "number", description: "Without title: number of records (default 25). With title: max matches to return (search uses last ~2000 plays)." },
+          media_type: { type: "string", description: "movie, episode, track, etc." },
+          order_column: { type: "string", description: "Column to sort by" },
+          order_dir: { type: "string", enum: ["asc", "desc"], description: "Sort direction" },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "tautulli_get_libraries",
+      description: "Get Plex libraries from Tautulli",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    },
+    {
+      name: "tautulli_get_server_info",
+      description: "Get Plex server info from Tautulli",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    },
+    {
+      name: "tautulli_get_home_stats",
+      description: "Get home stats (plays, duration) from Tautulli. Optional: time_range, stats_count",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          time_range: { type: "number", description: "Days to look back" },
+          stats_count: { type: "number", description: "Number of top items" },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "tautulli_get_users",
+      description: "Get Plex users from Tautulli",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    },
+    {
+      name: "tautulli_get_recently_added",
+      description: "Get recently added media from Tautulli. Optional: count, section_id",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          count: { type: "number", description: "Number of items" },
+          section_id: { type: "string", description: "Library/section ID" },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "tautulli_server_status",
+      description: "Get Tautulli/Plex server status",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    },
+    {
+      name: "tautulli_terminate_session",
+      description: "Terminate a Plex streaming session",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          session_key: { type: "string", description: "Session key from activity" },
+          session_id: { type: "string", description: "Session ID from activity" },
+        },
+        required: ["session_key", "session_id"],
+      },
+    }
+  );
+}
+
 // Cross-service search tool
 TOOLS.push({
   name: "arr_search_all",
@@ -784,6 +950,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (!statuses[service.name]) {
             statuses[service.name] = { configured: false };
           }
+        }
+        if (tautulliConfigured) {
+          try {
+            if (tautulliClient) {
+              const serverInfo = await tautulliClient.getServerStatus();
+              statuses.tautulli = {
+                configured: true,
+                connected: true,
+                data: serverInfo,
+              };
+            } else {
+              statuses.tautulli = { configured: true, connected: false };
+            }
+          } catch (error) {
+            statuses.tautulli = {
+              configured: true,
+              connected: false,
+              error: error instanceof Error ? error.message : String(error),
+            };
+          }
+        } else {
+          statuses.tautulli = { configured: false };
         }
         return {
           content: [{ type: "text", text: JSON.stringify(statuses, null, 2) }],
@@ -1056,12 +1244,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Sonarr handlers
       case "sonarr_get_series": {
         if (!clients.sonarr) throw new Error("Sonarr not configured");
-        const series = await clients.sonarr.getSeries();
+        const a = args as { sortBy?: string; sortDir?: string; limit?: number };
+        const raw = a.sortBy;
+        const sortBy = raw === 'dateAdded' || raw === 'sizeOnDisk' ? raw : undefined;
+        const sortDir = a.sortDir === 'asc' || a.sortDir === 'desc' ? a.sortDir : undefined;
+        const limitRaw = a.limit != null ? Number(a.limit) : NaN;
+        const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 1000) : undefined;
+        let series = await clients.sonarr.getSeries();
+        if (sortBy === 'dateAdded') {
+          const dir = sortDir ?? 'asc';
+          series = [...series].sort((a, b) => {
+            const cmp = (a.added ?? '').localeCompare(b.added ?? '');
+            return dir === 'desc' ? -cmp : cmp;
+          });
+        } else if (sortBy === 'sizeOnDisk') {
+          const dir = sortDir ?? 'desc';
+          series = [...series].sort((a, b) => {
+            const cmp = (b.statistics?.sizeOnDisk ?? 0) - (a.statistics?.sizeOnDisk ?? 0);
+            return dir === 'asc' ? -cmp : cmp;
+          });
+        }
+        const totalCount = series.length;
+        if (limit != null) series = series.slice(0, limit);
         return {
           content: [{
             type: "text",
             text: JSON.stringify({
+              totalCount,
+              ...(limit != null && { limitedTo: limit }),
               count: series.length,
+              sortBy: sortBy ?? undefined,
+              sortDir: sortBy ? (sortDir ?? (sortBy === 'dateAdded' ? 'asc' : 'desc')) : undefined,
               series: series.map(s => ({
                 id: s.id,
                 title: s.title,
@@ -1072,6 +1285,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 episodes: s.statistics?.episodeFileCount + '/' + s.statistics?.totalEpisodeCount,
                 sizeOnDisk: formatBytes(s.statistics?.sizeOnDisk || 0),
                 monitored: s.monitored,
+                dateAdded: s.added,
               })),
             }, null, 2),
           }],
@@ -1140,12 +1354,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               count: episodes.length,
               episodes: episodes.map(e => ({
                 id: e.id,
+                episodeFileId: e.hasFile ? e.episodeFileId : undefined,
                 seasonNumber: e.seasonNumber,
                 episodeNumber: e.episodeNumber,
                 title: e.title,
                 airDate: e.airDate,
                 hasFile: e.hasFile,
                 monitored: e.monitored,
+                dateAdded: e.episodeFile?.dateAdded,
               })),
             }, null, 2),
           }],
@@ -1184,15 +1400,113 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      // Radarr handlers
-      case "radarr_get_movies": {
-        if (!clients.radarr) throw new Error("Radarr not configured");
-        const movies = await clients.radarr.getMovies();
+      case "sonarr_delete_series": {
+        if (!clients.sonarr) throw new Error("Sonarr not configured");
+        const { seriesId, deleteFiles = true, addImportListExclusion = false } = args as {
+          seriesId: number;
+          deleteFiles?: boolean;
+          addImportListExclusion?: boolean;
+        };
+        await clients.sonarr.deleteSeries(seriesId, { deleteFiles, addImportListExclusion });
         return {
           content: [{
             type: "text",
             text: JSON.stringify({
+              success: true,
+              message: `Series deleted successfully`,
+              seriesId,
+              deleteFiles,
+              addImportListExclusion,
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "sonarr_delete_season": {
+        if (!clients.sonarr) throw new Error("Sonarr not configured");
+        const { seriesId, seasonNumber } = args as { seriesId: number; seasonNumber: number };
+        const episodeFileIds = await clients.sonarr.getEpisodeFileIds(seriesId, seasonNumber);
+        if (episodeFileIds.length === 0) {
+          return {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                message: `No episode files found for season ${seasonNumber}`,
+                seriesId,
+                seasonNumber,
+                deletedFiles: 0,
+              }, null, 2),
+            }],
+          };
+        }
+        await clients.sonarr.deleteEpisodeFiles(episodeFileIds);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Deleted ${episodeFileIds.length} episode file(s) from season ${seasonNumber}`,
+              seriesId,
+              seasonNumber,
+              deletedFiles: episodeFileIds.length,
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "sonarr_delete_episode_files": {
+        if (!clients.sonarr) throw new Error("Sonarr not configured");
+        const { episodeFileIds } = args as { episodeFileIds: number[] };
+        await clients.sonarr.deleteEpisodeFiles(episodeFileIds);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Deleted ${episodeFileIds.length} episode file(s)`,
+              deletedFiles: episodeFileIds.length,
+            }, null, 2),
+          }],
+        };
+      }
+
+      // Radarr handlers
+      case "radarr_get_movies": {
+        if (!clients.radarr) throw new Error("Radarr not configured");
+        const a = args as { sortBy?: string; sortDir?: string; limit?: number };
+        const raw = a.sortBy;
+        const sortBy = raw === 'dateAdded' || raw === 'added' ? 'dateAdded' : raw === 'sizeOnDisk' ? 'sizeOnDisk' : undefined;
+        const sortDir = a.sortDir === 'asc' || a.sortDir === 'desc' ? a.sortDir : undefined;
+        const limitRaw = a.limit != null ? Number(a.limit) : NaN;
+        const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 1000) : undefined;
+        let movies = await clients.radarr.getMovies();
+        if (sortBy === 'dateAdded') {
+          const dir = sortDir ?? 'asc';
+          movies = [...movies].sort((a, b) => {
+            const da = a.dateAdded ?? a.added ?? '';
+            const db = b.dateAdded ?? b.added ?? '';
+            const cmp = da.localeCompare(db);
+            return dir === 'desc' ? -cmp : cmp;
+          });
+        } else if (sortBy === 'sizeOnDisk') {
+          const dir = sortDir ?? 'desc';
+          movies = [...movies].sort((a, b) => {
+            const cmp = (b.sizeOnDisk ?? 0) - (a.sizeOnDisk ?? 0);
+            return dir === 'asc' ? -cmp : cmp;
+          });
+        }
+        const totalCount = movies.length;
+        if (limit != null) movies = movies.slice(0, limit);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              totalCount,
+              ...(limit != null && { limitedTo: limit }),
               count: movies.length,
+              sortBy: sortBy ?? undefined,
+              sortDir: sortBy ? (sortDir ?? (sortBy === 'dateAdded' ? 'asc' : 'desc')) : undefined,
               movies: movies.map(m => ({
                 id: m.id,
                 title: m.title,
@@ -1202,6 +1516,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 sizeOnDisk: formatBytes(m.sizeOnDisk),
                 monitored: m.monitored,
                 studio: m.studio,
+                dateAdded: m.dateAdded ?? m.added,
               })),
             }, null, 2),
           }],
@@ -1276,6 +1591,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case "radarr_delete_movie": {
+        if (!clients.radarr) throw new Error("Radarr not configured");
+        const { movieId, deleteFiles = true, addImportExclusion = false } = args as {
+          movieId: number;
+          deleteFiles?: boolean;
+          addImportExclusion?: boolean;
+        };
+        await clients.radarr.deleteMovie(movieId, { deleteFiles, addImportExclusion });
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Movie deleted successfully`,
+              movieId,
+              deleteFiles,
+              addImportExclusion,
+            }, null, 2),
+          }],
+        };
+      }
+
       // Lidarr handlers
       case "lidarr_get_artists": {
         if (!clients.lidarr) throw new Error("Lidarr not configured");
@@ -1293,6 +1630,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 tracks: a.statistics?.trackFileCount + '/' + a.statistics?.totalTrackCount,
                 sizeOnDisk: formatBytes(a.statistics?.sizeOnDisk || 0),
                 monitored: a.monitored,
+                dateAdded: a.added,
               })),
             }, null, 2),
           }],
@@ -1357,6 +1695,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 sizeOnDisk: formatBytes(a.statistics?.sizeOnDisk || 0),
                 percentComplete: a.statistics?.percentOfTracks || 0,
                 grabbed: a.grabbed,
+                dateAdded: (a as { added?: string }).added,
               })),
             }, null, 2),
           }],
@@ -1435,6 +1774,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 books: a.statistics?.bookFileCount + '/' + a.statistics?.totalBookCount,
                 sizeOnDisk: formatBytes(a.statistics?.sizeOnDisk || 0),
                 monitored: a.monitored,
+                dateAdded: a.added,
               })),
             }, null, 2),
           }],
@@ -1498,6 +1838,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 hasFile: b.statistics ? b.statistics.bookFileCount > 0 : false,
                 sizeOnDisk: formatBytes(b.statistics?.sizeOnDisk || 0),
                 grabbed: b.grabbed,
+                dateAdded: (b as { added?: string }).added,
               })),
             }, null, 2),
           }],
@@ -1639,6 +1980,77 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }, null, 2),
           }],
         };
+      }
+
+      // Tautulli (Plex)
+      case "tautulli_get_activity": {
+        if (!tautulliClient) throw new Error("Tautulli not configured");
+        const data = await tautulliClient.getActivity();
+        return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+      }
+      case "tautulli_get_history": {
+        if (!tautulliClient) throw new Error("Tautulli not configured");
+        const a = args as { title?: string; user_id?: number; length?: number; media_type?: string; order_column?: string; order_dir?: 'asc' | 'desc' };
+        const fetchLength = a.title ? 2000 : (a.length ?? 25);
+        const data = await tautulliClient.getHistory({
+          user_id: a.user_id,
+          length: fetchLength,
+          media_type: a.media_type,
+          order_column: a.order_column ?? (a.title ? 'date' : undefined),
+          order_dir: a.order_dir ?? (a.title ? 'desc' : undefined),
+        });
+        let result = data;
+        if (a.title && typeof a.title === 'string' && a.title.trim()) {
+          const searchWords = a.title.trim().toLowerCase().split(/\s+/).filter(Boolean);
+          const raw = (data as { data?: unknown[] })?.data ?? (Array.isArray(data) ? data : []);
+          const rows = Array.isArray(raw) ? raw : [];
+          const filtered = rows.filter((row: { title?: string; full_title?: string; grandparent_title?: string; original_title?: string }) => {
+            const t = [row.title, row.full_title, row.grandparent_title, row.original_title].filter(Boolean).join(' ').toLowerCase();
+            return searchWords.every((w) => t.includes(w));
+          });
+          const limit = typeof a.length === 'number' && a.length > 0 ? Math.min(a.length, 100) : undefined;
+          const history = limit != null ? filtered.slice(0, limit) : filtered;
+          result = { searchedFor: a.title, count: filtered.length, ...(limit != null && { returned: history.length }), history };
+        }
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+      case "tautulli_get_libraries": {
+        if (!tautulliClient) throw new Error("Tautulli not configured");
+        const data = await tautulliClient.getLibraries();
+        return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+      }
+      case "tautulli_get_server_info": {
+        if (!tautulliClient) throw new Error("Tautulli not configured");
+        const data = await tautulliClient.getServerInfo();
+        return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+      }
+      case "tautulli_get_home_stats": {
+        if (!tautulliClient) throw new Error("Tautulli not configured");
+        const a = args as { time_range?: number; stats_count?: number };
+        const data = await tautulliClient.getHomeStats({ time_range: a.time_range, stats_count: a.stats_count });
+        return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+      }
+      case "tautulli_get_users": {
+        if (!tautulliClient) throw new Error("Tautulli not configured");
+        const data = await tautulliClient.getUsers();
+        return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+      }
+      case "tautulli_get_recently_added": {
+        if (!tautulliClient) throw new Error("Tautulli not configured");
+        const a = args as { count?: number; section_id?: string };
+        const data = await tautulliClient.getRecentlyAdded({ count: a.count, section_id: a.section_id });
+        return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+      }
+      case "tautulli_server_status": {
+        if (!tautulliClient) throw new Error("Tautulli not configured");
+        const data = await tautulliClient.getServerStatus();
+        return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+      }
+      case "tautulli_terminate_session": {
+        if (!tautulliClient) throw new Error("Tautulli not configured");
+        const { session_key, session_id } = args as { session_key: string; session_id: string };
+        const data = await tautulliClient.terminateSession(session_key, session_id);
+        return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
       }
 
       // Cross-service search
