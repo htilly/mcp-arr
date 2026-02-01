@@ -56,17 +56,30 @@ export class TautulliClient {
     return this.request('get_activity');
   }
 
+  /**
+   * Search Plex library for a title (movies, series, etc.).
+   * Returns whether the title exists in the library regardless of watch history.
+   */
+  async searchLibrary(query: string, limit?: number): Promise<{ results_count: number; results_list: Record<string, unknown[]> }> {
+    const params: Record<string, string | number> = { query };
+    if (limit != null && limit > 0) params.limit = limit;
+    return this.request('search', params) as Promise<{ results_count: number; results_list: Record<string, unknown[]> }>;
+  }
+
   async getHistory(params?: {
     user_id?: number;
     rating_key?: number;
     start?: number;
     length?: number;
+    search?: string;
     media_type?: string;
     order_column?: string;
     order_dir?: 'asc' | 'desc';
   }): Promise<unknown> {
     const p = params ? Object.fromEntries(
-      Object.entries(params).map(([k, v]) => [k, String(v)])
+      Object.entries(params)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, String(v)])
     ) : {};
     return this.request('get_history', p);
   }
@@ -85,7 +98,9 @@ export class TautulliClient {
 
   async getHomeStats(params?: { time_range?: number; stats_count?: number }): Promise<unknown> {
     const p = params ? Object.fromEntries(
-      Object.entries(params).map(([k, v]) => [k, String(v)])
+      Object.entries(params)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, String(v)])
     ) : {};
     return this.request('get_home_stats', p);
   }
@@ -96,7 +111,9 @@ export class TautulliClient {
 
   async getRecentlyAdded(params?: { count?: number; start?: number; section_id?: string }): Promise<unknown> {
     const p = params ? Object.fromEntries(
-      Object.entries(params).map(([k, v]) => [k, String(v)])
+      Object.entries(params)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, String(v)])
     ) : {};
     return this.request('get_recently_added', p);
   }

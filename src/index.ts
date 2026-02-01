@@ -682,13 +682,13 @@ if (tautulliClient) {
     },
     {
       name: "tautulli_get_history",
-      description: "Get Plex watch history from Tautulli. With title: search by movie/series name – response shows if that media appears in watch history and, for each match, who watched it and when. No matches means no one has watched it in the last ~2000 plays. Without title: returns recent history. Optional: user_id, length, media_type, order_column, order_dir",
+      description: "Get Plex watch history from Tautulli. With title: (1) Check if the film/series exists in Plex library (search, regardless of watch history). (2) Return how many have watched it and who/when. Without title: returns recent history. Optional: user_id, length, media_type, order_column, order_dir",
       inputSchema: {
         type: "object" as const,
         properties: {
-          title: { type: "string", description: "Search by title (e.g. 'Bad Boys for Life'). Response: matching plays with who (friendly_name) and when (date). Empty = no one has watched that title in the searched history window." },
+          title: { type: "string", description: "Search by title (e.g. 'Dune: Prophecy'). Response: existsInLibrary, watchedCount, history (who and when)." },
           user_id: { type: "number", description: "Filter by Tautulli user ID" },
-          length: { type: "number", description: "Without title: number of records (default 25). With title: max matches to return (search uses last ~2000 plays)." },
+          length: { type: "number", description: "Without title: number of history records (default 25). With title: max watch-history rows to return (default 100, max 100)." },
           media_type: { type: "string", description: "movie, episode, track, etc." },
           order_column: { type: "string", description: "Column to sort by" },
           order_dir: { type: "string", enum: ["asc", "desc"], description: "Sort direction" },
@@ -2125,27 +2125,86 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "tautulli_get_history": {
         if (!tautulliClient) throw new Error("Tautulli not configured");
         const a = args as { title?: string; user_id?: number; length?: number; media_type?: string; order_column?: string; order_dir?: 'asc' | 'desc' };
-        const fetchLength = a.title ? 2000 : (a.length ?? 25);
-        const data = await tautulliClient.getHistory({
+        const hasTitle = typeof a.title === 'string' && a.title.trim().length > 0;
+        if (!hasTitle) {
+          const apiLength = a.length ?? 25;
+          const data = await tautulliClient.getHistory({
+            user_id: a.user_id,
+            length: apiLength,
+            media_type: a.media_type,
+            order_column: a.order_column ?? 'date',
+            order_dir: a.order_dir ?? 'desc',
+          });
+          return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+        }
+        const title = a.title!.trim();
+        // 1) Does the film/series exist in Plex library (regardless of watch history)?
+        let existsInLibrary = false;
+        try {
+          const searchResult = await tautulliClient.searchLibrary(title, 10);
+          const count = searchResult?.results_count ?? 0;
+          const list = searchResult?.results_list ?? {};
+          const totalFromList = Object.values(list).reduce((sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0), 0);
+          existsInLibrary = count > 0 || totalFromList > 0;
+        } catch {
+          // Plex search failed – keep false
+        }
+        // 2) Who watched and when – try API search first, then paginate and filter client-side
+        const returnLimit = typeof a.length === 'number' && a.length > 0 ? Math.min(a.length, 100) : 100;
+        const searchWords = title.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(Boolean);
+        const baseParams = {
           user_id: a.user_id,
-          length: fetchLength,
           media_type: a.media_type,
-          order_column: a.order_column ?? (a.title ? 'date' : undefined),
-          order_dir: a.order_dir ?? (a.title ? 'desc' : undefined),
+          order_column: a.order_column ?? 'date',
+          order_dir: a.order_dir ?? 'desc',
+        };
+        const chunkSize = 1000;
+        const maxChunks = 15; // up to 15k rows
+        let rows: unknown[] = [];
+        const first = await tautulliClient.getHistory({
+          ...baseParams,
+          length: chunkSize,
+          search: title,
         });
-        let result = data;
-        if (a.title && typeof a.title === 'string' && a.title.trim()) {
-          const searchWords = a.title.trim().toLowerCase().split(/\s+/).filter(Boolean);
-          const raw = (data as { data?: unknown[] })?.data ?? (Array.isArray(data) ? data : []);
-          const rows = Array.isArray(raw) ? raw : [];
-          const filtered = rows.filter((row: { title?: string; full_title?: string; grandparent_title?: string; original_title?: string }) => {
-            const t = [row.title, row.full_title, row.grandparent_title, row.original_title].filter(Boolean).join(' ').toLowerCase();
+        let firstRaw = (first as { data?: unknown[] })?.data ?? (Array.isArray(first) ? first : []);
+        rows = Array.isArray(firstRaw) ? firstRaw : [];
+        if (rows.length === 0 && searchWords.length > 0) {
+          const allRows: unknown[] = [];
+          for (let start = 0; start < maxChunks * chunkSize; start += chunkSize) {
+            const page = await tautulliClient.getHistory({
+              ...baseParams,
+              start,
+              length: chunkSize,
+            });
+            const pageData = (page as { data?: unknown[] })?.data ?? (Array.isArray(page) ? page : []);
+            const arr = Array.isArray(pageData) ? pageData : [];
+            allRows.push(...arr);
+            if (arr.length < chunkSize) break;
+          }
+          rows = allRows.filter((row: unknown) => {
+            const r = row as { title?: string; full_title?: string; grandparent_title?: string; original_title?: string };
+            const t = [r.title, r.full_title, r.grandparent_title, r.original_title].filter(Boolean).join(' ').toLowerCase();
             return searchWords.every((w) => t.includes(w));
           });
-          const limit = typeof a.length === 'number' && a.length > 0 ? Math.min(a.length, 100) : undefined;
-          const history = limit != null ? filtered.slice(0, limit) : filtered;
-          result = { searchedFor: a.title, count: filtered.length, ...(limit != null && { returned: history.length }), history };
         }
+        const watchedCount = rows.length;
+        const history = rows.slice(0, returnLimit).map((row: unknown) => {
+          const r = row as { friendly_name?: string; user?: string; date?: number; full_title?: string; title?: string; grandparent_title?: string };
+          return {
+            who: r.friendly_name ?? r.user ?? '-',
+            when: r.date != null ? new Date(r.date * 1000).toISOString() : '-',
+            title: r.full_title ?? r.title ?? r.grandparent_title ?? '-',
+          };
+        });
+        const result = {
+          searchedFor: title,
+          existsInLibrary,
+          summary: existsInLibrary ? "The film/series is in the Plex library." : "The film/series is not in the Plex library.",
+          watchedCount,
+          watchedSummary: watchedCount === 0 ? "No one has watched it (according to history)." : `${watchedCount} play(s).`,
+          returned: history.length,
+          history,
+        };
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
       case "tautulli_get_libraries": {
