@@ -76,42 +76,19 @@ async function main() {
   console.log('--- Dummy test: tautulli_get_history ---');
   console.log('Request: { "title": "%s", "length": %d }\n', title, length);
 
-  const searchWords = title.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(Boolean);
-  const baseParams = { order_column: 'date', order_dir: 'desc' };
-  const chunkSize = 1000;
-  const maxChunks = 15;
-
-  // 1) First call: get_history with search
-  console.log('1) get_history with search="%s", length=%d', title, chunkSize);
+  // Use Tautulli API search (same as MCP server)
+  console.log('get_history with search="%s", length=1000', title);
   const first = await tautulliRequest({
-    ...baseParams,
-    length: chunkSize,
+    order_column: 'date',
+    order_dir: 'desc',
+    length: 1000,
     search: title,
   });
   const firstRaw = first?.data ?? (Array.isArray(first) ? first : []);
-  let rows = Array.isArray(firstRaw) ? firstRaw : [];
-  console.log('   Response: data.length = %d, recordsFiltered = %s', rows.length, first?.recordsFiltered ?? 'n/a');
+  const rows = Array.isArray(firstRaw) ? firstRaw : [];
+  console.log('Response: data.length = %d, recordsFiltered = %s', rows.length, first?.recordsFiltered ?? 'n/a');
   if (rows.length > 0) {
-    console.log('   First row keys:', Object.keys(rows[0] || {}).slice(0, 12).join(', '));
-  }
-
-  // 2) Fallback: paginate without search, filter client-side
-  if (rows.length === 0 && searchWords.length > 0) {
-    console.log('\n2) Fallback: paginate get_history (no search), filter client-side');
-    const allRows = [];
-    for (let start = 0; start < maxChunks * chunkSize; start += chunkSize) {
-      const page = await tautulliRequest({ ...baseParams, start, length: chunkSize });
-      const pageData = page?.data ?? (Array.isArray(page) ? page : []);
-      const arr = Array.isArray(pageData) ? pageData : [];
-      console.log('   start=%d -> %d rows', start, arr.length);
-      allRows.push(...arr);
-      if (arr.length < chunkSize) break;
-    }
-    rows = allRows.filter((row) => {
-      const t = [row.title, row.full_title, row.grandparent_title, row.original_title].filter(Boolean).join(' ').toLowerCase();
-      return searchWords.every((w) => t.includes(w));
-    });
-    console.log('   After filter (words: %s): %d rows', searchWords.join(', '), rows.length);
+    console.log('First row keys:', Object.keys(rows[0] || {}).slice(0, 12).join(', '));
   }
 
   const returnLimit = Math.min(length, 100);

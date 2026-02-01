@@ -2149,44 +2149,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         } catch {
           // Plex search failed – keep false
         }
-        // 2) Who watched and when – try API search first, then paginate and filter client-side
+        // 2) Who watched and when – use API search
         const returnLimit = typeof a.length === 'number' && a.length > 0 ? Math.min(a.length, 100) : 100;
-        const searchWords = title.toLowerCase().replace(/[^\w\s]/g, ' ').split(/\s+/).filter(Boolean);
-        const baseParams = {
+        const first = await tautulliClient.getHistory({
           user_id: a.user_id,
           media_type: a.media_type,
           order_column: a.order_column ?? 'date',
           order_dir: a.order_dir ?? 'desc',
-        };
-        const chunkSize = 1000;
-        const maxChunks = 15; // up to 15k rows
-        let rows: unknown[] = [];
-        const first = await tautulliClient.getHistory({
-          ...baseParams,
-          length: chunkSize,
+          length: 1000,
           search: title,
         });
-        let firstRaw = (first as { data?: unknown[] })?.data ?? (Array.isArray(first) ? first : []);
-        rows = Array.isArray(firstRaw) ? firstRaw : [];
-        if (rows.length === 0 && searchWords.length > 0) {
-          const allRows: unknown[] = [];
-          for (let start = 0; start < maxChunks * chunkSize; start += chunkSize) {
-            const page = await tautulliClient.getHistory({
-              ...baseParams,
-              start,
-              length: chunkSize,
-            });
-            const pageData = (page as { data?: unknown[] })?.data ?? (Array.isArray(page) ? page : []);
-            const arr = Array.isArray(pageData) ? pageData : [];
-            allRows.push(...arr);
-            if (arr.length < chunkSize) break;
-          }
-          rows = allRows.filter((row: unknown) => {
-            const r = row as { title?: string; full_title?: string; grandparent_title?: string; original_title?: string };
-            const t = [r.title, r.full_title, r.grandparent_title, r.original_title].filter(Boolean).join(' ').toLowerCase();
-            return searchWords.every((w) => t.includes(w));
-          });
-        }
+        const firstRaw = (first as { data?: unknown[] })?.data ?? (Array.isArray(first) ? first : []);
+        const rows = Array.isArray(firstRaw) ? firstRaw : [];
         const watchedCount = rows.length;
         const history = rows.slice(0, returnLimit).map((row: unknown) => {
           const r = row as { friendly_name?: string; user?: string; date?: number; full_title?: string; title?: string; grandparent_title?: string };
