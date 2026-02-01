@@ -2138,10 +2138,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
         }
         const title = a.title!.trim();
+        const mcpStart = Date.now();
         // 1) Does the film/series exist in Plex library (regardless of watch history)?
         let existsInLibrary = false;
+        let librarySearchMs = 0;
         try {
+          const libStart = Date.now();
           const searchResult = await tautulliClient.searchLibrary(title, 10);
+          librarySearchMs = Date.now() - libStart;
           const count = searchResult?.results_count ?? 0;
           const list = searchResult?.results_list ?? {};
           const totalFromList = Object.values(list).reduce((sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0), 0);
@@ -2151,6 +2155,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         // 2) Who watched and when – use API search
         const returnLimit = typeof a.length === 'number' && a.length > 0 ? Math.min(a.length, 100) : 100;
+        const historyStart = Date.now();
         const first = await tautulliClient.getHistory({
           user_id: a.user_id,
           media_type: a.media_type,
@@ -2159,6 +2164,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           length: 1000,
           search: title,
         });
+        const historySearchMs = Date.now() - historyStart;
         const firstRaw = (first as { data?: unknown[] })?.data ?? (Array.isArray(first) ? first : []);
         const rows = Array.isArray(firstRaw) ? firstRaw : [];
         const watchedCount = rows.length;
@@ -2170,6 +2176,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             title: r.full_title ?? r.title ?? r.grandparent_title ?? '-',
           };
         });
+        const mcpTotalMs = Date.now() - mcpStart;
         const result = {
           searchedFor: title,
           existsInLibrary,
@@ -2178,6 +2185,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           watchedSummary: watchedCount === 0 ? "No one has watched it (according to history)." : `${watchedCount} play(s).`,
           returned: history.length,
           history,
+          responseTime: {
+            totalMs: mcpTotalMs,
+            librarySearchMs,
+            historySearchMs,
+          },
         };
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       }
