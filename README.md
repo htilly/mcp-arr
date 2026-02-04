@@ -132,6 +132,37 @@ Add to `~/.claude.json`:
 
 **Note**: Only configure the services you have running. The server automatically detects which services are available based on the environment variables you provide.
 
+### Using the local build (Cursor / Claude)
+
+If you develop from source and run `npm run build`, the **published npm package** used by `npx mcp-arr-server` is an older version. To use your local build and latest code (e.g. Tautulli history with pagination):
+
+1. **Point the MCP server at your built file** and pass env vars in your MCP config.
+
+2. **Cursor**: In Cursor Settings → MCP (or the MCP config file Cursor uses), add or edit the mcp-arr server so it runs the local build and has env vars:
+
+```json
+{
+  "mcpServers": {
+    "arr": {
+      "command": "node",
+      "args": ["/Users/Henrik.Tilly/Documents/dev/private/mcp-arr/dist/index.js"],
+      "env": {
+        "TAUTULLI_URL": "http://localhost:8181",
+        "TAUTULLI_API_KEY": "your-tautulli-api-key",
+        "SONARR_URL": "http://localhost:8989",
+        "SONARR_API_KEY": "your-sonarr-api-key"
+      }
+    }
+  }
+}
+```
+
+Use your actual paths and API keys. Only include the services you use.
+
+3. **Restart the MCP server** (e.g. restart Cursor or use “Restart” on the mcp-arr server in Cursor’s MCP list) after each `npm run build` so the new code is loaded.
+
+4. **Claude Desktop**: Same idea — set `"command": "node"` and `"args": ["/absolute/path/to/mcp-arr/dist/index.js"]` with `env` in `claude_desktop_config.json`.
+
 ## Usage Examples
 
 ### Library Management

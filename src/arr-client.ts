@@ -410,6 +410,7 @@ export interface RootFolder {
   path: string;
   accessible: boolean;
   freeSpace: number;
+  totalSpace?: number;
   unmappedFolders?: Array<{ name: string; path: string }>;
 }
 
@@ -581,6 +582,13 @@ export class ArrClient {
    */
   async getRootFoldersDetailed(): Promise<RootFolder[]> {
     return this.request<RootFolder[]>('/rootfolder');
+  }
+
+  /**
+   * Get disk space information
+   */
+  async getDiskSpace(): Promise<RootFolder[]> {
+    return this.request<RootFolder[]>('/diskspace');
   }
 
   /**

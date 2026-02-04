@@ -1182,20 +1182,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const serviceName = name.split('_')[0] as keyof typeof clients;
         const client = clients[serviceName];
         if (!client) throw new Error(`${serviceName} not configured`);
-        const folders = await client.getRootFoldersDetailed();
+
+        // For Sonarr/Radarr, use diskspace endpoint which includes totalSpace
+        // For Lidarr/Readarr, use rootfolder endpoint (they may have totalSpace in rootfolder)
+        const useDiskspace = serviceName === 'sonarr' || serviceName === 'radarr';
+        const folders = useDiskspace ? await client.getDiskSpace() : await client.getRootFoldersDetailed();
+
         return {
           content: [{
             type: "text",
             text: JSON.stringify({
               count: folders.length,
-              folders: folders.map(f => ({
-                id: f.id,
-                path: f.path,
-                accessible: f.accessible,
-                freeSpace: formatBytes(f.freeSpace),
-                freeSpaceBytes: f.freeSpace,
-                unmappedFolders: f.unmappedFolders?.length || 0,
-              })),
+              folders: folders.map(f => {
+                const total = f.totalSpace ?? 0;
+                const percentFree = total > 0 ? Math.round((f.freeSpace / total) * 100) : null;
+                const percentUsed = total > 0 ? Math.round(((total - f.freeSpace) / total) * 100) : null;
+                return {
+                  id: f.id,
+                  path: f.path,
+                  accessible: f.accessible,
+                  freeSpace: formatBytes(f.freeSpace),
+                  freeSpaceBytes: f.freeSpace,
+                  ...(total > 0 && {
+                    totalSpace: formatBytes(total),
+                    totalSpaceBytes: total,
+                    percentFree,
+                    percentUsed,
+                  }),
+                  unmappedFolders: f.unmappedFolders?.length || 0,
+                };
+              }),
             }, null, 2),
           }],
         };
@@ -2139,32 +2155,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const title = a.title!.trim();
         const mcpStart = Date.now();
-        // 1) Does the film/series exist in Plex library (regardless of watch history)?
+        const returnLimit = typeof a.length === 'number' && a.length > 0 ? Math.min(a.length, 100) : 100;
+
+        // Run library search and history search in parallel
+        const libStartTime = Date.now();
+        const historyStartTime = Date.now();
+        const [libraryResult, historyResult] = await Promise.all([
+          tautulliClient.searchLibrary(title, 10).then(res => ({ data: res, ms: Date.now() - libStartTime })).catch(() => ({ data: null, ms: Date.now() - libStartTime })),
+          tautulliClient.getHistory({
+            user_id: a.user_id,
+            media_type: a.media_type,
+            order_column: a.order_column ?? 'date',
+            order_dir: a.order_dir ?? 'desc',
+            length: 1000,
+            search: title,
+          }).then(res => ({ data: res, ms: Date.now() - historyStartTime })),
+        ]);
+
+        // Process library search result
         let existsInLibrary = false;
-        let librarySearchMs = 0;
-        try {
-          const libStart = Date.now();
-          const searchResult = await tautulliClient.searchLibrary(title, 10);
-          librarySearchMs = Date.now() - libStart;
-          const count = searchResult?.results_count ?? 0;
-          const list = searchResult?.results_list ?? {};
+        const librarySearchMs = libraryResult.ms;
+        if (libraryResult.data) {
+          const count = libraryResult.data.results_count ?? 0;
+          const list = libraryResult.data.results_list ?? {};
           const totalFromList = Object.values(list).reduce((sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0), 0);
           existsInLibrary = count > 0 || totalFromList > 0;
-        } catch {
-          // Plex search failed – keep false
         }
-        // 2) Who watched and when – use API search
-        const returnLimit = typeof a.length === 'number' && a.length > 0 ? Math.min(a.length, 100) : 100;
-        const historyStart = Date.now();
-        const first = await tautulliClient.getHistory({
-          user_id: a.user_id,
-          media_type: a.media_type,
-          order_column: a.order_column ?? 'date',
-          order_dir: a.order_dir ?? 'desc',
-          length: 1000,
-          search: title,
-        });
-        const historySearchMs = Date.now() - historyStart;
+
+        // Process history result
+        const historySearchMs = historyResult.ms;
+        const first = historyResult.data;
         const firstRaw = (first as { data?: unknown[] })?.data ?? (Array.isArray(first) ? first : []);
         const rows = Array.isArray(firstRaw) ? firstRaw : [];
         const watchedCount = rows.length;
