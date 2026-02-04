@@ -234,6 +234,8 @@ The AI will answer from the tool definitions (sortBy, limit, etc.) without needi
 | `arr_status` | Get connection status for all configured *arr services |
 | `arr_search_all` | Search across all configured services simultaneously |
 
+**Note:** `radarr_get_movies`, `radarr_search`, and `sonarr_get_series` include `imdbId`, `rating` (TMDB/TVDB), and `ratingVotes` from the connected *arr services.
+
 ### Sonarr Tools (TV)
 
 | Tool | Description |

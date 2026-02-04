@@ -434,6 +434,8 @@ export interface SearchResult {
   year: number;
   images: Array<{ coverType: string; url: string }>;
   remotePoster?: string;
+  /** Present when API returns rating (e.g. Radarr lookup from TMDB) */
+  ratings?: { votes: number; value: number };
   // Sonarr specific
   tvdbId?: number;
   // Radarr specific

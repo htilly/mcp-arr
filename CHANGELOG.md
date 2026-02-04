@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Ratings and IMDB IDs in tool responses** (from connected *arr services):
+  - `radarr_get_movies` and `radarr_search` now include `imdbId`, `rating` (TMDB), `ratingVotes`, and `ratingSource: 'tmdb'`
+  - `sonarr_get_series` now includes `imdbId`, `rating` (TVDB), `ratingVotes`, and `ratingSource: 'tvdb'`
 - **Tautulli (Plex) integration** – optional; server can run with only Tautulli configured:
   - `tautulli_get_activity` – Current Plex activity (now playing)
   - `tautulli_get_history` – Watch history (optional filters)
