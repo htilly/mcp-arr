@@ -85,6 +85,20 @@
           "format": "string",
           "isSecret": true,
           "name": "PROWLARR_API_KEY"
+        },
+        {
+          "description": "Bazarr server URL",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "BAZARR_URL"
+        },
+        {
+          "description": "Bazarr API key",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "BAZARR_API_KEY"
         }
       ]
     }

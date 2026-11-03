@@ -11,7 +11,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io)
 
-MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, Readarr, Prowlarr, plus [Overseerr](https://overseerr.dev/) for request management.
+MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, Readarr, Prowlarr, plus [Overseerr](https://overseerr.dev/) for request management and [Bazarr](https://www.bazarr.media/) for subtitles.
 
 ## Why Use This?
 
@@ -34,6 +34,7 @@ MCP server for the [*arr media management suite](https://wiki.servarr.com/) - So
 | **Prowlarr (Indexers)** | List indexers, search across all trackers, test health, view statistics |
 | **Tautulli (Plex)** | Activity, history, libraries, users, recently added, server status, terminate session |
 | **Overseerr (Requests)** | List requests, approve/decline, view users, search media, request management |
+| **Bazarr (Subtitles)** | Missing subtitles, series/episode/movie subtitle status, search & download subtitles, history, providers, languages |
 | **Cross-Service** | Status check, unified search across all configured services |
 | **Configuration** | Quality profiles, download clients, naming conventions, health checks, storage info |
 | **TRaSH Guides** | Reference quality profiles, custom formats, naming conventions, compare against recommendations |
@@ -45,6 +46,7 @@ MCP server for the [*arr media management suite](https://wiki.servarr.com/) - So
   - *arr application(s) with API access: [Sonarr](https://sonarr.tv/), [Radarr](https://radarr.video/), [Lidarr](https://lidarr.audio/), [Readarr](https://readarr.com/), [Prowlarr](https://prowlarr.com/)
   - [Tautulli](https://tautulli.com/) (Plex monitoring and statistics)
   - [Overseerr](https://overseerr.dev/) (request management for Plex)
+  - [Bazarr](https://www.bazarr.media/) (subtitle management for Sonarr/Radarr)
 
 ## Installation
 
@@ -102,7 +104,9 @@ Add to your Claude Desktop config file:
         "TAUTULLI_URL": "http://localhost:8181",
         "TAUTULLI_API_KEY": "your-tautulli-api-key",
         "OVERSEERR_URL": "http://localhost:5055",
-        "OVERSEERR_API_KEY": "your-overseerr-api-key"
+        "OVERSEERR_API_KEY": "your-overseerr-api-key",
+        "BAZARR_URL": "http://localhost:6767",
+        "BAZARR_API_KEY": "your-bazarr-api-key"
       }
     }
   }
@@ -330,6 +334,31 @@ When `OVERSEERR_URL` and `OVERSEERR_API_KEY` are set:
 
 `arr_status` includes Overseerr connection status when configured.
 
+### Bazarr Tools (Subtitles)
+
+When `BAZARR_URL` and `BAZARR_API_KEY` are set (API key: Bazarr → Settings → General → Security):
+
+| Tool | Description |
+|------|-------------|
+| `bazarr_status` | Bazarr system status (Bazarr/Sonarr/Radarr versions) |
+| `bazarr_get_health` | Health check issues |
+| `bazarr_get_badges` | Counts of episodes/movies missing subtitles and provider/health issues |
+| `bazarr_get_series` | Series with language profile and missing-subtitle counts |
+| `bazarr_get_episodes` | Episodes of a series with existing and missing subtitles (optional season filter) |
+| `bazarr_get_movies` | Movies with existing and missing subtitles |
+| `bazarr_get_wanted_episodes` | Episodes missing subtitles |
+| `bazarr_get_wanted_movies` | Movies missing subtitles |
+| `bazarr_get_history` | Subtitle history for episodes or movies |
+| `bazarr_search_series` | Search all missing subtitles for a series |
+| `bazarr_search_movie` | Search all missing subtitles for a movie |
+| `bazarr_download_episode_subtitle` | Search & download a subtitle in a given language for an episode (forced/HI optional) |
+| `bazarr_download_movie_subtitle` | Search & download a subtitle in a given language for a movie (forced/HI optional) |
+| `bazarr_get_providers` | Subtitle provider status (throttled providers) |
+| `bazarr_reset_providers` | Reset throttled providers |
+| `bazarr_get_languages` | Enabled languages and language profiles |
+
+Series and episode IDs are Sonarr IDs; movie IDs are Radarr IDs. `arr_status` includes Bazarr connection status when configured.
+
 ### Configuration Review Tools
 
 These tools are available for Sonarr, Radarr, Lidarr, and Readarr. Replace `{service}` with the service name (e.g., `sonarr_get_quality_profiles`).
@@ -387,7 +416,7 @@ npm run test
 SONARR_URL="http://localhost:8989" SONARR_API_KEY="your-key" node dist/index.js
 ```
 
-For `npm run test`, set URL and API key in `test-config.txt` (project root, .env-style) or as environment variables. The script tests Sonarr, Radarr, Lidarr, Readarr, Prowlarr, and Tautulli; Tautulli gets a detailed output (recent history, users) when configured.
+For `npm run test`, set URL and API key in `test-config.txt` (project root, .env-style) or as environment variables. The script tests Sonarr, Radarr, Lidarr, Readarr, Prowlarr, Tautulli, Overseerr, and Bazarr; Tautulli gets a detailed output (recent history, users) when configured.
 
 ## Troubleshooting
 

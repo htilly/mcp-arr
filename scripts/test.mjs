@@ -215,6 +215,44 @@ async function testOverseerr() {
   }
 }
 
+async function testBazarr() {
+  const baseUrl = get('BAZARR_URL')?.replace(/\/$/, '');
+  const apiKey = get('BAZARR_API_KEY');
+  if (!baseUrl || !apiKey) return null;
+  try {
+    const res = await fetchWithTimeout(`${baseUrl}/api/system/status`, {
+      method: 'GET',
+      headers: { 'X-API-KEY': apiKey },
+    });
+    if (!res.ok) return { ok: false, error: `${res.status} ${res.statusText}` };
+    const json = await res.json();
+    return { ok: true, version: json.data?.bazarr_version ?? 'OK' };
+  } catch (err) {
+    const cause = err.cause?.message ?? err.cause?.code ?? err.message;
+    if (cause === 'This operation was aborted') {
+      return { ok: false, error: `Connection timeout (${FETCH_TIMEOUT_MS}ms) - check if Bazarr is reachable at ${baseUrl}` };
+    }
+    if (cause === 'ECONNREFUSED' || cause?.includes('ECONNREFUSED')) {
+      return { ok: false, error: `Connection refused - Bazarr not running at ${baseUrl}` };
+    }
+    return { ok: false, error: `${cause} (URL: ${baseUrl})` };
+  }
+}
+
+async function testBazarrFunctional(baseUrl, apiKey) {
+  try {
+    const res = await fetchWithTimeout(`${baseUrl}/api/badges`, {
+      method: 'GET',
+      headers: { 'X-API-KEY': apiKey },
+    });
+    if (!res.ok) return { ok: false, error: `${res.status} ${res.statusText}` };
+    const data = await res.json();
+    return { ok: true, episodes: data.episodes ?? 0, movies: data.movies ?? 0 };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 async function testOverseerrFunctional(baseUrl, apiKey) {
   try {
     const url = `${baseUrl}/api/v1/request?take=5`;
@@ -262,6 +300,9 @@ async function main() {
 
   const overseerrResult = await testOverseerr();
   summary.push({ name: 'Overseerr (Requests)', result: overseerrResult });
+
+  const bazarrResult = await testBazarr();
+  summary.push({ name: 'Bazarr (Subtitles)', result: bazarrResult });
 
   const configuredCount = summary.filter((s) => s.result !== null).length;
   if (configuredCount === 0) {
@@ -331,6 +372,18 @@ async function main() {
     }
   } else {
     console.log('  ⚪ Overseerr (Requests): (skipped)');
+  }
+
+  if (bazarrResult?.ok) {
+    const r = await testBazarrFunctional(get('BAZARR_URL').replace(/\/$/, ''), get('BAZARR_API_KEY'));
+    if (r.ok) {
+      console.log(`  🟢 Bazarr (Subtitles): OK (missing subtitles: ${r.episodes} episodes, ${r.movies} movies)`);
+    } else {
+      console.log(`  🔴 Bazarr (Subtitles): Error – ${r.error}`);
+      funcFail++;
+    }
+  } else {
+    console.log('  ⚪ Bazarr (Subtitles): (skipped)');
   }
 
   const someOk = summary.some((s) => s.result?.ok);
