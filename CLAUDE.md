@@ -13,7 +13,10 @@ MCP server for the *arr media management suite (Sonarr, Radarr, Lidarr, Readarr,
 
 ```
 src/
-├── index.ts          # Server entry point, tool registration
+├── index.ts          # Server entry point, tool registration (applyConfig/buildTools/createServer)
+├── http-server.ts    # HTTP mode: /mcp (Streamable HTTP), /admin API, auth
+├── admin-ui.ts       # Web UI page (single self-contained HTML string)
+├── config-store.ts   # Config file + env merge, encryption, password/token hashing
 ├── tools/            # Tool implementations by service
 │   ├── sonarr.ts     # TV show management
 │   ├── radarr.ts     # Movie management
@@ -52,6 +55,15 @@ node dist/index.js
 | PROWLARR_API_KEY | For Prowlarr | API key |
 | BAZARR_URL | For Bazarr | Base URL (e.g., http://localhost:6767) |
 | BAZARR_API_KEY | For Bazarr | API key from Bazarr settings |
+| MCP_TRANSPORT | No | `stdio` (default) or `http` (remote mode + web UI) |
+| PORT / HOST | No | HTTP listen address (default 3000 / 0.0.0.0) |
+| CONFIG_PATH | No | Config file (HTTP mode default: ./config/config.json, Docker: /config/config.json) |
+| ADMIN_PASSWORD | No | Web UI password (otherwise created on first run) |
+| CONFIG_ENCRYPTION_KEY | No | Encrypt API keys in the config file |
+| MCP_AUTH_TOKEN | No | Fixed bearer token for /mcp |
+| MCP_AUTH_DISABLED | No | `true` disables /mcp auth |
+
+In HTTP mode, service env vars override values from the config file (shown read-only in the UI).
 
 ## Constraints
 

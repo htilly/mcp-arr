@@ -9,3 +9,6 @@ test-config.txt
 
 # Claude Code local config (CLAUDE.md stays tracked)
 .claude/
+
+# Local config volume (docker-compose)
+config/

@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Docker image: `@modelcontextprotocol/sdk` is now a runtime dependency (it was a devDependency, so `npm ci --omit=dev` in the image left it out and the server could not start)
+
 ### Added
+- **Remote HTTP mode + web UI** (`MCP_TRANSPORT=http`):
+  - Streamable HTTP MCP endpoint at `/mcp` so many clients can share one server (e.g. in Docker on a NAS)
+  - Web UI at `/admin` to manage service URLs/API keys (with connection test), MCP access tokens and the admin password; changes apply live and connected clients get a `tools/list_changed` notification
+  - Admin auth via `ADMIN_PASSWORD`, or a first-run setup screen protected by a one-time code printed to the log
+  - Config stored in `CONFIG_PATH`; API keys optionally encrypted with `CONFIG_ENCRYPTION_KEY` (AES-256-GCM)
+  - MCP auth via tokens created in the UI and/or `MCP_AUTH_TOKEN` (`Authorization: Bearer` or `?token=`)
+  - `docker-compose.yml` example; Dockerfile exposes port 3000 with a `/config` volume
 - **Bazarr (subtitles) integration** – optional, enabled with `BAZARR_URL` + `BAZARR_API_KEY`; server can run with only Bazarr configured:
   - `bazarr_status`, `bazarr_get_health`, `bazarr_get_badges` – System status, health, missing-subtitle counts
   - `bazarr_get_series`, `bazarr_get_episodes`, `bazarr_get_movies` – Subtitle status per series/episode/movie

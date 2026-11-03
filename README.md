@@ -136,6 +136,60 @@ Add to `~/.claude.json`:
 
 **Note**: Only configure the services you have running. The server automatically detects which services are available based on the environment variables you provide.
 
+### Remote server (Docker + web UI)
+
+Instead of every MCP client running its own copy, you can run mcp-arr **once** on your server (e.g. next to Sonarr/Radarr) and point all clients at a single URL. In this mode it also serves a **web UI** for managing service URLs, API keys and client access tokens.
+
+```bash
+docker compose up -d          # uses docker-compose.yml from this repo
+docker compose logs mcp-arr   # shows the first-run setup code
+```
+
+Then open `http://<server>:3000/admin`:
+
+1. Enter the setup code from the log and choose an admin password (or set `ADMIN_PASSWORD` to skip this)
+2. Add URL + API key for each service — **Test** checks the connection, **Save** enables its tools immediately (connected clients are notified, no restart)
+3. Create an **access token** for each MCP client
+
+Connect a client to `http://<server>:3000/mcp` (Streamable HTTP):
+
+```bash
+# Claude Code
+claude mcp add --transport http arr http://<server>:3000/mcp --header "Authorization: Bearer <token>"
+```
+
+```json
+// Claude Desktop and other stdio-only clients, via mcp-remote
+{
+  "mcpServers": {
+    "arr": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://<server>:3000/mcp", "--header", "Authorization: Bearer <token>"]
+    }
+  }
+}
+```
+
+Clients that can't send headers can use `http://<server>:3000/mcp?token=<token>` instead.
+
+Without Docker: `MCP_TRANSPORT=http CONFIG_PATH=./config/config.json node dist/index.js`.
+
+**HTTP mode settings**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_TRANSPORT` | `stdio` | Set to `http` for remote mode |
+| `PORT` / `HOST` | `3000` / `0.0.0.0` | Listen address |
+| `CONFIG_PATH` | `/config/config.json` (Docker) | Where the web UI stores settings |
+| `ADMIN_PASSWORD` | – | Admin password. If unset, you create one in the web UI on first run (protected by a one-time code printed to the log) |
+| `CONFIG_ENCRYPTION_KEY` | – | If set, API keys are stored AES-256-GCM encrypted in the config file. If unset, they are stored in plain text (file mode 0600). Existing plain-text keys are encrypted automatically when you set it — keep the key, it is needed to read them |
+| `MCP_AUTH_TOKEN` | – | A fixed access token, accepted in addition to tokens created in the web UI |
+| `MCP_AUTH_DISABLED` | `false` | `true` turns off token auth for `/mcp` — only on a fully trusted network |
+
+Service variables (`SONARR_URL`, `SONARR_API_KEY`, …) still work in HTTP mode. They take precedence over the web UI and show as read-only there.
+
+> **Security:** this server can delete media and control downloads. Don't expose port 3000 to the internet directly — put it behind a reverse proxy with HTTPS, or keep it on your LAN / Tailscale. Tokens and the admin password are only stored as hashes.
+
 ### Using the local build (Cursor / Claude)
 
 If you develop from source and run `npm run build`, the **published npm package** used by `npx mcp-arr-server` is an older version. To use your local build and latest code (e.g. Tautulli history with pagination):
@@ -437,7 +491,16 @@ The *arr application is not running or the URL is incorrect. Verify:
 - There's no firewall blocking the connection
 
 ### "Sonarr/Radarr/etc not configured"
-You tried to use a tool for a service that isn't configured. Add the corresponding URL and API_KEY environment variables.
+You tried to use a tool for a service that isn't configured. Add the corresponding URL and API_KEY environment variables (or configure it in the web UI in HTTP mode).
+
+### HTTP mode: "Unauthorized" from `/mcp`
+Create an access token in the web UI (`/admin` → Access tokens) and send it as `Authorization: Bearer <token>`.
+
+### HTTP mode: lost the admin password
+Stop the server, remove the `admin` entry from the config file (or set `ADMIN_PASSWORD`), and start it again — a new setup code is printed to the log.
+
+### HTTP mode: "CONFIG_ENCRYPTION_KEY does not match" / "is not set"
+The config file contains API keys encrypted with a different key. Start with the original `CONFIG_ENCRYPTION_KEY`, or remove the `services` and `encryption` entries from the config file and re-enter the API keys.
 
 ## Contributing
 

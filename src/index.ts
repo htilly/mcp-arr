@@ -7,6 +7,11 @@
  * - TAUTULLI_URL, TAUTULLI_API_KEY
  * - OVERSEERR_URL, OVERSEERR_API_KEY
  * - BAZARR_URL, BAZARR_API_KEY
+ *
+ * Remote / Docker mode:
+ * - MCP_TRANSPORT=http  (default: stdio)
+ * - PORT (default 3000), HOST (default 0.0.0.0)
+ * - CONFIG_PATH, CONFIG_ENCRYPTION_KEY, ADMIN_PASSWORD, MCP_AUTH_TOKEN, MCP_AUTH_DISABLED
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -28,8 +33,11 @@ import { trashClient, TrashService } from "./trash-client.js";
 import { TautulliClient } from "./tautulli-client.js";
 import { OverseerrClient } from "./overseerr-client.js";
 import { BazarrClient, BazarrSubtitle } from "./bazarr-client.js";
+import { ConfigStore, EffectiveConfig, SERVICE_DEFS } from "./config-store.js";
+import { startHttpServer } from "./http-server.js";
+import { resolve as resolvePath } from "node:path";
 
-// Configuration from environment
+// Configuration (environment variables and/or config file, see config-store.ts)
 interface ServiceConfig {
   name: ArrService;
   displayName: string;
@@ -37,29 +45,13 @@ interface ServiceConfig {
   apiKey?: string;
 }
 
-const services: ServiceConfig[] = [
-  { name: 'sonarr', displayName: 'Sonarr (TV)', url: process.env.SONARR_URL, apiKey: process.env.SONARR_API_KEY },
-  { name: 'radarr', displayName: 'Radarr (Movies)', url: process.env.RADARR_URL, apiKey: process.env.RADARR_API_KEY },
-  { name: 'lidarr', displayName: 'Lidarr (Music)', url: process.env.LIDARR_URL, apiKey: process.env.LIDARR_API_KEY },
-  { name: 'readarr', displayName: 'Readarr (Books)', url: process.env.READARR_URL, apiKey: process.env.READARR_API_KEY },
-  { name: 'prowlarr', displayName: 'Prowlarr (Indexers)', url: process.env.PROWLARR_URL, apiKey: process.env.PROWLARR_API_KEY },
-];
+const ARR_SERVICE_IDS: ArrService[] = ['sonarr', 'radarr', 'lidarr', 'readarr', 'prowlarr'];
 
-const configuredServices = services.filter(s => s.url && s.apiKey);
-const tautulliUrl = process.env.TAUTULLI_URL;
-const tautulliApiKey = process.env.TAUTULLI_API_KEY;
-const tautulliConfigured = Boolean(tautulliUrl && tautulliApiKey);
-const overseerrUrl = process.env.OVERSEERR_URL;
-const overseerrApiKey = process.env.OVERSEERR_API_KEY;
-const overseerrConfigured = Boolean(overseerrUrl && overseerrApiKey);
-const bazarrUrl = process.env.BAZARR_URL;
-const bazarrApiKey = process.env.BAZARR_API_KEY;
-const bazarrConfigured = Boolean(bazarrUrl && bazarrApiKey);
-
-if (configuredServices.length === 0 && !tautulliConfigured && !overseerrConfigured && !bazarrConfigured) {
-  console.error("Error: No services configured. Set at least one of: *arr (SONARR_URL+API_KEY, etc.), Tautulli (TAUTULLI_URL+TAUTULLI_API_KEY), Overseerr (OVERSEERR_URL+OVERSEERR_API_KEY), or Bazarr (BAZARR_URL+BAZARR_API_KEY)");
-  process.exit(1);
-}
+let services: ServiceConfig[] = [];
+let configuredServices: ServiceConfig[] = [];
+let tautulliConfigured = false;
+let overseerrConfigured = false;
+let bazarrConfigured = false;
 
 const clients: {
   sonarr?: SonarrClient;
@@ -70,46 +62,61 @@ const clients: {
 } = {};
 
 let tautulliClient: TautulliClient | undefined;
-if (tautulliConfigured) {
-  tautulliClient = new TautulliClient({ url: tautulliUrl!, apiKey: tautulliApiKey! });
-}
-
 let overseerrClient: OverseerrClient | undefined;
-if (overseerrConfigured) {
-  overseerrClient = new OverseerrClient({ url: overseerrUrl!, apiKey: overseerrApiKey! });
-}
-
 let bazarrClient: BazarrClient | undefined;
-if (bazarrConfigured) {
-  bazarrClient = new BazarrClient({ url: bazarrUrl!, apiKey: bazarrApiKey! });
+let statusParts: string[] = [];
+
+const TOOLS: Tool[] = [];
+
+/** True when at least one service has both a URL and an API key. */
+function anyServiceConfigured(): boolean {
+  return configuredServices.length > 0 || tautulliConfigured || overseerrConfigured || bazarrConfigured;
 }
 
-for (const service of configuredServices) {
-  const config = { url: service.url!, apiKey: service.apiKey! };
-  switch (service.name) {
-    case 'sonarr':
-      clients.sonarr = new SonarrClient(config);
-      break;
-    case 'radarr':
-      clients.radarr = new RadarrClient(config);
-      break;
-    case 'lidarr':
-      clients.lidarr = new LidarrClient(config);
-      break;
-    case 'readarr':
-      clients.readarr = new ReadarrClient(config);
-      break;
-    case 'prowlarr':
-      clients.prowlarr = new ProwlarrClient(config);
-      break;
+/**
+ * (Re)build all service clients and the tool list from the effective configuration.
+ * Called at startup and whenever the configuration changes via the web UI.
+ */
+function applyConfig(config: EffectiveConfig): void {
+  services = ARR_SERVICE_IDS.map(id => ({
+    name: id,
+    displayName: SERVICE_DEFS.find(d => d.id === id)!.displayName,
+    url: config[id].url,
+    apiKey: config[id].apiKey,
+  }));
+  configuredServices = services.filter(s => s.url && s.apiKey);
+
+  for (const key of Object.keys(clients) as (keyof typeof clients)[]) delete clients[key];
+  for (const service of configuredServices) {
+    const cfg = { url: service.url!, apiKey: service.apiKey! };
+    switch (service.name) {
+      case 'sonarr': clients.sonarr = new SonarrClient(cfg); break;
+      case 'radarr': clients.radarr = new RadarrClient(cfg); break;
+      case 'lidarr': clients.lidarr = new LidarrClient(cfg); break;
+      case 'readarr': clients.readarr = new ReadarrClient(cfg); break;
+      case 'prowlarr': clients.prowlarr = new ProwlarrClient(cfg); break;
+    }
   }
+
+  const t = config.tautulli, o = config.overseerr, b = config.bazarr;
+  tautulliConfigured = Boolean(t.url && t.apiKey);
+  overseerrConfigured = Boolean(o.url && o.apiKey);
+  bazarrConfigured = Boolean(b.url && b.apiKey);
+  tautulliClient = tautulliConfigured ? new TautulliClient({ url: t.url!, apiKey: t.apiKey! }) : undefined;
+  overseerrClient = overseerrConfigured ? new OverseerrClient({ url: o.url!, apiKey: o.apiKey! }) : undefined;
+  bazarrClient = bazarrConfigured ? new BazarrClient({ url: b.url!, apiKey: b.apiKey! }) : undefined;
+
+  statusParts = configuredServices.map(s => s.displayName);
+  if (tautulliConfigured) statusParts.push('Tautulli (Plex)');
+  if (overseerrConfigured) statusParts.push('Overseerr (Requests)');
+  if (bazarrConfigured) statusParts.push('Bazarr (Subtitles)');
+
+  buildTools();
 }
 
-const statusParts = configuredServices.map(s => s.displayName);
-if (tautulliConfigured) statusParts.push('Tautulli (Plex)');
-if (overseerrConfigured) statusParts.push('Overseerr (Requests)');
-if (bazarrConfigured) statusParts.push('Bazarr (Subtitles)');
-const TOOLS: Tool[] = [
+function buildTools(): void {
+TOOLS.length = 0;
+TOOLS.push(
   {
     name: "arr_status",
     description: `Get status of all configured services. Currently configured: ${statusParts.join(', ')}`,
@@ -118,8 +125,8 @@ const TOOLS: Tool[] = [
       properties: {},
       required: [],
     },
-  },
-];
+  }
+);
 
 // Configuration review tools for each service
 // These are added dynamically based on configured services
@@ -1167,7 +1174,10 @@ TOOLS.push(
   }
 );
 
-// Create server instance
+} // end buildTools
+
+// Create a server instance (one per stdio process or per HTTP session)
+function createServer(): Server {
 const server = new Server(
   {
     name: "mcp-arr",
@@ -1175,7 +1185,7 @@ const server = new Server(
   },
   {
     capabilities: {
-      tools: {},
+      tools: { listChanged: true },
     },
   }
 );
@@ -3230,6 +3240,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
+return server;
+} // end createServer
+
 // Bazarr helpers
 function bazarrPaging(a: { start?: number; length?: number }): { start: number; length: number } {
   const start = Math.max(0, a.start ?? 0);
@@ -3252,9 +3265,36 @@ function formatBytes(bytes: number): string {
 
 // Start the server
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error(`*arr MCP server running - configured services: ${statusParts.join(', ')}`);
+  const transportMode = (process.env.MCP_TRANSPORT || 'stdio').toLowerCase();
+  const isHttp = transportMode === 'http';
+  if (!isHttp && transportMode !== 'stdio') {
+    throw new Error(`Unknown MCP_TRANSPORT '${transportMode}' (use 'stdio' or 'http')`);
+  }
+
+  // In HTTP mode the config file is the editable store (default /config/config.json in Docker).
+  // In stdio mode a config file is only read when CONFIG_PATH is set explicitly.
+  const configPath = process.env.CONFIG_PATH || (isHttp ? resolvePath(process.cwd(), 'config', 'config.json') : undefined);
+  const store = new ConfigStore(configPath, process.env.CONFIG_ENCRYPTION_KEY);
+  store.load();
+  applyConfig(store.getEffective());
+
+  if (!isHttp) {
+    if (!anyServiceConfigured()) {
+      console.error("Error: No services configured. Set at least one of: *arr (SONARR_URL+API_KEY, etc.), Tautulli (TAUTULLI_URL+TAUTULLI_API_KEY), Overseerr (OVERSEERR_URL+OVERSEERR_API_KEY), or Bazarr (BAZARR_URL+BAZARR_API_KEY)");
+      process.exit(1);
+    }
+    const server = createServer();
+    await server.connect(new StdioServerTransport());
+    console.error(`*arr MCP server running (stdio) - configured services: ${statusParts.join(', ')}`);
+    return;
+  }
+
+  await startHttpServer({
+    store,
+    createServer,
+    onConfigChanged: () => applyConfig(store.getEffective()),
+    getConfiguredSummary: () => statusParts,
+  });
 }
 
 main().catch((error) => {

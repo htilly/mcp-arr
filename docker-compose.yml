@@ -1,0 +1,31 @@
+# Remote mcp-arr server with web UI.
+#   docker compose up -d
+#   Web UI:       http://<host>:3000/admin   (first-run setup code: `docker compose logs mcp-arr`)
+#   MCP endpoint: http://<host>:3000/mcp     (create an access token in the web UI)
+#
+# Put this behind HTTPS (reverse proxy, Tailscale, ...) if it is reachable from outside your LAN.
+services:
+  mcp-arr:
+    build: .
+    container_name: mcp-arr
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config:/config
+    environment:
+      MCP_TRANSPORT: http
+      # Optional - otherwise you create the admin password in the web UI on first run:
+      # ADMIN_PASSWORD: change-me
+      # Optional - encrypt API keys stored in /config/config.json:
+      # CONFIG_ENCRYPTION_KEY: a-long-random-string
+      # Optional - a fixed MCP access token in addition to tokens created in the web UI:
+      # MCP_AUTH_TOKEN: a-long-random-token
+      # Optional - services can also be set here instead of in the web UI (they become read-only in the UI):
+      # SONARR_URL: http://sonarr:8989
+      # SONARR_API_KEY: your-sonarr-api-key
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

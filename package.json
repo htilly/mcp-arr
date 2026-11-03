@@ -36,8 +36,10 @@
   ],
   "author": "Jim Christian",
   "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.2"
+  },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.25.2",
     "@types/node": "^20.19.29",
     "typescript": "^5.3.0"
   },

@@ -19,3 +19,6 @@ docker-registry
 .gitignore
 .npmrc
 .env*
+
+# Local config volume
+config
