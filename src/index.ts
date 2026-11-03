@@ -41,8 +41,9 @@ import { TautulliClient } from "./tautulli-client.js";
 import { OverseerrClient } from "./overseerr-client.js";
 import { BazarrClient, BazarrSubtitle } from "./bazarr-client.js";
 import { ConfigStore, EffectiveConfig, SERVICE_DEFS } from "./config-store.js";
-import { resolve as resolvePath } from "node:path";
+import { resolve as resolvePath, dirname, join as joinPath } from "node:path";
 import { isIP } from "node:net";
+import { stats, CallContext } from "./stats.js";
 
 // Read from package.json rather than hardcoding, so the version reported to
 // clients can never drift from the released version. package.json sits at the
@@ -1433,7 +1434,7 @@ TOOLS.push(
 // old code funnelled every request through a serialized queue — and that queue
 // deadlocked the moment a streamable client opened its long-lived GET (SSE)
 // stream, since that request never completes.
-function buildServer(): Server {
+function buildServer(caller?: CallContext): Server {
   const server = new Server(
     {
       name: "mcp-arr",
@@ -1445,7 +1446,7 @@ function buildServer(): Server {
       },
     }
   );
-  registerHandlers(server);
+  registerHandlers(server, caller);
   return server;
 }
 
@@ -1679,15 +1680,21 @@ async function getPaginatedQueue(
 // Registers the MCP request handlers on a server instance. Called by
 // buildServer() for every server created (one per HTTP request, plus one for
 // stdio).
-function registerHandlers(server: Server): void {
+function registerHandlers(server: Server, caller?: CallContext): void {
 // Handle list tools request
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return { tools: TOOLS };
 });
 
 // Handle tool calls
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+// Every call is counted for the web UI status board (see stats.ts).
+server.setRequestHandler(CallToolRequestSchema, (request) =>
+  stats.track(request.params.name, caller, () => callTool(request.params))
+);
+}
+
+async function callTool(params: { name: string; arguments?: Record<string, unknown> }) {
+  const { name, arguments: args } = params;
 
   try {
     switch (name) {
@@ -3806,7 +3813,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true,
     };
   }
-});
 }
 
 // Bazarr helpers
@@ -3882,6 +3888,7 @@ async function main() {
   });
   store.load();
   applyConfig(store.getEffective());
+  if (store.path) stats.attachFile(joinPath(dirname(store.path), 'stats.json'));
 
   const [{ startHttpServer }, { Auth }, { TlsManager }, { OAuthProvider, resolveOAuthMode, DEFAULT_REDIRECT_HOSTS }] = await Promise.all([
     import("./http-server.js"),
@@ -3936,7 +3943,7 @@ async function main() {
     port: Number(env.PORT || 3000),
     host: env.HOST || '0.0.0.0',
     trustProxy: env.TRUST_PROXY === 'true',
-    createServer: buildServer,
+    createServer: (caller?: CallContext) => buildServer(caller),
     mcpPath,
     serverVersion: SERVER_VERSION,
     onConfigChanged: () => applyConfig(store.getEffective()),

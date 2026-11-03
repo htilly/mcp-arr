@@ -119,6 +119,137 @@ svg .thick { stroke-width: 10; }
 .hub .card-box { fill: var(--paper); stroke: var(--text); stroke-width: 2.5; }
 .hub .off-arrow { opacity: .25; }
 
+/* ---- live activity on the hub sketch ---- */
+.hub { position: relative; }
+.hub .node, .hub .brain { transform-box: fill-box; transform-origin: center; }
+.hub .arrow.flow .arrow-i { stroke: var(--gold); stroke-dasharray: 4 16; animation: ink-flow .55s linear infinite; }
+.hub .arrow.flow .arrow-h { fill: var(--gold); }
+.hub .arrow.flow.off-arrow { opacity: .8; }
+.hub .brain.think { animation: think .9s ease-in-out infinite; }
+.hub .node.pop { animation: hop .6s cubic-bezier(.3, 1.6, .5, 1); }
+.hub .node.shake { animation: shake .5s ease-in-out; }
+.hub .float { font: 700 22px var(--hand); text-anchor: middle; animation: float-up 1.3s ease-out forwards; pointer-events: none; }
+.hub .float.ok { fill: var(--ok); } .hub .float.err { fill: var(--err); }
+@keyframes ink-flow { to { stroke-dashoffset: -40; } }
+@keyframes think { 0%, 100% { transform: rotate(0) scale(1); } 30% { transform: rotate(-4deg) scale(1.05); } 70% { transform: rotate(3deg) scale(1.03); } }
+@keyframes hop { 0% { transform: translateY(0); } 35% { transform: translateY(-9px) rotate(-2deg); } 70% { transform: translateY(2px) rotate(1deg); } 100% { transform: translateY(0); } }
+@keyframes shake { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-6px) rotate(-1.5deg); } 40%, 80% { transform: translateX(6px) rotate(1.5deg); } }
+@keyframes float-up { 0% { opacity: 0; transform: translateY(6px) scale(.7); } 20% { opacity: 1; transform: translateY(0) scale(1.15); } 100% { opacity: 0; transform: translateY(-34px) scale(1); } }
+.live-pill { position: absolute; top: 10px; right: 12px; display: flex; align-items: center; gap: 6px; font: 700 13px var(--hand); color: var(--muted); }
+.live-pill .dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--border); background: var(--steel); }
+.live-pill.on .dot { background: var(--accent); animation: blink 1.6s ease-in-out infinite; }
+.live-pill.static { position: static; }
+.live-pill.busy { color: var(--accent-deep); }
+@keyframes blink { 50% { opacity: .35; } }
+
+/* ---- status board ---- */
+.board-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
+.tile { text-align: center; padding: 12px 8px 10px; margin: 0; }
+.tile:nth-child(odd) { transform: rotate(-.7deg); } .tile:nth-child(even) { transform: rotate(.6deg); }
+.tile .num { font: 700 34px/1.15 var(--hand); color: var(--text); display: inline-block; }
+.tile .num.bump { animation: bump .55s cubic-bezier(.3, 1.6, .5, 1); color: var(--accent-deep); }
+.tile .lbl { font: 700 14px var(--hand); color: var(--muted); }
+.tile .tiny { font-size: 12px; color: var(--muted); }
+.tile svg { display: block; margin: 0 auto 2px; width: 34px; height: 24px; }
+@keyframes bump { 0% { transform: scale(1); } 40% { transform: scale(1.3) rotate(-4deg); } 100% { transform: scale(1); } }
+.board-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; margin-bottom: 18px; }
+.board-grid .panel { margin: 0; }
+.bars { list-style: none; margin: 0; padding: 0; }
+.bars li { display: grid; grid-template-columns: 40px 1fr; gap: 4px 10px; align-items: center; padding: 7px 0; border-bottom: 1.5px dashed var(--line); }
+.bars li:last-child { border-bottom: none; }
+.bars svg.icon { width: 40px; height: 34px; grid-row: span 2; }
+.bars .bar-label { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }
+.bars .bar-label strong { font: 700 15px var(--hand); }
+.track { height: 16px; border: 2px solid var(--border); border-radius: 8px 10px 7px 9px; background: var(--input); overflow: hidden; }
+.track .fill { height: 100%; min-width: 3px; background-color: var(--accent); background-image: repeating-linear-gradient(38deg, transparent 0 6px, rgba(59, 50, 42, .28) 6px 7.5px); border-right: 2px solid var(--border); transition: width .6s cubic-bezier(.3, 1.4, .5, 1); }
+.track .fill.err { background-color: var(--err); }
+.track.small { height: 10px; border-width: 1.5px; }
+.chart svg { display: block; width: 100%; height: auto; }
+.chart .bar { fill: var(--sea); stroke: var(--text); stroke-width: 2; stroke-linejoin: round; }
+.chart .bar.now { fill: var(--accent); }
+.chart .bar-hit { fill: transparent; }
+.chart .bar-hit:hover + .bar, .chart .bar:hover { fill: var(--gold); }
+.chart .axis { stroke: var(--text); stroke-width: 2.5; stroke-linecap: round; fill: none; }
+.chart .grid { stroke: var(--line); stroke-width: 1.5; stroke-dasharray: 5 6; }
+.chart text { font: 12px var(--hand); fill: var(--muted); }
+.feed { list-style: none; margin: 0; padding: 0; max-height: 330px; overflow-y: auto; }
+.feed li { display: grid; grid-template-columns: auto 30px 1fr auto; gap: 2px 8px; align-items: center; padding: 6px 2px; border-bottom: 1.5px dashed var(--line); font-size: 13px; }
+.feed li.new { animation: slide-in .6s cubic-bezier(.3, 1.4, .5, 1); background: var(--sea-pale); border-radius: 8px; }
+.feed svg.icon { width: 30px; height: 26px; }
+.feed .t { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.feed .tool { font-family: var(--mono); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed .meta { grid-column: 3 / 5; color: var(--muted); font-size: 12px; }
+.mark { font: 700 13px var(--hand); white-space: nowrap; }
+.mark.ok { color: var(--ok); } .mark.err { color: var(--err); }
+@keyframes slide-in { 0% { opacity: 0; transform: translateX(-24px) rotate(-1deg); } 100% { opacity: 1; transform: none; } }
+.toplist { list-style: none; margin: 0; padding: 0; counter-reset: top; }
+.toplist li { display: grid; grid-template-columns: 26px 1fr auto; gap: 2px 8px; align-items: center; padding: 5px 0; counter-increment: top; }
+.toplist li::before { content: counter(top); font: 700 16px var(--hand); color: var(--accent-deep); grid-row: span 2; }
+.toplist code { word-break: break-all; }
+.toplist .track { grid-column: 2 / 4; }
+.toplist.apps li { grid-template-columns: 26px 1fr auto; }
+.app-name { display: flex; flex-direction: column; min-width: 0; }
+.app-name strong { font: 700 15px var(--hand); overflow-wrap: anywhere; }
+.board-grid .pills { margin-bottom: 8px; }
+.empty { text-align: center; color: var(--muted); padding: 18px 8px; }
+.empty svg { width: 90px; height: 64px; display: block; margin: 0 auto 6px; }
+
+/* ---- brand guide ---- */
+.theme-light { --bg: #e6d6b2; --paper: #f4ead3; --panel: #f9f1de; --text: #3b322a; --muted: #7a6b5b; --border: #3b322a; --line: #d9c9a4; --accent: #d06c43; --accent-deep: #8f4425; --sea: #5f9e96; --sea-pale: #cfe5df; --gold: #e3a979; --steel: #b9b4aa; color: var(--text); }
+.theme-dark { --bg: #1f1b16; --paper: #29251f; --panel: #322c24; --text: #f1e6cf; --muted: #b5a78f; --border: #8a7c66; --line: #43392d; --accent: #e07f55; --accent-deep: #f2a07b; --sea: #78bab1; --sea-pale: #2f5752; --gold: #c98c5e; --steel: #6d685f; color: var(--text); }
+.brand-hero { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+.brand-hero svg { width: 190px; height: 118px; flex: none; }
+.brand-hero h2 { font-size: 40px; margin: 0; letter-spacing: 2px; }
+.brand-hero .tagline { font: 700 18px var(--hand); color: var(--muted); }
+.stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.stage { border: 2.5px solid var(--border); border-radius: 14px 18px 12px 16px; padding: 18px 12px 10px; text-align: center; background: var(--paper); position: relative; }
+.stage svg.logo { width: 120px; height: 76px; display: block; margin: 0 auto; }
+.stage .cap { font: 700 13px var(--hand); color: var(--muted); margin-top: 6px; }
+.stage.clear { outline: 2px dashed var(--accent); outline-offset: -14px; }
+.stage.dont svg.logo { opacity: .9; }
+.stage .nope { position: absolute; top: 6px; right: 8px; width: 30px; height: 30px; }
+.dont-stretch svg.logo { transform: scale(1.45, .7); }
+.dont-tilt svg.logo { transform: rotate(-24deg); }
+.dont-recolor svg.logo { filter: hue-rotate(150deg) saturate(2); }
+.dont-busy { background-image: repeating-linear-gradient(45deg, var(--accent) 0 8px, var(--gold) 8px 16px, var(--sea) 16px 24px) !important; }
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; }
+.chip { border: 2.5px solid var(--border); border-radius: 12px 16px 10px 14px; background: var(--paper); padding: 8px; box-shadow: 3px 4px 0 var(--shadow); cursor: pointer; text-align: left; font: inherit; color: var(--text); }
+.chip:hover { transform: rotate(-1deg) translateY(-2px); background: var(--paper); }
+.chip .split { display: flex; height: 64px; border: 2px solid var(--border); border-radius: 8px 11px 7px 10px; overflow: hidden; margin-bottom: 6px; }
+.chip .split span { flex: 1; }
+.chip strong { font: 700 16px var(--hand); display: block; }
+.chip code { font-size: 12px; color: var(--muted); }
+.chip .use { font-size: 12px; color: var(--muted); line-height: 1.35; margin-top: 3px; }
+.type-row { display: grid; grid-template-columns: 140px 1fr; gap: 10px; align-items: baseline; padding: 8px 0; border-bottom: 1.5px dashed var(--line); }
+.type-row:last-child { border-bottom: none; }
+.type-row .spec { font-size: 12px; color: var(--muted); }
+.t-display { font: 700 40px/1.1 var(--hand); letter-spacing: 2px; }
+.t-h2 { font: 700 22px/1.2 var(--hand); } .t-h3 { font: 700 16px/1.3 var(--hand); }
+.shapes { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 18px; }
+.shape-demo { min-height: 110px; display: flex; flex-direction: column; justify-content: flex-end; }
+.shape-demo.hard { box-shadow: 8px 9px 0 var(--accent); }
+.shape-demo.hatchy { background-color: var(--sea-pale); background-image: repeating-linear-gradient(38deg, transparent 0 8px, rgba(59, 50, 42, .25) 8px 9.5px); }
+.shape-demo.inky { border-width: 4px; border-style: solid; }
+.icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
+.icon-cell { text-align: center; font: 700 14px var(--hand); }
+.icon-cell svg { width: 80px; height: 68px; display: block; margin: 0 auto; }
+.icon-cell:hover svg { animation: hop .6s cubic-bezier(.3, 1.6, .5, 1); }
+.dodont { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.dodont .do, .dodont .dont-say { border: 2px solid var(--ok); border-radius: 12px 15px 11px 14px; padding: 8px 12px; background: var(--ok-bg); }
+.dodont .dont-say { border-color: var(--err); background: var(--err-bg); }
+.dodont strong { font: 700 15px var(--hand); }
+.dodont .do strong { color: var(--ok); } .dodont .dont-say strong { color: var(--err); }
+.dodont p { margin: 4px 0; }
+.toc { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hub .arrow.flow .arrow-i, .hub .brain.think, .hub .node.pop, .hub .node.shake, .tile .num.bump, .feed li.new, .live-pill.on .dot, .icon-cell:hover svg { animation: none; }
+  .hub .float { animation: fade-out 1.3s forwards; }
+  .track .fill { transition: none; }
+}
+@keyframes fade-out { 0% { opacity: 1; } 100% { opacity: 0; } }
+
 /* ---- phones and tablets ---- */
 body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); -webkit-text-size-adjust: 100%; }
 @media (pointer: coarse) {
@@ -161,6 +292,16 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
   table.stack td:last-child::before { content: none; }
   table.stack td select { width: auto; }
   pre { font-size: 12px; }
+}
+@media (max-width: 720px) {
+  .tiles { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .tile .num { font-size: 28px; }
+  .board-grid { grid-template-columns: 1fr; }
+  .type-row { grid-template-columns: 1fr; gap: 2px; }
+  .dodont { grid-template-columns: 1fr; }
+  .brand-hero svg { width: 130px; height: 82px; }
+  .brand-hero h2 { font-size: 30px; }
+  .live-pill { top: 6px; right: 8px; }
 }
 @media (max-width: 380px) {
   .card-head { flex-wrap: wrap; }
@@ -242,6 +383,9 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     tautulli: '<rect x="-64" y="-58" width="128" height="116" rx="10" class="ink f-paper"/><path class="thin" d="M-50 40 H50 M-50 40 V-44"/><rect x="-40" y="4" width="16" height="36" class="ink f-sea"/><rect x="-16" y="-14" width="16" height="54" class="ink f-gold"/><rect x="8" y="-30" width="16" height="70" class="ink f-clay"/><rect x="8" y="-30" width="16" height="70" fill="url(#hatch)"/><path class="ink f-ink" d="M34 -6 L50 4 L34 14 Z"/>',
     overseerr: '<g transform="rotate(-8)"><path class="ink f-gold" d="M-74 -40 H74 V-14 A14 14 0 0 0 74 14 V40 H-74 V14 A14 14 0 0 0 -74 -14 Z"/><path fill="url(#hatch)" d="M-74 -40 H74 V-14 A14 14 0 0 0 74 14 V40 H-74 V14 A14 14 0 0 0 -74 -14 Z"/><path class="thin" d="M30 -36 V36" stroke-dasharray="6 6"/><path class="ink f-paper" d="M-26 -22 L-18 -6 L0 -4 L-13 8 L-9 26 L-26 17 L-43 26 L-39 8 L-52 -4 L-34 -6 Z"/></g>'
   };
+  /** The Claude mark (terracotta C + sea-glass brain), centred on 0,0. */
+  var CLAUDE_MARK = '<path d="M-14 -38 A40 40 0 1 0 -14 38" fill="none" stroke="#d06c43" stroke-width="20" stroke-linecap="round"/><path class="ink f-sea" d="M20 -36 C6 -42 -6 -30 -4 -20 C-16 -18 -16 -2 -8 2 C-14 14 -2 26 12 22 C16 32 30 30 32 18 L32 -34 Z"/><path class="ink f-sea" d="M36 -36 C50 -42 62 -30 60 -20 C72 -18 72 -2 64 2 C70 14 58 26 44 22 C40 32 28 30 26 18 L26 -30 Z"/>';
+  ICONS.core = '<g transform="translate(-14 0) scale(1.25)">' + CLAUDE_MARK + '</g>';
   var SVGNS = 'http://www.w3.org/2000/svg';
   function svgEl(tag, attrs, inner) {
     var n = document.createElementNS(SVGNS, tag);
@@ -255,10 +399,10 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     svg.appendChild(svgEl('g', {}, ICONS[id] || ''));
     return svg;
   }
-  function arrowPath(g, x1, y1, x2, y2, on) {
+  function arrowPath(g, x1, y1, x2, y2, on, key) {
     var dx = x2 - x1, dy = y2 - y1, len = Math.sqrt(dx * dx + dy * dy), ux = dx / len, uy = dy / len, nx = -uy, ny = ux;
     var bx = x2 - ux * 26, by = y2 - uy * 26;
-    var wrap = svgEl('g', { class: on ? '' : 'off-arrow' });
+    var wrap = svgEl('g', { class: 'arrow' + (on ? '' : ' off-arrow'), 'data-svc': key || 'all' });
     var d = 'M' + x1 + ' ' + y1 + ' L' + bx + ' ' + by;
     wrap.appendChild(svgEl('path', { d: d, class: 'arrow-o' }));
     wrap.appendChild(svgEl('path', { d: d, class: 'arrow-i' }));
@@ -271,7 +415,9 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
   function hubSketchPhone(services) {
     var W = 400, rows = Math.ceil(services.length / 2), top = 206, rowH = 92, H = top + rows * rowH + 6;
     var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, class: 'phone', role: 'img', 'aria-label': 'Claude connected to ' + services.filter(function (s) { return s.configured; }).length + ' of ' + services.length + ' services' });
-    svg.appendChild(svgEl('g', { transform: 'translate(200 52) scale(.8)' }, '<path d="M-14 -38 A40 40 0 1 0 -14 38" fill="none" stroke="#d06c43" stroke-width="20" stroke-linecap="round"/><path class="ink f-sea" d="M20 -36 C6 -42 -6 -30 -4 -20 C-16 -18 -16 -2 -8 2 C-14 14 -2 26 12 22 C16 32 30 30 32 18 L32 -34 Z"/><path class="ink f-sea" d="M36 -36 C50 -42 62 -30 60 -20 C72 -18 72 -2 64 2 C70 14 58 26 44 22 C40 32 28 30 26 18 L26 -30 Z"/>'));
+    var brainWrap = svgEl('g', { transform: 'translate(200 52) scale(.8)' });
+    brainWrap.appendChild(svgEl('g', { class: 'brain', 'data-fx': 0, 'data-fy': -50 }, CLAUDE_MARK));
+    svg.appendChild(brainWrap);
     var t = svgEl('text', { x: 200, y: 118, 'text-anchor': 'middle', class: 'hub-title' }); t.textContent = 'Claude'; svg.appendChild(t);
     svg.appendChild(svgEl('rect', { x: 105, y: 126, width: 190, height: 28, rx: 9, class: 'tag-box' }));
     var tg = svgEl('text', { x: 200, y: 146, 'text-anchor': 'middle', class: 'tag' }); tg.textContent = 'Natural language control'; svg.appendChild(tg);
@@ -280,14 +426,16 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     services.forEach(function (s, i) {
       var col = i % 2, row = Math.floor(i / 2), x = 8 + col * 194, y = top + row * rowH;
       if (i === services.length - 1 && col === 0) x = 103; // a lone last card sits in the middle
-      var g = svgEl('g', { transform: 'translate(' + x + ' ' + y + ')' });
+      var outer = svgEl('g', { transform: 'translate(' + x + ' ' + y + ')' });
+      var g = svgEl('g', { class: 'node', 'data-svc': s.id, 'data-fx': 93, 'data-fy': 0 });
+      outer.appendChild(g);
       g.appendChild(svgEl('rect', { x: 0, y: 4, width: 186, height: 78, rx: 11, class: 'card-box' }));
       g.appendChild(svgEl('g', { transform: 'translate(34 44) scale(.3)', class: s.configured ? '' : 'off' }, ICONS[s.id] || ''));
       var short = s.displayName.split(' (')[0], kind = (/\((.*)\)/.exec(s.displayName) || [])[1] || '';
       var n1 = svgEl('text', { x: 74, y: 40, class: 'name' }); n1.textContent = short; g.appendChild(n1);
       var n2 = svgEl('text', { x: 74, y: 62, class: 'tag' }); n2.textContent = kind; g.appendChild(n2);
       if (s.configured) g.appendChild(svgEl('g', { transform: 'translate(170 10)' }, '<circle r="12" class="check-ring"/><path class="check-tick" d="M-6 0 L-2 5 L7 -6"/>'));
-      svg.appendChild(g);
+      svg.appendChild(outer);
     });
     return svg;
   }
@@ -302,20 +450,24 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
       var sx = slots[i][0], sy = slots[i][1], left = sx < cx, top = sx === cx;
       var tx = top ? cx : (left ? sx + 120 : sx - 120), ty = top ? sy + 60 : sy;
       var fx = top ? cx : (left ? cx - 90 : cx + 90), fy = top ? cy - 60 : cy + (sy - cy) * 0.3;
-      arrowPath(arrows, fx, fy, tx, ty, s.configured);
-      var g = svgEl('g', { transform: 'translate(' + sx + ' ' + sy + ')' });
+      arrowPath(arrows, fx, fy, tx, ty, s.configured, s.id);
+      var outer = svgEl('g', { transform: 'translate(' + sx + ' ' + sy + ')' });
+      var g = svgEl('g', { class: 'node', 'data-svc': s.id });
+      outer.appendChild(g);
       var ic = svgEl('g', { transform: 'translate(' + (top ? -118 : (left ? -52 : 52)) + ' 0) scale(.42)', class: s.configured ? '' : 'off' }, ICONS[s.id] || '');
       g.appendChild(ic);
       var short = s.displayName.split(' (')[0], kind = (/\((.*)\)/.exec(s.displayName) || [])[1] || '';
       var bx = top ? -20 : (left ? 4 : -112);
+      g.setAttribute('data-fx', bx + 56); g.setAttribute('data-fy', -34);
       g.appendChild(svgEl('rect', { x: bx, y: -26, width: 112, height: 52, rx: 9, class: 'card-box' }));
       var t1 = svgEl('text', { x: bx + 56, y: -3, 'text-anchor': 'middle', class: 'name' }); t1.textContent = short; g.appendChild(t1);
       var t2 = svgEl('text', { x: bx + 56, y: 16, 'text-anchor': 'middle', class: 'tag' }); t2.textContent = kind; g.appendChild(t2);
       if (s.configured) g.appendChild(svgEl('g', { transform: 'translate(' + (bx + 112 - 12) + ' -30)' }, '<circle r="13" class="check-ring"/><path class="check-tick" d="M-6 0 L-2 5 L7 -6"/>'));
-      nodes.appendChild(g);
+      nodes.appendChild(outer);
     });
     svg.appendChild(nodes);
-    var hub = svgEl('g', { transform: 'translate(' + cx + ' ' + cy + ')' }, '<path d="M-14 -38 A40 40 0 1 0 -14 38" fill="none" stroke="#d06c43" stroke-width="20" stroke-linecap="round"/><path class="ink f-sea" d="M20 -36 C6 -42 -6 -30 -4 -20 C-16 -18 -16 -2 -8 2 C-14 14 -2 26 12 22 C16 32 30 30 32 18 L32 -34 Z"/><path class="ink f-sea" d="M36 -36 C50 -42 62 -30 60 -20 C72 -18 72 -2 64 2 C70 14 58 26 44 22 C40 32 28 30 26 18 L26 -30 Z"/><text y="76" text-anchor="middle" class="hub-title">Claude</text><rect x="-95" y="86" width="190" height="30" rx="9" class="tag-box"/><text y="107" text-anchor="middle" class="tag">Natural language control</text>');
+    var hub = svgEl('g', { transform: 'translate(' + cx + ' ' + cy + ')' }, '<text y="76" text-anchor="middle" class="hub-title">Claude</text><rect x="-95" y="86" width="190" height="30" rx="9" class="tag-box"/><text y="107" text-anchor="middle" class="tag">Natural language control</text>');
+    hub.insertBefore(svgEl('g', { class: 'brain', 'data-fx': 0, 'data-fy': -52 }, CLAUDE_MARK), hub.firstChild);
     svg.appendChild(hub);
     return svg;
   }
@@ -433,6 +585,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
 
   // ---------- public views ----------
   function centered(title, intro, body) {
+    stopLive();
     who.classList.add('hidden');
     app.replaceChildren(el('div', { class: 'center panel' }, [el('h2', { text: title }), intro ? el('p', { class: 'muted', text: intro }) : null].concat(body)));
   }
@@ -585,18 +738,25 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     ]);
   }
 
+  /** The hub sketch with a live indicator; tool calls animate on it (see animateHub). */
+  function liveHub(d) {
+    var svg = phone.matches ? hubSketchPhone(d.services) : hubSketch(d.services);
+    setTimeout(function () { paintHub(svg); }, 0);
+    return el('div', { class: 'panel hub' }, [svg, livePill()]);
+  }
+
   function viewServices(d, redraw) {
     var summary = el('p', { class: 'muted', text: d.configuredSummary.length ? 'Enabled: ' + d.configuredSummary.join(', ') : 'No services enabled yet.' });
     if (d.me.role !== 'admin') {
-      return [el('section', null, [el('h2', { text: 'Services' }), el('div', { class: 'panel hub' }, [phone.matches ? hubSketchPhone(d.services) : hubSketch(d.services)]), el('div', { class: 'panel' }, [
+      return [el('section', null, [el('h2', { text: 'Services' }), liveHub(d), el('div', { class: 'panel' }, [
         el('div', { class: 'pills' }, d.services.map(function (s) { return el('span', { class: 'pill' + (s.configured ? ' ok' : ''), text: s.displayName }); })),
         el('p', { class: 'note', text: 'Only admins can change service settings.' })
-      ])])];
+      ])]), statusBoard(d)];
     }
     var grid = el('div', { class: 'grid' }, d.services.map(function (s) {
       return serviceCard(s, function (r) { d.services = r.services; d.configuredSummary = r.configuredSummary; redraw(); });
     }));
-    return [el('section', null, [el('h2', { text: 'Services' }), el('div', { class: 'panel hub' }, [phone.matches ? hubSketchPhone(d.services) : hubSketch(d.services)]), summary, grid])];
+    return [el('section', null, [el('h2', { text: 'Services' }), liveHub(d), summary]), statusBoard(d), el('section', null, [el('h2', { text: 'Connections' }), grid])];
   }
 
   function viewConnect(d) {
@@ -834,6 +994,602 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
   }
 
 
+  // ---------- live activity + status board ----------
+  var reduceMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)').matches : false;
+  var live = { es: null, snap: null, mySnap: null, meId: null, meEl: null, connected: false, boardEl: null, pillEls: [], flows: {}, starts: {}, lastNewId: 0, prevTiles: {}, services: [] };
+  var SERVICE_NAMES = { core: 'Claude tools' };
+  var HOUR_MS = 3600000;
+
+  function fmtNum(n) { return Number(n || 0).toLocaleString(); }
+  function fmtMs(ms) { return !ms ? '-' : ms < 1000 ? ms + ' ms' : (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + ' s'; }
+  function ago(iso) {
+    if (!iso) return 'never';
+    var s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+    if (s < 45) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + ' min ago';
+    if (s < 86400) return Math.round(s / 3600) + ' h ago';
+    return Math.round(s / 86400) + ' d ago';
+  }
+  function clock(iso) { var t = new Date(iso); return [t.getHours(), t.getMinutes(), t.getSeconds()].map(function (n) { return n < 10 ? '0' + n : String(n); }).join(':'); }
+  function svcName(id) { return SERVICE_NAMES[id] || id; }
+
+  function startLive() {
+    if (live.es || !window.EventSource) return;
+    var es = new EventSource('/admin/api/activity');
+    live.es = es;
+    es.onopen = function () { live.connected = true; live.flows = {}; live.starts = {}; refreshStats(); paintPills(); };
+    es.onerror = function () { live.connected = false; paintPills(); };
+    es.addEventListener('call', function (m) {
+      var e;
+      try { e = JSON.parse(m.data); } catch (x) { return; }
+      onLiveCall(e);
+    });
+  }
+  function stopLive() {
+    if (live.es) live.es.close();
+    live.es = null; live.connected = false; live.snap = null; live.mySnap = null;
+  }
+  function refreshStats() {
+    if (live.meEl && document.body.contains(live.meEl)) refreshMine();
+    return api('GET', '/stats').then(function (r) { live.snap = r; updateBoard(); }, function () {});
+  }
+
+  function inFlight() { return Object.keys(live.flows).reduce(function (n, k) { return n + live.flows[k]; }, 0); }
+  function paintPills() {
+    live.pillEls = live.pillEls.filter(function (p) { return document.body.contains(p); });
+    var busy = inFlight();
+    live.pillEls.forEach(function (p) {
+      p.className = 'live-pill' + (p.getAttribute('data-static') ? ' static' : '') + (live.connected ? ' on' : '') + (busy ? ' busy' : '');
+      p.lastChild.textContent = !live.connected ? 'offline' : busy ? busy + (busy === 1 ? ' call' : ' calls') + ' running' : 'live';
+    });
+  }
+  function livePill() {
+    var p = el('div', { class: 'live-pill', 'aria-live': 'polite' }, [el('span', { class: 'dot' }), el('span', { text: 'live' })]);
+    live.pillEls.push(p);
+    setTimeout(paintPills, 0);
+    return p;
+  }
+
+  /** Animate one call on a hub sketch: ink flows along the arrow, then the service card hops (or shakes). */
+  function animateHub(e, svg) {
+    svg = svg || document.querySelector('.hub:not(.demo) svg');
+    var key = e.service;
+    if (e.phase === 'start') {
+      live.flows[key] = (live.flows[key] || 0) + 1;
+      live.starts[e.id] = Date.now();
+      paintHub(svg);
+      return;
+    }
+    var shown = live.starts[e.id];
+    delete live.starts[e.id];
+    // keep the flow visible for a moment even for instant calls
+    var wait = shown ? Math.max(0, 700 - (Date.now() - shown)) : 0;
+    setTimeout(function () {
+      if (shown) live.flows[key] = Math.max(0, (live.flows[key] || 0) - 1);
+      if (!live.flows[key]) delete live.flows[key];
+      paintHub(svg);
+      if (!svg || !document.body.contains(svg)) return;
+      var node = svg.querySelector('.node[data-svc="' + key + '"]') || svg.querySelector('.brain');
+      if (!node) return;
+      node.classList.remove('pop', 'shake');
+      void node.getBoundingClientRect();
+      node.classList.add(e.ok ? 'pop' : 'shake');
+      var t = svgEl('text', { x: node.getAttribute('data-fx') || 0, y: node.getAttribute('data-fy') || 0, class: 'float ' + (e.ok ? 'ok' : 'err') });
+      t.textContent = e.ok ? '+1' : '!';
+      node.appendChild(t);
+      setTimeout(function () { t.remove(); node.classList.remove('pop', 'shake'); }, 1300);
+    }, wait);
+  }
+  function paintHub(svg) {
+    paintPills();
+    if (!svg || !document.body.contains(svg)) return;
+    var any = inFlight() > 0;
+    Array.prototype.forEach.call(svg.querySelectorAll('.arrow'), function (a) {
+      var k = a.getAttribute('data-svc');
+      a.classList.toggle('flow', k === 'all' ? any : Boolean(live.flows[k]));
+    });
+    var brain = svg.querySelector('.brain');
+    if (brain) brain.classList.toggle('think', any);
+  }
+
+  function onLiveCall(e) {
+    animateHub(e);
+    if (e.phase !== 'end') return;
+    live.lastNewId = e.id;
+    if (live.snap) {
+      applyCall(live.snap, e);
+      if (live.isAdmin && e.caller && e.callerId) {
+        var c = live.snap.callers.filter(function (x) { return x.id === e.callerId; })[0];
+        if (!c) { c = { id: e.callerId, name: e.caller, calls: 0, errors: 0, avgMs: 0 }; live.snap.callers.push(c); }
+        bumpCounter(c, e);
+        live.snap.callers.sort(function (a, b) { return b.calls - a.calls; });
+      }
+      updateBoard();
+    }
+    if (live.mySnap && e.callerId && e.callerId === live.meId) {
+      var m = live.mySnap;
+      if (!m.totals.today) m.totals.activeDays++;
+      applyCall(m, e);
+      var key = e.client || 'unknown client';
+      var app = m.clients.filter(function (x) { return x.name === key; })[0];
+      if (!app) { app = { name: key, calls: 0, errors: 0, avgMs: 0 }; m.clients.push(app); }
+      bumpCounter(app, e);
+      m.clients.sort(function (a, b) { return b.calls - a.calls; });
+      rollDays(m);
+      m.daily[m.daily.length - 1].calls++;
+      updateMine();
+    }
+    // only the render right after the event highlights the new feed row
+    setTimeout(function () { if (live.lastNewId === e.id) live.lastNewId = 0; }, 0);
+  }
+  function bumpCounter(c, e) {
+    c.calls++;
+    if (!e.ok) c.errors++;
+    c.avgMs = Math.round(((c.avgMs || 0) * (c.calls - 1) + (e.ms || 0)) / c.calls);
+    c.lastAt = e.at;
+    return c;
+  }
+  /** Apply one finished call to a snapshot (global or personal - both have the same core shape). */
+  function applyCall(s, e) {
+    rollHours(s);
+    bumpCounter(s.totals, e);
+    s.totals.today++;
+    s.services[e.service] = bumpCounter(s.services[e.service] || { calls: 0, errors: 0, avgMs: 0 }, e);
+    var tool = s.tools.filter(function (t) { return t.tool === e.tool; })[0];
+    if (!tool) { tool = { tool: e.tool, service: e.service, calls: 0, errors: 0, avgMs: 0 }; s.tools.push(tool); }
+    bumpCounter(tool, e);
+    s.tools.sort(function (a, b) { return b.calls - a.calls; });
+    s.tools = s.tools.slice(0, 8);
+    s.hourly[s.hourly.length - 1]++;
+    s.recent.unshift(e);
+    s.recent = s.recent.slice(0, 40);
+  }
+  function localDay(t) { var d = new Date(t); return d.getFullYear() + '-' + (d.getMonth() < 9 ? '0' : '') + (d.getMonth() + 1) + '-' + (d.getDate() < 10 ? '0' : '') + d.getDate(); }
+  /** Start a new day column (and reset "today") after midnight. */
+  function rollDays(m) {
+    var today = localDay(Date.now());
+    if (m.daily[m.daily.length - 1].day === today) return;
+    m.daily.shift();
+    m.daily.push({ day: today, calls: 0 });
+    m.totals.today = 0;
+  }
+  /** Move the 24-hour window forward when an hour has passed since the snapshot. */
+  function rollHours(s) {
+    var end = Date.parse(s.hourlyEndsAt), now = Date.now(), n = 0;
+    while (now >= end && n < 24) { s.hourly.shift(); s.hourly.push(0); end += HOUR_MS; n++; }
+    if (now >= end) end = (Math.floor(now / HOUR_MS) + 1) * HOUR_MS;
+    s.hourlyEndsAt = new Date(end).toISOString();
+  }
+  setInterval(function () {
+    if (live.snap) { rollHours(live.snap); updateBoard(); }
+    if (live.mySnap) { rollHours(live.mySnap); rollDays(live.mySnap); updateMine(); }
+  }, 60000);
+
+  function statusBoard(d) {
+    live.services = d.services;
+    live.isAdmin = d.me.role === 'admin';
+    live.meId = d.me.id;
+    var section = el('section', { class: 'board', 'aria-label': 'Status board' });
+    live.boardEl = section;
+    if (live.snap) updateBoard(); else section.appendChild(el('p', { class: 'muted', text: 'Loading statistics…' }));
+    if (!live.snap && !live.es) refreshStats();
+    return section;
+  }
+
+  function tile(key, value, label, extra, drawing) {
+    var num = el('span', { class: 'num', text: value });
+    if (live.prevTiles[key] !== undefined && live.prevTiles[key] !== value && !reduceMotion) num.classList.add('bump');
+    live.prevTiles[key] = value;
+    return el('div', { class: 'panel tile' }, [drawing ? svgEl('svg', { viewBox: '0 0 34 24', 'aria-hidden': 'true' }, drawing) : null, num, el('div', { class: 'lbl', text: label }), extra ? el('div', { class: 'tiny', text: extra }) : null]);
+  }
+
+  function updateBoard() {
+    var s = live.snap, root = live.boardEl;
+    if (!s || !root) return;
+    var t = s.totals;
+    var rate = t.calls ? Math.round(1000 * (t.calls - t.errors) / t.calls) / 10 : null;
+    var tiles = el('div', { class: 'tiles' }, [
+      tile('today', fmtNum(t.today), 'Calls today', s.busiestDay && s.busiestDay.calls > t.today ? 'record: ' + fmtNum(s.busiestDay.calls) : (t.today ? 'a record day!' : 'quiet so far'),
+        '<path class="thin" d="M4 20 L12 12 L18 16 L30 4 M24 4 H30 V10"/>'),
+      tile('all', fmtNum(t.calls), 'All-time calls', 'since ' + new Date(s.since).toLocaleDateString(),
+        '<path class="thin" d="M5 4 V20 M10 4 V20 M15 4 V20 M20 4 V20 M2 16 L24 8"/>'),
+      tile('rate', rate === null ? '-' : rate + '%', 'Success rate', t.errors ? fmtNum(t.errors) + ' hiccup' + (t.errors === 1 ? '' : 's') : 'no hiccups',
+        '<path class="check-tick" d="M8 12 L14 18 L26 5"/>'),
+      tile('avg', fmtMs(t.avgMs), 'Avg response', 'per tool call',
+        '<circle cx="17" cy="13" r="9" class="thin"/><path class="thin" d="M17 8 V13 L21 15 M14 2 H20"/>')
+    ]);
+    var head = el('div', { class: 'board-head' }, [el('h2', { text: 'Status board' }), el('span', { class: 'note', text: 'Counting MCP tool calls since ' + fmtDate(s.since) })]);
+    var grid1 = el('div', { class: 'board-grid' }, [perServicePanel(s), hourlyPanel(s)]);
+    var grid2 = el('div', { class: 'board-grid' }, [feedPanel(s), toolsPanel(s)].concat(live.isAdmin ? [callersPanel(s)] : []));
+    root.replaceChildren(head, tiles, grid1, grid2);
+  }
+
+  function emptyNote(text) {
+    return el('div', { class: 'empty' }, [svgEl('svg', { viewBox: '-80 -56 160 112', 'aria-hidden': 'true' }, '<g transform="scale(1.1)">' + CLAUDE_MARK + '</g>'), el('div', { text: text })]);
+  }
+
+  function perServicePanel(s, title) {
+    var ids = live.services.filter(function (x) { return x.configured || s.services[x.id]; }).map(function (x) { SERVICE_NAMES[x.id] = x.displayName; return x.id; });
+    ids.push('core');
+    SERVICE_NAMES.core = 'Claude tools (TRaSH, search, status)';
+    var max = ids.reduce(function (m, id) { return Math.max(m, (s.services[id] || {}).calls || 0); }, 0);
+    ids.sort(function (a, b) { return ((s.services[b] || {}).calls || 0) - ((s.services[a] || {}).calls || 0); });
+    var rows = ids.map(function (id) {
+      var c = s.services[id] || { calls: 0, errors: 0, avgMs: 0 };
+      var fill = el('div', { class: 'fill' });
+      fill.style.width = (max ? Math.max(1.5, 100 * c.calls / max) : 0) + '%';
+      var short = svcName(id).split(' (')[0];
+      return el('li', { title: svcName(id) + ': ' + fmtNum(c.calls) + ' calls, ' + fmtNum(c.errors) + ' failed, avg ' + fmtMs(c.avgMs) + ', last ' + ago(c.lastAt) }, [
+        serviceIcon(id, c.calls > 0 || id === 'core'),
+        el('div', { class: 'bar-label' }, [el('strong', { text: short }), el('span', { class: 'muted', text: fmtNum(c.calls) + (c.errors ? ' · ' + fmtNum(c.errors) + ' failed' : '') + (c.calls ? ' · ' + fmtMs(c.avgMs) : '') })]),
+        el('div', { class: 'track', role: 'img', 'aria-label': short + ' ' + c.calls + ' calls' }, [fill])
+      ]);
+    });
+    return el('div', { class: 'panel' }, [el('h3', { text: title || 'Calls per connection' }), el('ul', { class: 'bars' }, rows)]);
+  }
+
+  /** Hand-drawn column chart. opts: label(i) -> axis label or '', tip(i) -> hover text, aria. The last column is highlighted. */
+  function columnChart(values, opts) {
+    var W = 480, H = 160, L = 30, R = 470, T = 18, B = 124, n = values.length, slot = (R - L) / n;
+    var max = Math.max(4, Math.max.apply(null, values));
+    var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': opts.aria });
+    svg.appendChild(svgEl('path', { class: 'grid', d: 'M' + L + ' ' + T + ' H' + R }));
+    var mx = svgEl('text', { x: L - 6, y: T + 4, 'text-anchor': 'end' }); mx.textContent = String(max); svg.appendChild(mx);
+    values.forEach(function (v, i) {
+      var x = L + i * slot + Math.min(2, slot * 0.15), w = slot - 2 * Math.min(2, slot * 0.15);
+      var h = v ? Math.max(4, (B - T) * v / max) : 0;
+      var g = svgEl('g');
+      var tip = svgEl('title'); tip.textContent = opts.tip(i); g.appendChild(tip);
+      g.appendChild(svgEl('rect', { class: 'bar-hit', x: L + i * slot, y: T, width: slot, height: B - T }));
+      if (h) {
+        // a slightly wobbly, hand-drawn column anchored on the baseline
+        var j = (i % 3) - 1, r = Math.min(3, w / 3);
+        g.appendChild(svgEl('path', { class: 'bar' + (i === n - 1 ? ' now' : ''), d: 'M' + x + ' ' + B + ' L' + (x + j * 0.6) + ' ' + (B - h + r) + ' Q' + x + ' ' + (B - h) + ' ' + (x + r) + ' ' + (B - h + j * 0.8) + ' L' + (x + w - r) + ' ' + (B - h - j * 0.8) + ' Q' + (x + w) + ' ' + (B - h) + ' ' + (x + w - j * 0.6) + ' ' + (B - h + r) + ' L' + (x + w) + ' ' + B + ' Z' }));
+        g.appendChild(svgEl('path', { d: 'M' + x + ' ' + B + ' V' + (B - h + r) + ' H' + (x + w) + ' V' + B + ' Z', fill: 'url(#hatch)', 'pointer-events': 'none' }));
+      }
+      svg.appendChild(g);
+      var label = opts.label(i);
+      if (label) {
+        var lab = svgEl('text', { x: x + w / 2, y: B + 20, 'text-anchor': 'middle' });
+        lab.textContent = label;
+        svg.appendChild(lab);
+      }
+    });
+    svg.appendChild(svgEl('path', { class: 'axis', d: 'M' + (L - 4) + ' ' + B + ' Q' + ((L + R) / 2) + ' ' + (B + 2) + ' ' + (R + 2) + ' ' + B }));
+    return svg;
+  }
+
+  function hourlyPanel(s) {
+    var n = s.hourly.length, end = Date.parse(s.hourlyEndsAt);
+    function from(i) { return new Date(end - (n - i) * HOUR_MS); }
+    var total = s.hourly.reduce(function (a, b) { return a + b; }, 0);
+    var peak = s.hourly.indexOf(Math.max.apply(null, s.hourly));
+    var svg = columnChart(s.hourly, {
+      aria: 'Tool calls per hour, last 24 hours: ' + total + ' in total',
+      label: function (i) { return i === n - 1 ? 'now' : i % 6 === 0 ? from(i).getHours() + ':00' : ''; },
+      tip: function (i) { var h = from(i).getHours(); return h + ':00 - ' + ((h + 1) % 24) + ':00: ' + s.hourly[i] + (s.hourly[i] === 1 ? ' call' : ' calls'); }
+    });
+    return el('div', { class: 'panel chart' }, [
+      el('h3', { text: 'Last 24 hours' }), svg,
+      el('p', { class: 'note', text: total ? fmtNum(total) + ' calls · busiest hour ' + from(peak).getHours() + ':00 (' + s.hourly[peak] + ')' : 'No calls in the last 24 hours.' })
+    ]);
+  }
+
+  function dailyPanel(m) {
+    var vals = m.daily.map(function (x) { return x.calls; }), n = vals.length;
+    function date(i) { var p = m.daily[i].day.split('-'); return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])); }
+    var total = vals.reduce(function (a, b) { return a + b; }, 0);
+    var best = vals.indexOf(Math.max.apply(null, vals));
+    var streak = 0;
+    for (var i = n - 1; i >= 0 && vals[i] > 0; i--) streak++;
+    if (!streak && n > 1 && vals[n - 1] === 0) { for (i = n - 2; i >= 0 && vals[i] > 0; i--) streak++; }
+    var svg = columnChart(vals, {
+      aria: 'Your tool calls per day, last ' + n + ' days: ' + total + ' in total',
+      label: function (i) { return i === n - 1 ? 'today' : (n - 1 - i) % 7 === 0 ? date(i).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''; },
+      tip: function (i) { return date(i).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) + ': ' + vals[i] + (vals[i] === 1 ? ' call' : ' calls'); }
+    });
+    return el('div', { class: 'panel chart' }, [
+      el('h3', { text: 'Last ' + n + ' days' }), svg,
+      el('p', { class: 'note', text: total ? fmtNum(total) + ' calls · best day ' + date(best).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' (' + vals[best] + ')' + (streak > 1 ? ' · ' + streak + '-day streak' : '') : 'Nothing yet this month.' })
+    ]);
+  }
+
+  function feedPanel(s, title, mine) {
+    var rows = s.recent.slice(0, 25).map(function (e) {
+      return el('li', { class: e.id === live.lastNewId && !reduceMotion ? 'new' : '' }, [
+        el('span', { class: 't', text: clock(e.at) }),
+        serviceIcon(e.service, true),
+        el('span', { class: 'tool', text: e.tool, title: e.tool }),
+        el('span', { class: 'mark ' + (e.ok ? 'ok' : 'err'), text: e.ok ? '✓ ok' : '✗ failed' }),
+        el('span', { class: 'meta', text: [mine ? e.client : e.caller, fmtMs(e.ms)].filter(Boolean).join(' · ') })
+      ]);
+    });
+    var pill = livePill();
+    pill.setAttribute('data-static', '1');
+    pill.classList.add('static');
+    return el('div', { class: 'panel' }, [
+      el('div', { class: 'card-head' }, [el('h3', { text: title || 'Live feed' }), pill]),
+      rows.length ? el('ul', { class: 'feed', 'aria-live': 'polite' }, rows) : emptyNote(mine ? 'No calls from your apps since the server started.' : 'Waiting for the first call - ask Claude about your library!')
+    ]);
+  }
+
+  function toolsPanel(s, title) {
+    var max = s.tools.length ? s.tools[0].calls : 0;
+    var rows = s.tools.map(function (t) {
+      var fill = el('div', { class: 'fill' + (t.errors > t.calls / 2 ? ' err' : '') });
+      fill.style.width = (max ? 100 * t.calls / max : 0) + '%';
+      return el('li', { title: t.tool + ': ' + t.calls + ' calls, ' + t.errors + ' failed, avg ' + fmtMs(t.avgMs) }, [
+        el('code', { text: t.tool }), el('span', { class: 'muted', text: fmtNum(t.calls) }),
+        el('div', { class: 'track small' }, [fill])
+      ]);
+    });
+    return el('div', { class: 'panel' }, [el('h3', { text: title || 'Favourite tools' }), rows.length ? el('ol', { class: 'toplist' }, rows) : emptyNote('No favourites yet.')]);
+  }
+
+  function callersPanel(s) {
+    var rows = s.callers.map(function (c) {
+      return el('tr', null, [el('td', { text: c.name }), el('td', { text: fmtNum(c.calls) }), el('td', { text: c.calls ? Math.round(100 * (c.calls - c.errors) / c.calls) + '%' : '-' }), el('td', { text: ago(c.lastAt) })]);
+    });
+    var table = el('table', null, [el('thead', null, [el('tr', null, [el('th', { text: 'User' }), el('th', { text: 'Calls' }), el('th', { text: 'Success' }), el('th', { text: 'Last call' })])]), el('tbody', null, rows)]);
+    labelTables(el('div', null, [table]));
+    return el('div', { class: 'panel' }, [el('h3', { text: 'Who is asking' }), rows.length ? el('div', { class: 'table-wrap' }, [table]) : emptyNote('Nobody has called yet.')]);
+  }
+
+
+  // ---------- my activity (personal statistics) ----------
+  function refreshMine() {
+    return api('GET', '/me/stats').then(function (r) { live.mySnap = r; updateMine(); }, function () {});
+  }
+
+  function viewMine(d) {
+    live.meId = d.me.id;
+    live.services = d.services;
+    var section = el('section', { class: 'board', 'aria-label': 'My activity' });
+    live.meEl = section;
+    if (live.mySnap) updateMine(); else section.appendChild(el('p', { class: 'muted', text: 'Loading your statistics…' }));
+    refreshMine();
+    return section;
+  }
+
+  function updateMine() {
+    var m = live.mySnap, root = live.meEl;
+    if (!m || !root) return;
+    var t = m.totals, lg = m.logins;
+    var rate = t.calls ? Math.round(1000 * (t.calls - t.errors) / t.calls) / 10 : null;
+    var tiles = el('div', { class: 'tiles' }, [
+      tile('me-today', fmtNum(t.today), 'My calls today', t.today ? 'nice work' : 'nothing yet today',
+        '<path class="thin" d="M4 20 L12 12 L18 16 L30 4 M24 4 H30 V10"/>'),
+      tile('me-all', fmtNum(t.calls), 'My calls', t.activeDays ? 'on ' + t.activeDays + ' active day' + (t.activeDays === 1 ? '' : 's') : 'none yet',
+        '<path class="thin" d="M5 4 V20 M10 4 V20 M15 4 V20 M20 4 V20 M2 16 L24 8"/>'),
+      tile('me-rate', rate === null ? '-' : rate + '%', 'Success rate', t.calls ? 'avg ' + fmtMs(t.avgMs) : 'no calls yet',
+        '<path class="check-tick" d="M8 12 L14 18 L26 5"/>'),
+      tile('me-logins', fmtNum(lg.count), 'Sign-ins', lg.lastAt ? 'last ' + ago(lg.lastAt) : 'none recorded',
+        '<rect x="9" y="11" width="16" height="11" rx="3" class="thin"/><path class="thin" d="M12 11 V7 A5 5 0 0 1 22 7 V11"/>')
+    ]);
+    var head = el('div', { class: 'board-head' }, [
+      el('h2', { text: 'My activity' }),
+      el('span', { class: 'note', text: 'Only you (and admins) can see this. Counting since ' + fmtDate(m.since) })
+    ]);
+    root.replaceChildren(head,
+      el('p', { class: 'muted', text: 'Hi ' + m.name + ' - here is what you and your apps have been up to.' }),
+      tiles,
+      el('div', { class: 'board-grid' }, [perServicePanel(m, 'My calls per connection'), dailyPanel(m)]),
+      el('div', { class: 'board-grid' }, [appsPanel(m), toolsPanel(m, 'My favourite tools')]),
+      el('div', { class: 'board-grid' }, [feedPanel(m, 'My recent calls', true), signInsPanel(lg)])
+    );
+    labelTables(root);
+  }
+
+  function appsPanel(m) {
+    var max = m.clients.length ? m.clients[0].calls : 0;
+    var rows = m.clients.map(function (c) {
+      var fill = el('div', { class: 'fill' });
+      fill.style.width = (max ? 100 * c.calls / max : 0) + '%';
+      return el('li', { title: c.name + ': ' + c.calls + ' calls, ' + c.errors + ' failed, avg ' + fmtMs(c.avgMs) }, [
+        el('div', { class: 'app-name' }, [el('strong', { text: c.name }), el('span', { class: 'note', text: 'last used ' + ago(c.lastAt) })]),
+        el('span', { class: 'muted', text: fmtNum(c.calls) + (c.errors ? ' · ' + fmtNum(c.errors) + ' failed' : '') }),
+        el('div', { class: 'track small' }, [fill])
+      ]);
+    });
+    return el('div', { class: 'panel' }, [
+      el('h3', { text: 'My apps' }),
+      el('p', { class: 'note', text: 'Calls per access token or connected app.' }),
+      rows.length ? el('ol', { class: 'toplist apps' }, rows) : emptyNote('No app has used your tokens yet - see "Connect".')
+    ]);
+  }
+
+  function signInsPanel(lg) {
+    var how = { passkey: 'Passkey', password: 'Password', 'new account': 'Account created', 'connected app': 'Approved an app' };
+    var rows = lg.recent.map(function (x) {
+      return el('tr', null, [el('td', { text: fmtDate(x.at) }), el('td', { text: how[x.method] || x.method }), el('td', { text: x.device })]);
+    });
+    var methods = Object.keys(lg.methods).map(function (k) { return el('span', { class: 'pill', text: (how[k] || k) + ': ' + lg.methods[k] }); });
+    return el('div', { class: 'panel' }, [
+      el('h3', { text: 'Sign-ins' }),
+      methods.length ? el('div', { class: 'pills' }, methods) : null,
+      lg.failed ? el('div', { class: 'msg warn', text: lg.failed + ' wrong password' + (lg.failed === 1 ? '' : 's') + ' entered for your account, last ' + ago(lg.lastFailedAt) + '. If that was not you, change your password under "My sign-in".' }) : null,
+      rows.length ? el('div', { class: 'table-wrap' }, [el('table', null, [
+        el('thead', null, [el('tr', null, [el('th', { text: 'When' }), el('th', { text: 'How' }), el('th', { text: 'Device' })])]),
+        el('tbody', null, rows)
+      ])]) : emptyNote('No sign-ins recorded yet.'),
+      el('p', { class: 'note', text: 'The last 20 sign-ins are kept. Devices are shown as browser and system only.' })
+    ]);
+  }
+
+  // ---------- brand guide ----------
+  var BRAND_COLORS = [
+    ['Terracotta', 'accent', '#d06c43', '#e07f55', 'Primary buttons, the C in the logo, arrows'],
+    ['Fired clay', 'accent-deep', '#8f4425', '#f2a07b', 'Arrow outlines, links, pressed states'],
+    ['Sea glass', 'sea', '#5f9e96', '#78bab1', 'The brain, focus rings, active tab'],
+    ['Sea foam', 'sea-pale', '#cfe5df', '#2f5752', 'Hover fills, tags, highlights'],
+    ['Apricot', 'gold', '#e3a979', '#c98c5e', 'Tickets, notes, live ink flow'],
+    ['Olive', 'olive', '#a3a372', '#b7b783', 'Quiet secondary accents'],
+    ['Pewter', 'steel', '#b9b4aa', '#6d685f', 'Screens, reels, neutral fills'],
+    ['Ink', 'text', '#3b322a', '#f1e6cf', 'Every outline and all text'],
+    ['Paper', 'paper', '#f4ead3', '#29251f', 'Header and card faces'],
+    ['Kraft', 'bg', '#e6d6b2', '#1f1b16', 'Page background']
+  ];
+  var STATUS_COLORS = [['Good', 'ok', '#2f7a3a', '#79c47e'], ['Heads-up', 'warn', '#7a4d00', '#f2c063'], ['Problem', 'err', '#a32a1c', '#ff9a8a']];
+  var LOGO_FILE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-14 0 142 88" width="568" height="352">' +
+    '<path d="M44 14 A32 32 0 1 0 44 74" fill="none" stroke="#d06c43" stroke-width="15" stroke-linecap="round"/>' +
+    '<path d="M44 6 A40 40 0 1 0 44 82 M44 22 A24 24 0 1 0 44 66" fill="none" stroke="#3b322a" stroke-width="2" stroke-linecap="round" opacity=".7"/>' +
+    '<path fill="#5f9e96" stroke="#3b322a" stroke-width="3" stroke-linejoin="round" d="M78 22 C66 18 54 28 56 38 C46 40 46 54 54 58 C48 68 58 78 70 76 C74 84 86 82 88 72 L88 24 Z"/>' +
+    '<path fill="#5f9e96" stroke="#3b322a" stroke-width="3" stroke-linejoin="round" d="M92 22 C104 18 116 28 114 38 C124 40 124 54 116 58 C122 68 112 78 100 76 C96 84 86 82 84 72 L84 26 Z"/>' +
+    '<path fill="none" stroke="#3b322a" stroke-width="2" stroke-linecap="round" d="M66 34 C60 40 70 44 64 50 M104 34 C110 40 100 44 106 50"/></svg>';
+  var NOPE = '<circle cx="15" cy="15" r="12" fill="var(--err-bg)" stroke="var(--err)" stroke-width="2.5"/><path d="M10 10 L20 20 M20 10 L10 20" stroke="var(--err)" stroke-width="3" stroke-linecap="round"/>';
+
+  function logoSvg() {
+    var src = document.querySelector('header .brand svg');
+    var c = src.cloneNode(true);
+    c.setAttribute('class', 'logo');
+    return c;
+  }
+  function download(name, text, type) {
+    var url = URL.createObjectURL(new Blob([text], { type: type }));
+    var a = el('a', { href: url, download: name });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+  }
+  function brandSection(id, title, intro, body) {
+    return el('section', { id: 'brand-' + id }, [el('h2', { text: title }), el('div', { class: 'panel' }, [intro ? el('p', { class: 'muted', text: intro }) : null].concat(body))]);
+  }
+  function stage(cls, caption, extra) {
+    return el('div', { class: 'stage ' + (cls || '') }, [logoSvg(), el('div', { class: 'cap', text: caption })].concat(extra || []));
+  }
+
+  function viewBrand(d) {
+    var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var sections = [];
+    var toc = el('nav', { class: 'toc', 'aria-label': 'Brand guide sections' });
+
+    var hero = el('div', { class: 'panel brand-hero' }, [logoSvg(), el('div', null, [
+      el('h2', { text: 'MCP-ARR' }),
+      el('div', { class: 'tagline', text: 'Media management via AI' }),
+      el('p', { class: 'muted', text: 'A sketchbook for your media server: warm paper, felt-tip ink, terracotta and sea glass. Everything looks drawn by hand - friendly, a little wonky, never sloppy.' }),
+      el('div', { class: 'row' }, [
+        el('button', { class: 'primary', text: 'Download logo (SVG)', onclick: function () { download('mcp-arr-logo.svg', LOGO_FILE, 'image/svg+xml'); } }),
+        el('button', { text: 'Copy design tokens', onclick: function (ev) {
+          var b = ev.currentTarget;
+          navigator.clipboard.writeText(tokensCss()).then(function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy design tokens'; }, 1500); });
+        } })
+      ])
+    ])]);
+
+    sections.push(['logo', brandSection('logo', 'Logo', 'The mark is a terracotta C (for Claude) hugging a two-lobed sea-glass brain: the AI that runs your *arr stack. The thin echo lines around the C are part of the sketch - keep them.', [
+      el('div', { class: 'stages' }, [
+        stage('theme-light', 'On paper'),
+        stage('theme-dark', 'On ink (dark mode)'),
+        stage('clear', 'Clear space: one brain-height', [el('div', { class: 'note', text: 'Never smaller than 32 px tall' })])
+      ]),
+      el('h3', { text: 'Please don’t' }),
+      el('div', { class: 'stages' }, [
+        stage('dont dont-stretch', 'Stretch or squash it', [svgEl('svg', { class: 'nope', viewBox: '0 0 30 30' }, NOPE)]),
+        stage('dont dont-tilt', 'Tilt it', [svgEl('svg', { class: 'nope', viewBox: '0 0 30 30' }, NOPE)]),
+        stage('dont dont-recolor', 'Recolour the brain or C', [svgEl('svg', { class: 'nope', viewBox: '0 0 30 30' }, NOPE)]),
+        stage('dont dont-busy', 'Put it on busy patterns', [svgEl('svg', { class: 'nope', viewBox: '0 0 30 30' }, NOPE)])
+      ])
+    ])]);
+
+    var chips = BRAND_COLORS.map(function (c) {
+      var a = el('span'), b = el('span');
+      a.style.background = c[2]; b.style.background = c[3];
+      return el('button', { class: 'chip', type: 'button', title: 'Copy ' + (dark ? c[3] : c[2]), onclick: function (ev) {
+        var btn = ev.currentTarget, hex = dark ? c[3] : c[2];
+        navigator.clipboard.writeText(hex).then(function () { var s = btn.querySelector('strong'); s.textContent = 'Copied ' + hex; setTimeout(function () { s.textContent = c[0]; }, 1400); });
+      } }, [el('div', { class: 'split', 'aria-hidden': 'true' }, [a, b]), el('strong', { text: c[0] }), el('code', { text: c[2] + ' / ' + c[3] }), el('div', { class: 'note', text: '--' + c[1] }), el('div', { class: 'use', text: c[4] })]);
+    });
+    sections.push(['color', brandSection('color', 'Colour', 'Earthy and warm. Terracotta does the talking, sea glass listens. Each chip shows light mode on the left and dark mode on the right - click one to copy the colour for the current mode.', [
+      el('div', { class: 'swatches' }, chips),
+      el('h3', { text: 'Status colours' }),
+      el('p', { class: 'note', text: 'Reserved for state - never decoration. Always pair them with a word or a mark (✓, !, ✗), never colour alone.' }),
+      el('div', { class: 'pills' }, [el('span', { class: 'pill ok', text: '✓ Good  #2f7a3a / #79c47e' }), el('span', { class: 'pill warn', text: '! Heads-up  #7a4d00 / #f2c063' }), el('span', { class: 'pill', text: '✗ Problem  #a32a1c / #ff9a8a' })])
+    ])]);
+
+    var hand = getComputedStyle(document.body).getPropertyValue('--hand').trim();
+    sections.push(['type', brandSection('type', 'Typography', 'One handwriting family does everything, picked from the fonts already on the device (no web fonts: the UI works offline and under a strict content policy). Monospace is only for things people copy: URLs, tokens, tool names.', [
+      el('div', { class: 'type-row' }, [el('div', { class: 'spec', text: 'Display · 40 / bold / +2 tracking' }), el('div', { class: 't-display', text: 'MCP-ARR' })]),
+      el('div', { class: 'type-row' }, [el('div', { class: 'spec', text: 'Heading · 22 / bold' }), el('div', { class: 't-h2', text: 'Connect an MCP client' })]),
+      el('div', { class: 'type-row' }, [el('div', { class: 'spec', text: 'Subheading · 16 / bold' }), el('div', { class: 't-h3', text: 'Calls per connection' })]),
+      el('div', { class: 'type-row' }, [el('div', { class: 'spec', text: 'Body · 15 / 1.55' }), el('div', { text: 'Ask Claude to add a show, find a movie or fix your subtitles - it talks to Sonarr, Radarr and friends for you.' })]),
+      el('div', { class: 'type-row' }, [el('div', { class: 'spec', text: 'Mono · 13' }), el('code', { text: 'https://mcp-arr.home.lan/mcp' })]),
+      el('p', { class: 'note', text: 'Font stack: ' + hand })
+    ])]);
+
+    sections.push(['shape', brandSection('shape', 'Shapes & lines', 'Nothing is perfectly round or straight. Corners use uneven radii, outlines are thick ink, shadows are hard offsets like a paper cut-out, and shading is diagonal hatching - never gradients or blur.', [
+      el('div', { class: 'shapes' }, [
+        el('div', { class: 'panel shape-demo' }, [el('strong', { text: 'Wobbly corners' }), el('code', { text: '16px 20px 14px 22px / 20px 14px 22px 16px' })]),
+        el('div', { class: 'panel shape-demo hard' }, [el('strong', { text: 'Hard shadow' }), el('code', { text: '4px 5px 0 (8px 9px for emphasis)' })]),
+        el('div', { class: 'panel shape-demo hatchy' }, [el('strong', { text: 'Hatching' }), el('code', { text: '38° lines, 9 px apart, 35% ink' })]),
+        el('div', { class: 'panel shape-demo inky' }, [el('strong', { text: 'Ink line' }), el('code', { text: '2.5-3 px, round caps & joins' })])
+      ])
+    ])]);
+
+    var iconIds = ['core'].concat(d.services.map(function (s) { return s.id; }));
+    var iconNames = { core: 'Claude' };
+    d.services.forEach(function (s) { iconNames[s.id] = s.displayName.split(' (')[0]; });
+    sections.push(['icons', brandSection('icons', 'Illustrations', 'Each service is a little object you could doodle in a margin: an old TV for Sonarr, a film reel for Radarr, a note for Lidarr. Flat palette fills, thick ink outline, hatching for the shadow side. Disabled services fade to grey.', [
+      el('div', { class: 'icon-grid' }, iconIds.map(function (id) {
+        var svg = svgEl('svg', { viewBox: '-84 -92 168 176', 'aria-hidden': 'true' });
+        svg.appendChild(svgEl('g', {}, ICONS[id] || ''));
+        return el('div', { class: 'icon-cell' }, [svg, el('div', { text: iconNames[id] || id })]);
+      }))
+    ])]);
+
+    var msg = el('div', { class: 'msg' });
+    sections.push(['ui', brandSection('ui', 'Components', 'Buttons look like stickers you can press: they drop into their shadow when clicked. One primary (terracotta) action per card.', [
+      el('div', { class: 'row' }, [el('button', { class: 'primary', text: 'Save' }), el('button', { text: 'Test' }), el('button', { class: 'danger', text: 'Remove' }), el('button', { class: 'link', text: 'Text link' }), el('button', { text: 'Disabled', disabled: true })]),
+      el('div', { class: 'row' }, [el('span', { class: 'pill ok', text: 'Enabled' }), el('span', { class: 'pill warn', text: 'Expires soon' }), el('span', { class: 'pill', text: 'Not configured' })]),
+      el('div', { class: 'msg ok', text: 'Connected - version 4.0.11' }),
+      el('div', { class: 'msg warn', text: 'Follow the prompt from your browser or device…' }),
+      el('div', { class: 'msg err', text: 'Connection failed - check the URL and API key.' }),
+      el('label', { text: 'Text field' }), el('input', { type: 'text', placeholder: 'e.g. http://localhost:8989' }), msg
+    ])]);
+
+    var demoHub = el('div', { class: 'panel hub demo' }, [phone.matches ? hubSketchPhone(d.services) : hubSketch(d.services)]);
+    var demoBtn = el('button', { class: 'primary', text: 'Send a pretend call', onclick: function () { demoCall(demoHub, d.services, true); } });
+    var failBtn = el('button', { text: 'Pretend it failed', onclick: function () { demoCall(demoHub, d.services, false); } });
+    sections.push(['motion', brandSection('motion', 'Motion', 'Animation explains what the AI is doing - never decoration for its own sake. While a tool call runs, ink flows down the arrow and the brain wiggles while it thinks. When the answer is back, the service hops and a +1 floats up; a failure shakes and leaves a red !. With "reduce motion" switched on, only the +1 fades.', [
+      demoHub, el('div', { class: 'row' }, [demoBtn, failBtn])
+    ])]);
+
+    sections.push(['voice', brandSection('voice', 'Voice', 'Talk like a helpful friend who knows media servers: short, warm, plain words. Say what happened, then what to do next.', [
+      el('div', { class: 'dodont' }, [
+        el('div', { class: 'do' }, [el('strong', { text: '✓ Say' }), el('p', { text: 'Connection failed - check the URL and API key.' }), el('p', { text: 'Waiting for the first call - ask Claude about your library!' }), el('p', { text: 'TV, Movies, Music, Subtitles' })]),
+        el('div', { class: 'dont-say' }, [el('strong', { text: '✗ Avoid' }), el('p', { text: 'ECONNREFUSED 127.0.0.1:8989 (HTTP 0)' }), el('p', { text: 'No data available.' }), el('p', { text: 'Series resources, movie entities' })])
+      ]),
+      el('p', { class: 'note', text: 'Sentence case everywhere except the MCP-ARR wordmark. No exclamation marks in errors. Name services by what they do (Sonarr (TV)).' })
+    ])]);
+
+    sections.push(['tokens', brandSection('tokens', 'Design tokens', 'Copy these CSS custom properties to build something that matches.', [
+      el('pre', { text: tokensCss() }), el('div', { class: 'row' }, [copyButton(tokensCss)])
+    ])]);
+
+    var titles = { logo: 'Logo', color: 'Colour', type: 'Type', shape: 'Shapes', icons: 'Illustrations', ui: 'Components', motion: 'Motion', voice: 'Voice', tokens: 'Tokens' };
+    sections.forEach(function (s) {
+      toc.appendChild(el('button', { type: 'button', text: titles[s[0]], onclick: function () { var t = document.getElementById('brand-' + s[0]); if (t) t.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth' }); } }));
+    });
+    return [el('section', null, [el('h2', { text: 'Brand guide' }), hero, toc])].concat(sections.map(function (s) { return s[1]; }));
+  }
+
+  function tokensCss() {
+    var light = BRAND_COLORS.concat(STATUS_COLORS.map(function (c) { return [c[0], c[1], c[2], c[3]]; }));
+    return ':root {\n' + light.map(function (c) { return '  --' + c[1] + ': ' + c[2] + ';'; }).join('\n') +
+      '\n  --radius: 16px 20px 14px 22px / 20px 14px 22px 16px;\n  --shadow: 4px 5px 0 rgba(59, 50, 42, .16);\n  --ink-width: 2.5px;\n}\n@media (prefers-color-scheme: dark) {\n  :root {\n' +
+      light.map(function (c) { return '    --' + c[1] + ': ' + c[3] + ';'; }).join('\n') + '\n  }\n}';
+  }
+
+  var demoId = -1;
+  function demoCall(panel, services, ok) {
+    var svg = panel.querySelector('svg');
+    var on = services.filter(function (s) { return s.configured; });
+    var pool = (on.length ? on : services).map(function (s) { return s.id; }).concat(['core']);
+    var svc = pool[Math.floor(Math.random() * pool.length)];
+    var id = demoId--;
+    animateHub({ id: id, phase: 'start', service: svc }, svg);
+    setTimeout(function () { animateHub({ id: id, phase: 'end', service: svc, ok: ok }, svg); }, 900 + Math.random() * 700);
+  }
+
+
   var redrawNow = null;
   // Switching between phone and desktop width (rotating a tablet, resizing) redraws the current tab.
   if (phone.addEventListener) phone.addEventListener('change', function () { if (redrawNow) redrawNow(); });
@@ -854,9 +1610,10 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     who.classList.remove('hidden');
     whoName.textContent = d.me.name + ' · ' + d.me.role;
     var isAdmin = d.me.role === 'admin';
-    var tabs = [['services', 'Services'], ['connect', 'Connect'], ['tokens', 'Access tokens'], ['passkeys', 'My sign-in']];
+    var tabs = [['services', 'Services'], ['mine', 'My activity'], ['connect', 'Connect'], ['tokens', 'Access tokens'], ['passkeys', 'My sign-in']];
     if (isAdmin) tabs.push(['users', 'Users'], ['certificates', 'Certificates'], ['security', 'Security']);
     else tabs.push(['certificates', 'Certificates']);
+    tabs.push(['brand', 'Brand']);
     if (!tabs.some(function (t) { return t[0] === currentTab; })) currentTab = 'services';
     var content = el('div');
     var nav = el('nav', { class: 'tabs' });
@@ -873,6 +1630,8 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
         case 'users': view = [viewUsers(d, redraw)]; break;
         case 'certificates': view = [viewCertificates(d)]; break;
         case 'security': view = [viewSecurity(d)]; break;
+        case 'brand': view = viewBrand(d); break;
+        case 'mine': view = [viewMine(d)]; break;
       }
       content.replaceChildren.apply(content, view);
       labelTables(content);
@@ -880,6 +1639,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     }
     redraw();
     app.replaceChildren(nav, content);
+    startLive();
   }
 
   function renderConsent(requestId, user) {
@@ -924,7 +1684,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     });
   }
 
-  document.getElementById('logout').addEventListener('click', function () { api('POST', '/logout').then(load); });
+  document.getElementById('logout').addEventListener('click', function () { stopLive(); api('POST', '/logout').then(load); });
   load();
 })();
 </script>
