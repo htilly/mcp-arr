@@ -22,6 +22,21 @@ name: Deploy to tillyse
 # COMPOSE_FILE_PATH, COMPOSE_ENV_FILE and APP_URL (where the MCP server is
 # reached) come from the runner's container environment (see
 # /config/docker-compose.yml and /config/secrets/mcp-arr-runner.env on tillyse).
+#
+# The MCP server runs HTTPS with per-user access tokens (see the README, "Remote
+# server"), so an unauthenticated request is answered 401 - and that is a healthy
+# server. The liveness check below accepts either "200 + serverInfo" (an older,
+# unauthenticated image, e.g. after a rollback) or "401 + WWW-Authenticate:
+# Bearer" (auth enforced). Two OPTIONAL runner variables make it stricter:
+#   MCP_ARR_CA_FILE   path to the server's root certificate (the /ca.crt of the
+#                     built-in CA). Without it an https APP_URL that the runner
+#                     does not already trust is checked with certificate
+#                     verification OFF - liveness only, and the token below is
+#                     never sent.
+#   MCP_DEPLOY_TOKEN  an access token (create it in the web UI, e.g. for a
+#                     "deploy" user). With it the check also runs a full
+#                     authenticated initialize. Only ever sent over a verified
+#                     https connection, never printed.
 
 on:
   workflow_run:
@@ -138,6 +153,11 @@ jobs:
           done
           [ "$fail" -eq 0 ] || exit 1
 
+          if [ -n "${MCP_ARR_CA_FILE:-}" ] && [ ! -r "$MCP_ARR_CA_FILE" ]; then
+            echo "::error::MCP_ARR_CA_FILE is set but $MCP_ARR_CA_FILE is not readable"
+            exit 1
+          fi
+
           test -r "$COMPOSE_FILE_PATH" || { echo "::error::cannot read $COMPOSE_FILE_PATH"; exit 1; }
           docker version --format '{{.Server.Version}}' > /dev/null \
             || { echo "::error::cannot reach the socket proxy at $DOCKER_HOST"; exit 1; }
@@ -167,6 +187,140 @@ jobs:
             echo "| rollback tag | \`rollback-$STAMP\` |"
             echo "| build | [#${{ github.event.workflow_run.run_number }}](${{ github.event.workflow_run.html_url }}) |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # -----------------------------------------------------------------------
+      # The MCP liveness check, written once and used by both "Verify the MCP
+      # server answers initialize" and "Roll back on failure". It lives before
+      # "Capture current state for rollback" so that it exists whenever a
+      # rollback can run.
+      #
+      # Passes when POST /mcp initialize answers
+      #   - 200 with serverInfo        (server without authentication), or
+      #   - 401 + WWW-Authenticate: Bearer   (authentication enforced; the server
+      #     is up), and, if MCP_DEPLOY_TOKEN is set and the TLS connection is
+      #     verified, an authenticated initialize then answers 200 with serverInfo.
+      #
+      # Redaction: the Actions log is PUBLIC. Only status codes and yes/no facts
+      # are printed - never a response body, never the token. The token reaches
+      # curl through a 0600 file (-H @file), so it is not on the command line, and
+      # it is not echoed anywhere, not even in a ::add-mask:: line.
+      - name: Install the MCP liveness check
+        run: |
+          set -euo pipefail
+          DIR="$RUNNER_TEMP/mcp-arr"
+          install -d -m 700 "$DIR"
+          cat > "$DIR/liveness.sh" <<'LIVENESS'
+          #!/usr/bin/env bash
+          # usage: liveness.sh [attempts] [seconds-between-attempts]
+          # env:   APP_URL (required), MCP_ARR_CA_FILE, MCP_DEPLOY_TOKEN (optional)
+          set -uo pipefail
+          ATTEMPTS="${1:-24}"
+          PAUSE="${2:-5}"
+          : "${APP_URL:?APP_URL is not set}"
+
+          INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"deploy-check","version":"1"}}}'
+          umask 077
+          TMP=$(mktemp -d)
+          trap 'rm -rf "$TMP"' EXIT
+
+          tls=()
+          [ -n "${MCP_ARR_CA_FILE:-}" ] && tls=(--cacert "$MCP_ARR_CA_FILE")
+          verified=0
+          case "$APP_URL" in https://*) verified=1 ;; esac
+          warned=0
+
+          token_file=""
+          if [ -n "${MCP_DEPLOY_TOKEN:-}" ]; then
+            token_file="$TMP/auth-header"
+            printf 'Authorization: Bearer %s\n' "$MCP_DEPLOY_TOKEN" > "$token_file"
+          fi
+
+          summary() {
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              printf '\nMCP check: %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            return 0
+          }
+
+          # post_init <file-prefix> [extra curl args...]
+          # Sets CODE (HTTP status, 000 = no answer) and CURL_RC (curl's exit code).
+          # Called directly, not via $(...), so the variables survive.
+          post_init() {
+            local out="$1"; shift
+            CODE=$(curl -sS -o "$out.body" -D "$out.hdr" -w '%{http_code}' --max-time 10 \
+              ${tls[@]+"${tls[@]}"} \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              "$@" -X POST "$APP_URL/mcp" --data "$INIT" 2>/dev/null)
+            CURL_RC=$?
+            CODE="${CODE:-000}"
+          }
+
+          CODE=000
+          CURL_RC=0
+          for attempt in $(seq 1 "$ATTEMPTS"); do
+            post_init "$TMP/r"
+
+            # Certificate not trusted by the runner (60 = unknown CA, 51/83 = peer
+            # check failed): fall back, once, to an UNVERIFIED liveness check and
+            # never send the token over it.
+            if [ "$verified" = 1 ] && { [ "$CURL_RC" -eq 60 ] || [ "$CURL_RC" -eq 51 ] || [ "$CURL_RC" -eq 83 ]; }; then
+              verified=0
+              tls=(-k)
+              if [ "$warned" = 0 ]; then
+                echo "::warning::the runner does not trust the server certificate (set MCP_ARR_CA_FILE): liveness is checked WITHOUT certificate verification and the access token is not sent"
+                warned=1
+              fi
+              post_init "$TMP/r"
+            fi
+            if [ "$CURL_RC" -eq 77 ]; then
+              echo "::error::curl cannot use MCP_ARR_CA_FILE (exit 77) - is it a PEM certificate?"
+              summary "FAILED: MCP_ARR_CA_FILE could not be used"
+              exit 1
+            fi
+
+            if [ "$CODE" = "200" ] && grep -q '"serverInfo"' "$TMP/r.body"; then
+              echo "/mcp initialize http=200 (no token needed)"
+              summary "initialize answered 200 without a token (unauthenticated server)"
+              exit 0
+            fi
+
+            if [ "$CODE" = "401" ] && grep -qi '^www-authenticate:[[:space:]]*bearer' "$TMP/r.hdr"; then
+              echo "/mcp initialize http=401 with Bearer challenge: the server is up and enforces authentication"
+              if [ -z "$token_file" ]; then
+                echo "::notice::MCP_DEPLOY_TOKEN is not set - authentication was not exercised end to end"
+                summary "server up, authentication enforced (no MCP_DEPLOY_TOKEN, so no authenticated request was made)"
+                exit 0
+              fi
+              if [ "$verified" != 1 ]; then
+                echo "::warning::MCP_DEPLOY_TOKEN is set but the connection is not verified https - token not sent"
+                summary "server up, authentication enforced (token NOT sent: connection not verified https)"
+                exit 0
+              fi
+              post_init "$TMP/a" -H "@$token_file"
+              if [ "$CODE" = "200" ] && grep -q '"serverInfo"' "$TMP/a.body"; then
+                echo "/mcp authenticated initialize http=200"
+                summary "authenticated initialize answered 200 (end-to-end OK)"
+                exit 0
+              fi
+              if [ "$CODE" = "401" ] || [ "$CODE" = "403" ]; then
+                echo "::error::MCP_DEPLOY_TOKEN was rejected (http=$CODE) - revoked token or deleted user?"
+                summary "FAILED: the access token was rejected (http=$CODE)"
+                exit 1
+              fi
+              echo "attempt $attempt: authenticated initialize http=$CODE - retrying"
+            else
+              echo "attempt $attempt: /mcp initialize http=$CODE (curl exit $CURL_RC)"
+            fi
+            sleep "$PAUSE"
+          done
+
+          echo "::error::/mcp did not answer as expected (last http=$CODE)"
+          summary "FAILED: /mcp did not answer (last http=$CODE)"
+          exit 1
+          LIVENESS
+          chmod 700 "$DIR/liveness.sh"
+          bash -n "$DIR/liveness.sh"
 
       # -----------------------------------------------------------------------
       # Tag the image the container is running RIGHT NOW, not :main. They are the
@@ -270,41 +424,10 @@ jobs:
           echo "the container is provably the build of ${{ steps.pre.outputs.short_sha }}"
 
       # -----------------------------------------------------------------------
-      # "The container is up" is not enough: ask the MCP server itself. An
-      # initialize POST must come back 200 and carry serverInfo. The reply can be
-      # plain JSON or an SSE stream depending on the transport, so it is matched
-      # as text.
-      #
-      # Redaction: the Actions log is PUBLIC, so only the status code and
-      # whether serverInfo was present are printed - never the body.
+      # "The container is up" is not enough: ask the MCP server itself, with the
+      # liveness check installed above (see there for what it accepts).
       - name: Verify the MCP server answers initialize
-        run: |
-          set -euo pipefail
-          BODY=$(mktemp)
-          trap 'rm -f "$BODY"' EXIT
-
-          CODE=000
-          for attempt in $(seq 1 24); do
-            CODE=$(curl -sS -o "$BODY" -w '%{http_code}' --max-time 10 \
-              -H 'Content-Type: application/json' \
-              -H 'Accept: application/json, text/event-stream' \
-              -X POST "$APP_URL/mcp" \
-              --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"deploy-check","version":"1"}}}' \
-              2>/dev/null) || CODE=000
-            [ "$CODE" = "200" ] && break
-            echo "attempt $attempt: /mcp initialize http=$CODE"
-            sleep 5
-          done
-
-          echo "/mcp initialize http=$CODE"
-          [ "$CODE" = "200" ] || { echo "::error::/mcp initialize gave $CODE, expected 200"; exit 1; }
-
-          if grep -q '"serverInfo"' "$BODY"; then
-            echo "serverInfo present in the reply"
-          else
-            echo "::error::200 from /mcp but no serverInfo in the reply"
-            exit 1
-          fi
+        run: bash "$RUNNER_TEMP/mcp-arr/liveness.sh" 24 5
 
       # -----------------------------------------------------------------------
       # Failure summary - REDACTED. Runs always, even when a gate above failed,
@@ -367,19 +490,12 @@ jobs:
             up -d --no-deps --force-recreate \
             "$SERVICE" || { echo "::error::rollback recreate failed - mcp-arr may be down"; exit 1; }
 
-          for attempt in $(seq 1 24); do
-            CODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-              -H 'Content-Type: application/json' \
-              -H 'Accept: application/json, text/event-stream' \
-              -X POST "$APP_URL/mcp" \
-              --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"deploy-check","version":"1"}}}' \
-              2>/dev/null) || CODE=000
-            if [ "$CODE" = "200" ]; then
-              echo "rolled back, /mcp initialize now answers http=200"
-              exit 0
-            fi
-            sleep 5
-          done
+          # The previous image may be the older unauthenticated server or this
+          # authenticated one - the liveness check accepts both.
+          if bash "$RUNNER_TEMP/mcp-arr/liveness.sh" 24 5; then
+            echo "rolled back, mcp-arr answers on /mcp"
+            exit 0
+          fi
           echo "::error::rolled back but mcp-arr does not answer on /mcp"
           exit 1
 
