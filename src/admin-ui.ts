@@ -106,7 +106,8 @@ svg .thick { stroke-width: 10; }
 
 /* hub sketch on the Services tab */
 .hub { padding: 10px; overflow-x: auto; }
-.hub svg { display: block; width: 100%; min-width: 620px; height: auto; }
+.hub svg { display: block; width: 100%; max-width: 760px; margin: 0 auto; height: auto; }
+.hub svg.phone { max-width: 440px; }
 .hub .arrow-o { stroke: var(--accent-deep); stroke-width: 15; stroke-linecap: round; fill: none; }
 .hub .arrow-i { stroke: var(--accent); stroke-width: 9; stroke-linecap: round; fill: none; }
 .hub .arrow-h { fill: var(--accent); stroke: var(--accent-deep); stroke-width: 3; stroke-linejoin: round; }
@@ -117,12 +118,6 @@ svg .thick { stroke-width: 10; }
 .hub .tag { font: 700 14px var(--hand); fill: var(--text); }
 .hub .card-box { fill: var(--paper); stroke: var(--text); stroke-width: 2.5; }
 .hub .off-arrow { opacity: .25; }
-@media (prefers-reduced-motion: no-preference) {
-  .hub .arrow-i, .hub .arrow-o { stroke-dasharray: 300; animation: draw .8s cubic-bezier(.6,.1,.3,1) both; }
-  .hub .arrow-h { animation: pop .3s .6s ease both; }
-}
-@keyframes draw { from { stroke-dashoffset: 300; } to { stroke-dashoffset: 0; } }
-@keyframes pop { from { opacity: 0; } to { opacity: 1; } }
 
 /* ---- phones and tablets ---- */
 body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); -webkit-text-size-adjust: 100%; }
@@ -154,7 +149,6 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
   .row code { flex: 1 1 100%; }
   /* the sketch gets its own phone layout instead of scrolling sideways */
   .hub { padding: 6px; overflow-x: visible; }
-  .hub svg { min-width: 0; }
   /* tables turn into stacked rows: every cell shows its column name */
   .table-wrap { overflow-x: visible; }
   table.stack, table.stack tbody, table.stack tr, table.stack td { display: block; width: 100%; }
@@ -276,7 +270,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
   /** Phone layout of the hub sketch: Claude on top, one arrow down, services in two columns. */
   function hubSketchPhone(services) {
     var W = 400, rows = Math.ceil(services.length / 2), top = 206, rowH = 92, H = top + rows * rowH + 6;
-    var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': 'Claude connected to ' + services.filter(function (s) { return s.configured; }).length + ' of ' + services.length + ' services' });
+    var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, class: 'phone', role: 'img', 'aria-label': 'Claude connected to ' + services.filter(function (s) { return s.configured; }).length + ' of ' + services.length + ' services' });
     svg.appendChild(svgEl('g', { transform: 'translate(200 52) scale(.8)' }, '<path d="M-14 -38 A40 40 0 1 0 -14 38" fill="none" stroke="#d06c43" stroke-width="20" stroke-linecap="round"/><path class="ink f-sea" d="M20 -36 C6 -42 -6 -30 -4 -20 C-16 -18 -16 -2 -8 2 C-14 14 -2 26 12 22 C16 32 30 30 32 18 L32 -34 Z"/><path class="ink f-sea" d="M36 -36 C50 -42 62 -30 60 -20 C72 -18 72 -2 64 2 C70 14 58 26 44 22 C40 32 28 30 26 18 L26 -30 Z"/>'));
     var t = svgEl('text', { x: 200, y: 118, 'text-anchor': 'middle', class: 'hub-title' }); t.textContent = 'Claude'; svg.appendChild(t);
     svg.appendChild(svgEl('rect', { x: 105, y: 126, width: 190, height: 28, rx: 9, class: 'tag-box' }));
@@ -299,9 +293,9 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
   }
   /** Sketch of Claude in the middle with the services around it; services that are enabled get a check mark. */
   function hubSketch(services) {
-    var W = 1000, H = 440, cx = 500, cy = 215;
+    var W = 760, H = 440, cx = 380, cy = 215;
     var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': 'Claude connected to ' + services.filter(function (s) { return s.configured; }).length + ' of ' + services.length + ' services' });
-    var slots = [[130, 80], [130, 215], [130, 350], [870, 80], [870, 215], [870, 350], [500, 62]];
+    var slots = [[92, 80], [92, 215], [92, 350], [668, 80], [668, 215], [668, 350], [380, 62]];
     var arrows = svgEl('g'), nodes = svgEl('g');
     svg.appendChild(arrows);
     services.slice(0, slots.length).forEach(function (s, i) {
