@@ -52,7 +52,7 @@ h3 { font: 700 16px/1.3 var(--hand); margin: 16px 0 6px; }
 .card-title svg.icon { width: 52px; height: 44px; flex: none; }
 .card-title strong { font: 700 18px/1.2 var(--hand); }
 label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 3px; }
-input[type=text], input[type=password], input[type=url], select {
+input[type=text], input[type=password], input[type=url], input[type=number], input[type=email], select {
   width: 100%; padding: 8px 10px; border: 2px solid var(--border); border-radius: 9px 12px 8px 11px; background: var(--input); color: var(--text); font: inherit;
 }
 input:focus-visible, select:focus-visible, button:focus-visible, a.button:focus-visible, summary:focus-visible { outline: 3px dashed var(--sea); outline-offset: 2px; }
@@ -68,6 +68,12 @@ button.link { border: none; background: none; color: var(--accent-deep); padding
 button:disabled { opacity: .5; cursor: default; }
 .pill { font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1.5px solid var(--border); background: var(--code); color: var(--muted); white-space: nowrap; }
 .pill.ok { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
+label.check { display: flex; gap: 10px; align-items: flex-start; color: var(--text); font-size: 14px; margin: 12px 0 3px; cursor: pointer; }
+label.check input { width: 20px; height: 20px; flex: none; margin: 0; accent-color: var(--accent-deep); }
+.setting { margin-bottom: 6px; }
+.setting .src { font-size: 11px; margin-left: 6px; }
+.setting .help { font-size: 12px; color: var(--muted); margin-top: 3px; }
+pre.testlog { max-height: 260px; overflow-y: auto; }
 .pill.warn { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
 .pills { display: flex; gap: 6px; flex-wrap: wrap; }
 .note { font-size: 12px; color: var(--muted); margin-top: 3px; }
@@ -1000,7 +1006,173 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
       ])])]));
     }
     if (t.lastError) items.push(el('div', { class: 'msg err', text: t.lastError }));
+    if (d.me.role === 'admin') items.push(el('p', { class: 'note' }, ['Change the certificate mode (built-in CA, Let’s Encrypt, own files, reverse proxy) under ', el('button', { class: 'link', text: 'Settings', onclick: function () { currentTab = 'settings'; if (redrawNow) redrawNow(); } }), '.']));
     return el('section', null, [el('h2', { text: 'Certificates' }), el('div', { class: 'panel' }, items)]);
+  }
+
+  // ---------- Settings (admin) ----------
+
+  var settingsDraft = null; // unsaved form values, kept across redraws: key -> string | null (null = reset)
+
+  function viewSettings(d, redraw) {
+    var S = d.settings;
+    if (!S) return el('section', null, [el('h2', { text: 'Settings' }), el('div', { class: 'panel' }, [el('p', { text: 'Only admins can change settings.' })])]);
+    if (!settingsDraft) settingsDraft = {};
+    var defs = S.defs;
+    var byKey = {};
+    defs.forEach(function (def) { byKey[def.key] = def; });
+
+    function current(key) {
+      var v = S.values[key];
+      if (v.source === 'env') return v.value;
+      if (Object.prototype.hasOwnProperty.call(settingsDraft, key)) {
+        var dv = settingsDraft[key];
+        return dv === null ? (byKey[key].default || '') : dv;
+      }
+      return v.value;
+    }
+    function visible(def) {
+      if (!def.showIf) return true;
+      return Object.keys(def.showIf).every(function (k) {
+        var cur = current(k);
+        if (k === 'ACME_CHALLENGE' && !Object.prototype.hasOwnProperty.call(settingsDraft, k) && S.values[k].source === 'default') cur = S.values[k].value;
+        return def.showIf[k].indexOf(cur) >= 0;
+      });
+    }
+    function payload() {
+      var values = {};
+      defs.forEach(function (def) {
+        if (S.values[def.key].source === 'env') return;
+        if (!Object.prototype.hasOwnProperty.call(settingsDraft, def.key)) return;
+        values[def.key] = settingsDraft[def.key];
+      });
+      return { values: values };
+    }
+    var dirty = Object.keys(settingsDraft).length > 0;
+
+    function field(def) {
+      var v = S.values[def.key];
+      var locked = v.source === 'env';
+      var draftHas = Object.prototype.hasOwnProperty.call(settingsDraft, def.key);
+      var srcText = locked ? 'from ' + v.envKey : (draftHas ? 'changed' : (v.source === 'file' ? 'saved here' : 'default'));
+      var src = el('span', { class: 'pill src' + (draftHas ? ' ok' : ''), text: srcText });
+      function set(val, rerender) {
+        settingsDraft[def.key] = val;
+        if (rerender) redraw();
+        else { src.textContent = 'changed'; src.className = 'pill src ok'; saveBtn.disabled = false; }
+      }
+      var input;
+      if (def.type === 'bool') {
+        var box = el('input', { type: 'checkbox', disabled: locked, onchange: function () { set(box.checked ? 'true' : 'false', true); } });
+        box.checked = current(def.key) === 'true';
+        input = el('label', { class: 'check' }, [box, el('span', null, [def.label, ' ', src])]);
+      } else if (def.type === 'select') {
+        var sel = el('select', { disabled: locked, onchange: function () { set(sel.value, true); } },
+          (def.default === '' ? [el('option', { value: '', text: '- choose -' })] : []).concat(def.options.map(function (o) { return el('option', { value: o.value, text: o.label }); })));
+        sel.value = current(def.key);
+        input = [el('label', null, [def.label, ' ', src]), sel];
+      } else {
+        var type = { secret: 'password', number: 'number', url: 'url', email: 'email' }[def.type] || 'text';
+        var ph = def.placeholder || '';
+        if (def.type === 'secret' && v.hasValue) ph = 'Saved' + (v.hint ? ' (ends with ' + v.hint + ')' : '') + ' - leave empty to keep';
+        if (def.key === 'ACME_HTTP_PORT' && !ph) ph = S.values[def.key].value;
+        var inp = el('input', { type: type, disabled: locked, placeholder: ph, autocomplete: def.type === 'secret' ? 'new-password' : 'off', min: def.min, max: def.max,
+          oninput: function () { set(inp.value, false); } });
+        var cur = draftHas ? settingsDraft[def.key] : (def.type === 'secret' ? '' : v.value);
+        if (def.key === 'ACME_HTTP_PORT' && v.source === 'default' && !draftHas) cur = '';
+        inp.value = cur === null ? '' : cur;
+        input = [el('label', null, [def.label, ' ', src]), inp];
+      }
+      var reset = (!locked && (v.source === 'file' || draftHas)) ? el('button', { class: 'link', type: 'button', text: draftHas ? 'Undo' : 'Reset to default', onclick: function () {
+        if (draftHas) delete settingsDraft[def.key]; else settingsDraft[def.key] = null;
+        redraw();
+      } }) : null;
+      return el('div', { class: 'setting' }, [].concat(input, [
+        def.help ? el('div', { class: 'help', text: def.help }) : null,
+        locked ? el('div', { class: 'note', text: 'Set by the environment variable ' + v.envKey + ' - remove it from your compose file / environment to manage it here.' }) : null,
+        reset
+      ]));
+    }
+
+    function group(title, intro, keys) {
+      var shown = defs.filter(function (def) { return def.group === keys && visible(def); });
+      if (!shown.length) return null;
+      var basic = shown.filter(function (def) { return !def.advanced; }).map(field);
+      var adv = shown.filter(function (def) { return def.advanced; });
+      var advOpen = adv.some(function (def) { return S.values[def.key].source !== 'default' || Object.prototype.hasOwnProperty.call(settingsDraft, def.key); });
+      var details = adv.length ? el('details', { open: advOpen }, [el('summary', { text: 'Advanced' })].concat(adv.map(field))) : null;
+      return el('div', { class: 'panel' }, [el('h3', { text: title }), intro ? el('p', { class: 'muted', text: intro }) : null].concat(basic, [details]));
+    }
+
+    var msg = el('div', { class: 'msg' });
+    var logBox = el('pre', { class: 'testlog hidden' });
+    var testBtn = el('button', { type: 'button', text: 'Test these settings', onclick: function () {
+      testBtn.disabled = true;
+      logBox.classList.remove('hidden');
+      logBox.textContent = 'Starting…';
+      showMsg(msg, 'warn', 'Testing - for Let’s Encrypt this requests a real test certificate and can take a few minutes…');
+      api('POST', '/settings/test', payload()).then(function (job) {
+        function poll() {
+          api('GET', '/settings/test/' + job.id).then(function (j) {
+            logBox.textContent = j.log.join('\n') || '…';
+            logBox.scrollTop = logBox.scrollHeight;
+            if (j.status === 'running') { setTimeout(poll, 1000); return; }
+            testBtn.disabled = false;
+            showMsg(msg, j.status === 'ok' ? 'ok' : 'err', (j.status === 'ok' ? '' : 'Test failed: ') + (j.message || ''));
+          }, function (e) { testBtn.disabled = false; showMsg(msg, 'err', e.message); });
+        }
+        poll();
+      }, function (e) { testBtn.disabled = false; logBox.classList.add('hidden'); showMsg(msg, 'err', e.message); });
+    } });
+    var saveBtn = el('button', { class: 'primary', type: 'button', text: 'Save & apply', disabled: !dirty, onclick: function () {
+      var fromMode = S.values.TLS_MODE.value, toMode = current('TLS_MODE');
+      if (fromMode !== toMode) {
+        var warn = {
+          off: 'The server will switch to PLAIN HTTP on port ' + S.listenPort + '. Only do this behind a reverse proxy that terminates HTTPS for ' + d.publicUrl + ' - otherwise this page will stop working (set TLS_MODE in the environment to recover).',
+          internal: 'The server will use its built-in CA. Devices must trust its root certificate (Certificates tab) - browsers that remember HSTS for this site refuse the page until it is installed.',
+          acme: 'The current certificate stays in use until the CA has issued the new one (see the Certificates tab for progress). Tip: use "Test these settings" first.',
+          file: 'The server will use the certificate files. Make sure they are valid (use "Test these settings").'
+        }[toMode];
+        if (!confirm('Switch certificate mode from ' + fromMode + ' to ' + toMode + '?\n\n' + warn)) return;
+      }
+      saveBtn.disabled = true;
+      showMsg(msg, 'warn', 'Applying…');
+      api('PUT', '/settings', payload()).then(function (r) {
+        settingsDraft = null;
+        if (r.listenerChange) {
+          showMsg(msg, 'ok', 'Applied. The server now switches between HTTPS and HTTP - reloading…');
+          setTimeout(function () { location.href = r.reloadUrl || '/admin'; }, 2500);
+          return;
+        }
+        Object.assign(d, r.overview);
+        redraw();
+        setTimeout(function () { var m = document.getElementById('settings-msg'); if (m) showMsg(m, 'ok', 'Settings saved and applied - no restart needed.'); }, 0);
+      }, function (e) { saveBtn.disabled = false; showMsg(msg, 'err', e.message); });
+    } });
+    msg.id = 'settings-msg';
+    var discard = dirty ? el('button', { type: 'button', text: 'Discard changes', onclick: function () { settingsDraft = null; redraw(); } }) : null;
+
+    var startup = el('div', { class: 'panel' }, [
+      el('h3', { text: 'Startup settings (environment only)' }),
+      el('p', { class: 'muted', text: 'These are read when the server starts. Change them in your compose file / environment and restart. PUBLIC_URL cannot change at runtime: passkeys are bound to its host name.' }),
+      el('div', { class: 'table-wrap' }, [el('table', null, [el('tbody', null, S.startup.map(function (x) {
+        return el('tr', null, [el('th', { text: x.key }), el('td', null, [el('code', { text: x.value || '(not set)' })])]);
+      }))])])
+    ]);
+
+    return el('section', null, [
+      el('h2', { text: 'Settings' }),
+      el('p', { class: 'muted', text: 'Changes are stored in the encrypted config file and applied immediately - no restart. Environment variables always win; those fields are read-only here.' }),
+      group('Certificate', null, 'tls'),
+      group('Let’s Encrypt / ACME', 'A publicly trusted certificate for a domain you own, renewed automatically. The name must resolve to this server (for a LAN-only server: a local DNS record).', 'acme'),
+      group('DNS validation', 'The CA checks a TXT record under _acme-challenge.<name>. Nothing has to be reachable from the internet.', 'dns'),
+      group('Access and connectors', null, 'access'),
+      el('div', { class: 'panel' }, [
+        el('div', { class: 'row' }, [saveBtn, testBtn, discard]),
+        msg, logBox
+      ]),
+      startup
+    ]);
   }
 
   function viewSecurity(d) {
@@ -1632,7 +1804,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     whoName.textContent = d.me.name + ' · ' + d.me.role;
     var isAdmin = d.me.role === 'admin';
     var tabs = [['services', 'Services'], ['mine', 'My activity'], ['connect', 'Connect'], ['tokens', 'Access tokens'], ['passkeys', 'My sign-in']];
-    if (isAdmin) tabs.push(['users', 'Users'], ['certificates', 'Certificates'], ['security', 'Security']);
+    if (isAdmin) tabs.push(['users', 'Users'], ['settings', 'Settings'], ['certificates', 'Certificates'], ['security', 'Security']);
     else tabs.push(['certificates', 'Certificates']);
     tabs.push(['brand', 'Brand']);
     if (!tabs.some(function (t) { return t[0] === currentTab; })) currentTab = 'services';
@@ -1649,6 +1821,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
         case 'tokens': view = [viewTokens(d, redraw)]; break;
         case 'passkeys': view = [viewPasskeys(d, redraw)]; break;
         case 'users': view = [viewUsers(d, redraw)]; break;
+        case 'settings': view = [viewSettings(d, redraw)]; break;
         case 'certificates': view = [viewCertificates(d)]; break;
         case 'security': view = [viewSecurity(d)]; break;
         case 'brand': view = viewBrand(d); break;

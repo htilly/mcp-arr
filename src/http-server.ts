@@ -24,27 +24,32 @@ import { OverseerrClient } from './overseerr-client.js';
 import { BazarrClient } from './bazarr-client.js';
 import { renderAdminPage } from './admin-ui.js';
 import { Auth, AuthError } from './auth.js';
-import { TlsManager } from './tls.js';
-import { OAuthProvider, OAuthError } from './oauth.js';
+import type { TlsMaterial } from './tls.js';
+import { OAuthError } from './oauth.js';
+import type { Runtime, TestResult } from './runtime.js';
+import { SETTING_DEFS, STARTUP_KEYS, effectiveSettings, isSettingKey, normaliseSetting, settingDef } from './settings.js';
 import { stats, CallEvent, CallContext, LoginMethod } from './stats.js';
 
 export interface HttpServerOptions {
   store: ConfigStore;
   auth: Auth;
-  tls: TlsManager;
+  /** Certificate manager, OAuth provider and proxy trust - replaced when settings change. */
+  runtime: Runtime;
+  /** Build a new runtime from saved settings (throws on invalid settings). */
+  reconfigure: (stored: Record<string, string>, previous: Runtime) => Promise<Runtime>;
+  /** Check settings without applying them. */
+  testSettings: (stored: Record<string, string>, log: (m: string) => void) => Promise<TestResult>;
+  /** Process environment (settings set there are read-only in the UI). */
+  env: NodeJS.ProcessEnv;
   publicUrl: URL;
   port: number;
   host: string;
-  trustProxy: boolean;
   mcpPath: string;
   serverVersion: string;
   /** Builds a fresh MCP server; `caller` (the token owner's name) is used for the usage statistics. */
   createServer: (caller?: CallContext) => Server;
   onConfigChanged: () => void;
   getConfiguredSummary: () => string[];
-  /** Present when OAuth sign-in for Claude/OpenAI connectors is active (see oauth.ts). */
-  oauth?: OAuthProvider;
-  oauthReason?: string;
 }
 
 class HttpError extends Error {
@@ -161,13 +166,14 @@ function publicUser(u: StoredUser) {
 // ---------- server ----------
 
 export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
-  const { store, auth, tls } = opts;
+  const { store, auth } = opts;
+  let rt = opts.runtime;
   const publicOrigin = opts.publicUrl.origin;
 
   const failures = new Map<string, { count: number; first: number }>();
 
   function clientIp(req: IncomingMessage): string {
-    if (opts.trustProxy) {
+    if (rt.trustProxy) {
       const fwd = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim();
       if (fwd) return fwd;
     }
@@ -201,7 +207,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     const now = Date.now();
     for (const [ip, f] of failures) if (now - f.first > RATE_WINDOW_MS) failures.delete(ip);
     auth.cleanup();
-    opts.oauth?.sweep();
+    rt.oauth?.sweep();
     for (const [ip, r] of registrations) if (now - r.first > RATE_WINDOW_MS) registrations.delete(ip);
   }, 5 * 60 * 1000);
   cleanup.unref();
@@ -221,7 +227,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
         jsonrpc: '2.0',
         error: { code: -32001, message: 'Unauthorized: missing or invalid access token. Create one in the web UI (/admin).' },
         id: null,
-      }, { 'WWW-Authenticate': opts.oauth ? `Bearer resource_metadata="${opts.oauth.resourceMetadataUrl}"` : 'Bearer' });
+      }, { 'WWW-Authenticate': rt.oauth ? `Bearer resource_metadata="${rt.oauth.resourceMetadataUrl}"` : 'Bearer' });
       return;
     }
 
@@ -284,7 +290,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     const isAuthorize = path === '/oauth/authorize';
     if (!isMeta && !isApi && !isAuthorize) return false;
 
-    const oauth = opts.oauth;
+    const oauth = rt.oauth;
     if (!oauth) {
       sendJson(res, 404, { error: 'OAuth is not enabled on this server' });
       return true;
@@ -436,8 +442,8 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       services: servicesView(isAdmin),
       configuredSummary: opts.getConfiguredSummary(),
       tokens: tokensView(user),
-      tls: tls.info(),
-      oauth: { enabled: Boolean(opts.oauth), reason: opts.oauthReason ?? '', issuer: publicOrigin, mcpUrl: `${publicOrigin}${opts.mcpPath}` },
+      tls: rt.tls.info(),
+      oauth: { enabled: Boolean(rt.oauth), reason: rt.oauthReason, issuer: publicOrigin, mcpUrl: `${publicOrigin}${opts.mcpPath}` },
       ...(isAdmin ? {
         users: store.listUsers().map(publicUser),
         invites: store.listInvites().map(i => ({ id: i.id, role: i.role, createdAt: i.createdAt, expiresAt: i.expiresAt })),
@@ -446,10 +452,110 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
           keyFilePath: store.keySource === 'key-file' ? store.keyFilePath : undefined,
           warnings: store.warnings,
           configPath: store.path,
-          trustProxy: opts.trustProxy,
+          trustProxy: rt.trustProxy,
         },
+        settings: settingsView(),
       } : {}),
     };
+  }
+
+  // ----- server settings (TLS / ACME / OAuth / proxy) -----
+
+  function settingsView() {
+    const effective = effectiveSettings(store.getSettings(), opts.env);
+    const values: Record<string, { value: string; source: string; envKey?: string; hasValue?: boolean; hint?: string }> = {};
+    for (const def of SETTING_DEFS) {
+      const e = effective[def.key];
+      if (def.type === 'secret') {
+        const set = e.source !== 'default' && Boolean(e.value);
+        values[def.key] = { value: '', source: e.source, envKey: e.envKey, hasValue: set, hint: set && e.value.length >= 12 ? e.value.slice(-4) : '' };
+      } else {
+        values[def.key] = { value: e.value, source: e.source, envKey: e.envKey };
+      }
+    }
+    return {
+      defs: SETTING_DEFS,
+      values,
+      startup: STARTUP_KEYS.map(k => ({ key: k, value: opts.env[k] ?? '' })).filter(x => x.value || x.key !== 'TLS_LEAF_DAYS'),
+      listenPort: opts.port,
+    };
+  }
+
+  /**
+   * Merge UI values into the saved settings. `null` resets a setting; an empty secret keeps the
+   * saved one. Settings set by environment variables are refused (strict) or skipped.
+   */
+  function mergeSettings(body: unknown, strict: boolean): Record<string, string> {
+    const values = (body as { values?: unknown })?.values;
+    if (!values || typeof values !== 'object' || Array.isArray(values)) throw new HttpError(400, 'values must be an object');
+    const effective = effectiveSettings(store.getSettings(), opts.env);
+    const next = store.getSettings();
+    for (const [key, raw] of Object.entries(values as Record<string, unknown>)) {
+      if (!isSettingKey(key)) throw new HttpError(400, `Unknown setting ${key}`);
+      const def = settingDef(key)!;
+      if (effective[key].source === 'env') {
+        const envValue = effective[key].value;
+        const same = raw === undefined || raw === null || (def.type === 'secret' ? raw === '' : String(raw) === envValue);
+        if (strict && !same) throw new HttpError(409, `${def.label} is set by the environment variable ${effective[key].envKey} (read-only here)`);
+        continue;
+      }
+      if (def.type === 'secret' && raw === '') continue; // keep
+      let v: string;
+      try {
+        v = normaliseSetting(key, raw);
+      } catch (error) {
+        throw new HttpError(400, error instanceof Error ? error.message : String(error));
+      }
+      // An explicit value is kept even when it equals the default (some defaults depend on other settings)
+      if (v === '') delete next[key];
+      else next[key] = v;
+    }
+    return next;
+  }
+
+  let applying = false;
+
+  async function applySettings(next: Record<string, string>): Promise<{ listenerChange: boolean }> {
+    if (applying) throw new HttpError(409, 'Settings are being applied - try again in a moment');
+    applying = true;
+    try {
+      let fresh: Runtime;
+      try {
+        fresh = await opts.reconfigure(next, rt);
+      } catch (error) {
+        throw new HttpError(400, error instanceof Error ? error.message : String(error));
+      }
+      store.setSettings(next);
+      const old = rt;
+      rt = fresh;
+      const listenerChange = useRuntime(old);
+      console.error(`Settings applied from the web UI: TLS ${fresh.tlsMode}, OAuth ${fresh.oauth ? 'on' : 'off'}, trust proxy ${fresh.trustProxy}`);
+      return { listenerChange };
+    } finally {
+      applying = false;
+    }
+  }
+
+  interface TestJob { id: string; status: 'running' | 'ok' | 'failed'; log: string[]; message?: string; started: number }
+  const testJobs = new Map<string, TestJob>();
+
+  function startTest(next: Record<string, string>): TestJob {
+    for (const [id, j] of testJobs) if (Date.now() - j.started > 30 * 60_000) testJobs.delete(id);
+    if ([...testJobs.values()].some(j => j.status === 'running')) throw new HttpError(409, 'A test is already running');
+    const job: TestJob = { id: randomBytes(8).toString('hex'), status: 'running', log: [], started: Date.now() };
+    testJobs.set(job.id, job);
+    const log = (m: string) => {
+      if (job.log.length < 200) job.log.push(`${new Date().toISOString().slice(11, 19)}  ${m}`);
+    };
+    opts.testSettings(next, log).then(
+      r => { job.status = r.ok ? 'ok' : 'failed'; job.message = r.message; },
+      (err: unknown) => { job.status = 'failed'; job.message = err instanceof Error ? err.message : String(err); },
+    );
+    return job;
+  }
+
+  function jobView(j: TestJob) {
+    return { id: j.id, status: j.status, log: j.log, message: j.message };
   }
 
   // ----- live activity (Server-Sent Events for the status board) -----
@@ -502,7 +608,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
         recoveryAvailable: auth.recoveryAvailable,
         user: user ? publicUser(user) : null,
         rpID: auth.rpID,
-        oauth: Boolean(opts.oauth),
+        oauth: Boolean(rt.oauth),
       });
       return;
     }
@@ -624,9 +730,9 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
 
     const oauthMatch = path.match(/^\/oauth\/request\/([A-Za-z0-9_-]+)(?:\/(approve|deny))?$/);
     if (oauthMatch) {
-      if (!opts.oauth) throw new HttpError(404, 'OAuth is not enabled');
+      if (!rt.oauth) throw new HttpError(404, 'OAuth is not enabled');
       if (!oauthMatch[2] && method === 'GET') {
-        const info = opts.oauth.describeRequest(oauthMatch[1]);
+        const info = rt.oauth.describeRequest(oauthMatch[1]);
         if (!info) throw new HttpError(404, 'This sign-in request has expired - start again from the connector');
         sendJson(res, 200, { ...info, user: user.name });
         return;
@@ -634,7 +740,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       if (oauthMatch[2] && method === 'POST') {
         try {
           const approved = oauthMatch[2] === 'approve';
-          sendJson(res, 200, { redirect: opts.oauth.complete(oauthMatch[1], approved ? user.id : undefined) });
+          sendJson(res, 200, { redirect: rt.oauth.complete(oauthMatch[1], approved ? user.id : undefined) });
           if (approved) stats.recordLogin(user.id, user.name, 'connected app', req.headers['user-agent']);
         } catch (error) {
           if (error instanceof OAuthError) throw new HttpError(error.status, error.message);
@@ -742,6 +848,32 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       }
     }
 
+    if (path === '/settings' && method === 'PUT') {
+      const admin = requireAdmin(req);
+      const next = mergeSettings(await readJson(req), true);
+      const { listenerChange } = await applySettings(next);
+      const reloadUrl = listenerChange ? publicOrigin + '/admin' : undefined;
+      sendJson(res, 200, { ok: true, listenerChange, reloadUrl, overview: overview(store.getUser(admin.id)!) });
+      if (listenerChange) setTimeout(() => void swapListener(), 300);
+      return;
+    }
+
+    if (path === '/settings/test' && method === 'POST') {
+      requireAdmin(req);
+      const next = mergeSettings(await readJson(req), false);
+      sendJson(res, 200, jobView(startTest(next)));
+      return;
+    }
+
+    const testMatch = path.match(/^\/settings\/test\/([0-9a-f]+)$/);
+    if (testMatch && method === 'GET') {
+      requireAdmin(req);
+      const job = testJobs.get(testMatch[1]);
+      if (!job) throw new HttpError(404, 'Test not found');
+      sendJson(res, 200, jobView(job));
+      return;
+    }
+
     const userMatch = path.match(/^\/users\/([0-9a-f-]+)$/);
     if (userMatch) {
       const admin = requireAdmin(req);
@@ -796,7 +928,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
     try {
-      if (tls.mode !== 'off') {
+      if (rt.tls.mode !== 'off') {
         res.setHeader('Strict-Transport-Security', 'max-age=31536000');
       }
       if (await handleOAuth(req, res, url)) return;
@@ -809,7 +941,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
         return;
       }
       if (path === '/ca.crt' && req.method === 'GET') {
-        const pem = tls.caPem();
+        const pem = rt.tls.caPem();
         if (!pem) throw new HttpError(404, 'No built-in CA in use (TLS_MODE is not internal)');
         res.writeHead(200, {
           'Content-Type': 'application/x-x509-ca-cert',
@@ -856,21 +988,72 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     }
   }
 
-  const material = tls.current();
-  const server = material
-    ? createHttpsServer({ cert: material.cert, key: material.key, minVersion: 'TLSv1.2' }, handler)
-    : createHttpServer(handler);
-  if (material) {
-    tls.onChange(m => (server as ReturnType<typeof createHttpsServer>).setSecureContext({ cert: m.cert, key: m.key, minVersion: 'TLSv1.2' }));
+  type AnyServer = ReturnType<typeof createHttpServer> | ReturnType<typeof createHttpsServer>;
+  const secure = (m: TlsMaterial) => ({ cert: m.cert, key: m.key, minVersion: 'TLSv1.2' as const });
+
+  function createListener(): AnyServer {
+    const m = rt.tls.current();
+    return m ? createHttpsServer(secure(m), handler) : createHttpServer(handler);
+  }
+  function listen(srv: AnyServer): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      srv.once('error', reject);
+      srv.listen(opts.port, opts.host, () => { srv.off('error', reject); resolve(); });
+    });
+  }
+  function watchCertificate(): void {
+    rt.tls.onChange(m => {
+      if ('setSecureContext' in server) server.setSecureContext(secure(m));
+    });
   }
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(opts.port, opts.host, () => resolve());
-  });
+  let server: AnyServer = createListener();
+  let serverIsHttps = Boolean(rt.tls.current());
+  watchCertificate();
+
+  /**
+   * Switch to the current runtime after settings changed. Returns true when the listener has to
+   * change between HTTPS and plain HTTP (done by swapListener after the response is sent).
+   */
+  function useRuntime(old: Runtime): boolean {
+    old.tls.stop();
+    const m = rt.tls.current();
+    watchCertificate();
+    if (Boolean(m) !== serverIsHttps) return true;
+    if (m && 'setSecureContext' in server) server.setSecureContext(secure(m));
+    return false;
+  }
+
+  async function swapListener(): Promise<void> {
+    const old = server;
+    await new Promise<void>(resolve => {
+      old.close(() => resolve());
+      old.closeAllConnections?.();
+      setTimeout(resolve, 2000).unref();
+    });
+    const next = createListener();
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await listen(next);
+        break;
+      } catch (error) {
+        if (attempt >= 10) {
+          console.error(`Could not listen on ${opts.host}:${opts.port} after the settings change:`, error);
+          process.exit(1);
+        }
+        await new Promise(r => setTimeout(r, 300));
+      }
+    }
+    server = next;
+    serverIsHttps = Boolean(rt.tls.current());
+    console.error(`Now serving ${serverIsHttps ? 'HTTPS' : 'plain HTTP'} on ${opts.host}:${opts.port}`);
+  }
+
+  await listen(server);
+  const material = rt.tls.current();
 
   const summary = opts.getConfiguredSummary();
-  const info = tls.info();
+  const info = rt.tls.info();
   console.error(`*arr MCP server running (${material ? 'https' : 'http'}) on ${opts.host}:${opts.port}`);
   console.error(`  Public URL:  ${publicOrigin}   MCP endpoint: ${publicOrigin}${opts.mcpPath}   Web UI: ${publicOrigin}/admin`);
   console.error(`  Config:      ${store.path} (encrypted, key from ${store.keySource})`);
@@ -886,7 +1069,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
   } else {
     console.error('  TLS:         off - make sure a reverse proxy terminates HTTPS');
   }
-  console.error(`  OAuth:       ${opts.oauth ? 'enabled for Claude/OpenAI connectors' : 'off'} (${opts.oauthReason ?? ''})`);
+  console.error(`  OAuth:       ${rt.oauth ? 'enabled for Claude/OpenAI connectors' : 'off'} (${rt.oauthReason})`);
   console.error(`  Services:    ${summary.length ? summary.join(', ') : '(none yet - add them in the web UI)'}`);
   const code = auth.pendingSetupCode ?? auth.pendingRecoveryCode;
   if (code) {
@@ -900,7 +1083,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
   }
 
   const shutdown = () => {
-    tls.stop();
+    rt.tls.stop();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000).unref();
   };

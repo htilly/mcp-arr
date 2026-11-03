@@ -92,7 +92,7 @@ export function acmeSettingsFromEnv(env: NodeJS.ProcessEnv, names: string[], red
     email: env.ACME_EMAIL || undefined,
     domains,
     challenge,
-    httpPort: Number(env.ACME_HTTP_PORT || 80),
+    httpPort: Number(env.ACME_HTTP_PORT || (env.MCP_ARR_DOCKER ? 8080 : 80)),
     httpHost: listenHost,
     redirectOrigin,
     dnsProvider: challenge === 'dns-01' ? dnsProvider : undefined,
@@ -336,6 +336,7 @@ export class AcmeClient {
     const orderUrl = res.headers.get('location');
     if (!orderUrl) throw new AcmeError('ACME server did not return an order URL');
     let order = (await res.json()) as Order;
+    this.o.log(`Order created for ${this.s.domains.join(', ')}`);
 
     const thumb = await this.thumbprint();
     const cleanups: (() => Promise<void>)[] = [];
@@ -350,11 +351,13 @@ export class AcmeClient {
         const keyAuth = `${challenge.token}.${thumb}`;
         const name = `${authz.wildcard ? '*.' : ''}${authz.identifier.value}`;
         if (this.s.challenge === 'http-01') {
+          this.o.log(`Serving the http-01 answer for ${name} on port ${this.s.httpPort}`);
           this.o.httpTokens.set(challenge.token, keyAuth);
           cleanups.push(async () => void this.o.httpTokens.delete(challenge.token));
         } else {
           const fqdn = `_acme-challenge.${authz.identifier.value}.`;
           const value = b64url(createHash('sha256').update(keyAuth).digest());
+          this.o.log(`Creating TXT record ${fqdn.replace(/\.$/, '')} via ${this.s.dnsProvider}`);
           const handle = await dnsSolver!.present(fqdn, value, authz.identifier.value);
           cleanups.push(() => dnsSolver!.cleanup(fqdn, value, handle).catch(err => this.o.log(`DNS cleanup for ${fqdn} failed: ${errMsg(err)}`)));
           toValidate.push({ authzUrl, challenge, name: fqdn });
@@ -364,11 +367,14 @@ export class AcmeClient {
       }
 
       if (this.s.challenge === 'dns-01' && toValidate.length) {
+        this.o.log(`Waiting until the TXT record is visible on ${this.s.dnsResolvers.join(', ')} (up to ${Math.round(this.s.dnsTimeoutMs / 1000)} s)`);
         await waitForTxt(this.s, toValidate.map(v => v.name), this.o.log);
       }
 
+      if (toValidate.length) this.o.log('Asking the CA to validate');
       for (const v of toValidate) await this.post(v.challenge.url, {});
       for (const v of toValidate) await this.waitForAuthz(v.authzUrl);
+      if (toValidate.length) this.o.log('Validation passed');
 
       // Finalize with a fresh certificate key
       const certKeys = (await webcrypto.subtle.generateKey(ALG, true, ['sign', 'verify'])) as CryptoKeyPair;
@@ -380,6 +386,7 @@ export class AcmeClient {
       });
       order = (await this.waitForOrder(orderUrl, ['ready', 'valid', 'processing'])) as Order;
       if (order.status === 'ready') {
+        this.o.log('Finalizing the order');
         await this.post(order.finalize, { csr: b64url(Buffer.from(csr.rawData)) });
       }
       order = await this.waitForOrder(orderUrl, ['valid']);
@@ -610,6 +617,50 @@ class ExecSolver implements DnsSolver {
 }
 
 // ---------------- http-01 listener ----------------
+
+const challengeServers = new Map<number, { server: Server; tokens: Map<string, string>; refs: number }>();
+const challengeStarting = new Map<number, Promise<Server>>();
+
+/**
+ * Use the http-01 listener on s.httpPort, starting it if needed. Shared between the active
+ * certificate manager and test runs from the web UI; release() closes it when nobody needs it.
+ */
+export async function acquireChallengeServer(s: AcmeSettings): Promise<{ tokens: Map<string, string>; release: () => void }> {
+  let entry = challengeServers.get(s.httpPort);
+  if (!entry) {
+    let starting = challengeStarting.get(s.httpPort);
+    const tokens = new Map<string, string>();
+    if (!starting) {
+      starting = startChallengeServer(s, tokens);
+      challengeStarting.set(s.httpPort, starting);
+      try {
+        const server = await starting;
+        entry = { server, tokens, refs: 0 };
+        challengeServers.set(s.httpPort, entry);
+      } finally {
+        challengeStarting.delete(s.httpPort);
+      }
+    } else {
+      await starting;
+      entry = challengeServers.get(s.httpPort)!;
+    }
+  }
+  entry.refs++;
+  const e = entry;
+  let released = false;
+  return {
+    tokens: e.tokens,
+    release: () => {
+      if (released) return;
+      released = true;
+      e.refs--;
+      if (e.refs <= 0) {
+        e.server.close();
+        if (challengeServers.get(s.httpPort) === e) challengeServers.delete(s.httpPort);
+      }
+    },
+  };
+}
 
 /**
  * Plain-HTTP listener for http-01: answers /.well-known/acme-challenge/<token> and redirects

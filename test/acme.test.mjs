@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { connect } from "node:tls";
+import { request as httpsRequest } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -319,6 +320,72 @@ test("TLS_MODE=acme with acme-dns registers, waits for the CNAME, then issues", 
   } finally {
     await stop(mcp);
     acmeDns.close();
+    await pebble.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Web UI: test ACME settings, then switch from the built-in CA to ACME live (old certificate kept until issued)", { skip: !havePebble && "Pebble not installed (set PEBBLE_BIN/PEBBLE_DIR)", timeout: 120_000 }, async () => {
+  const httpPort = 25000 + Math.floor(Math.random() * 1000);
+  const pebble = await startPebble(httpPort);
+  const { dir, configPath } = seed();
+  const store = new ConfigStore({ path: configPath, allowAutoKey: false, env: { CONFIG_ENCRYPTION_KEY: KEY } });
+  store.load();
+  const user = store.createUser("Alice", "admin", { id: "dGVzdA", publicKey: "AA", counter: 0, name: "k" }, "aGFuZGxl");
+  store.setPassword(user.id, "correct horse battery");
+
+  // TLS_MODE comes from the saved settings (default: built-in CA), not the environment
+  const mcp = startMcp({ CONFIG_PATH: configPath, TLS_MODE: "", NODE_EXTRA_CA_CERTS: pebble.ca });
+  const origin = `https://mcp.example.test:${mcp.port}`;
+  const call = (path, { method = "GET", body, cookie } = {}) => new Promise((resolve, reject) => {
+    const data = body === undefined ? undefined : JSON.stringify(body);
+    const req = httpsRequest({
+      host: "127.0.0.1", port: mcp.port, path, method, rejectUnauthorized: false, servername: "mcp.example.test",
+      headers: { "Content-Type": "application/json", Origin: origin, ...(cookie ? { Cookie: cookie } : {}), ...(data ? { "Content-Length": Buffer.byteLength(data) } : {}) },
+    }, (res) => {
+      let text = "";
+      res.setEncoding("utf8").on("data", (c) => (text += c)).on("end", () => {
+        let json;
+        try { json = JSON.parse(text); } catch {}
+        resolve({ status: res.statusCode, headers: res.headers, json, text });
+      });
+    });
+    req.on("error", reject);
+    if (data) req.write(data);
+    req.end();
+  });
+  try {
+    await waitFor(async () => /mcp-arr local CA/.test(await peerIssuer(mcp.port, "mcp.example.test")), 15000, "built-in CA");
+    const login = await call("/admin/api/login/password", { method: "POST", body: { name: "Alice", password: "correct horse battery" } });
+    assert.equal(login.status, 200, login.text);
+    const cookie = login.headers["set-cookie"][0].split(";")[0];
+    const values = { TLS_MODE: "acme", ACME_DIRECTORY_URL: pebble.directory, ACME_CHALLENGE: "http-01", ACME_HTTP_PORT: String(httpPort) };
+
+    // Test: a real issuance against the CA, nothing applied
+    const started = await call("/admin/api/settings/test", { method: "POST", body: { values }, cookie });
+    assert.equal(started.status, 200, started.text);
+    const job = await waitFor(async () => {
+      const j = (await call(`/admin/api/settings/test/${started.json.id}`, { cookie })).json;
+      return j.status !== "running" && j;
+    }, 60000, "test job");
+    assert.equal(job.status, "ok", `${job.message}\n${job.log.join("\n")}`);
+    assert.match(job.log.join("\n"), /Validation passed/);
+    assert.match(await peerIssuer(mcp.port, "mcp.example.test"), /mcp-arr local CA/, "testing does not change the certificate");
+    const saved = new ConfigStore({ path: configPath, allowAutoKey: false, env: { CONFIG_ENCRYPTION_KEY: KEY } });
+    saved.load();
+    assert.equal(saved.getSettings().TLS_MODE, undefined, "testing saves nothing");
+
+    // Apply: same HTTPS listener, the built-in certificate stays until the ACME one is issued
+    const applied = await call("/admin/api/settings", { method: "PUT", body: { values }, cookie });
+    assert.equal(applied.status, 200, applied.text);
+    assert.equal(applied.json.listenerChange, false);
+    assert.equal(applied.json.overview.tls.mode, "acme");
+    assert.doesNotMatch(await peerIssuer(mcp.port, "mcp.example.test"), /temporary/);
+    await waitFor(async () => /Pebble Intermediate/.test(await peerIssuer(mcp.port, "mcp.example.test")), 60000, "ACME certificate after apply");
+    const ov = (await call("/admin/api/overview", { cookie })).json;
+    assert.equal(ov.tls.acme.status, "valid");
+  } finally {
+    await stop(mcp);
     await pebble.stop();
     rmSync(dir, { recursive: true, force: true });
   }

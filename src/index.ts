@@ -16,7 +16,8 @@
  *
  * Remote / Docker mode (HTTPS + web UI with passkey login), see README:
  * - MCP_TRANSPORT=http (default: stdio), PUBLIC_URL, PORT, HOST
- * - TLS_MODE (internal|file|acme|off), ACME_* (see acme.ts), TLS_SANS, TLS_CA_NAME_CONSTRAINTS, TLS_CERT_FILE, TLS_KEY_FILE
+ * - TLS_MODE (internal|file|acme|off), TLS_SANS, TLS_CA_NAME_CONSTRAINTS, TLS_CERT_FILE, TLS_KEY_FILE, ACME_* (see acme.ts)
+ *   - these and OAUTH / TRUST_PROXY can also be changed in the web UI (settings.ts); environment variables win
  * - CONFIG_PATH, CONFIG_ENCRYPTION_KEY, CONFIG_ENCRYPTION_KEY_FILE, CONFIG_ENCRYPTION_KEY_PREVIOUS, KEY_FILE_PATH
  * - ADMIN_RECOVERY, TRUST_PROXY
  */
@@ -3855,13 +3856,7 @@ async function main() {
   }
 
   // ----- HTTP(S) mode -----
-  const env = process.env;
-  const tlsMode = (env.TLS_MODE || 'internal').toLowerCase();
-  if (tlsMode !== 'internal' && tlsMode !== 'file' && tlsMode !== 'acme' && tlsMode !== 'off') {
-    throw new Error(`Unknown TLS_MODE '${tlsMode}' (use 'internal', 'file', 'acme' or 'off')`);
-  }
-
-  if (!env.PUBLIC_URL) {
+  if (!process.env.PUBLIC_URL) {
     throw new Error(
       "PUBLIC_URL is required in HTTP mode, e.g. PUBLIC_URL=https://mcp-arr.home.lan:3000 - " +
       "the address you open in the browser. Passkeys need a host name (not an IP address); " +
@@ -3870,9 +3865,9 @@ async function main() {
   }
   let publicUrl: URL;
   try {
-    publicUrl = new URL(env.PUBLIC_URL);
+    publicUrl = new URL(process.env.PUBLIC_URL);
   } catch {
-    throw new Error(`PUBLIC_URL '${env.PUBLIC_URL}' is not a valid URL`);
+    throw new Error(`PUBLIC_URL '${process.env.PUBLIC_URL}' is not a valid URL`);
   }
   const hostname = publicUrl.hostname.replace(/^\[|\]$/g, '');
   if (isIP(hostname)) {
@@ -3883,70 +3878,43 @@ async function main() {
   }
 
   const store = new ConfigStore({
-    path: env.CONFIG_PATH || resolvePath(process.cwd(), 'config', 'config.json'),
+    path: process.env.CONFIG_PATH || resolvePath(process.cwd(), 'config', 'config.json'),
     allowAutoKey: true,
   });
   store.load();
   applyConfig(store.getEffective());
   if (store.path) stats.attachFile(joinPath(dirname(store.path), 'stats.json'));
 
-  const [{ startHttpServer }, { Auth }, { TlsManager }, { OAuthProvider, resolveOAuthMode, DEFAULT_REDIRECT_HOSTS }, { acmeSettingsFromEnv }] = await Promise.all([
+  const [{ startHttpServer }, { Auth }, { buildRuntime, testSettings }, { mergedEnv }] = await Promise.all([
     import("./http-server.js"),
     import("./auth.js"),
-    import("./tls.js"),
-    import("./oauth.js"),
-    import("./acme.js"),
+    import("./runtime.js"),
+    import("./settings.js"),
   ]);
 
-  const splitList = (v?: string) => (v ?? '').split(',').map(x => x.trim()).filter(Boolean);
-  const tlsNames = [hostname, ...splitList(env.TLS_SANS)];
-  const acme = tlsMode === 'acme' ? acmeSettingsFromEnv(env, tlsNames, publicUrl.origin, env.HOST || '0.0.0.0') : undefined;
-  const tls = new TlsManager({
-    mode: tlsMode,
-    store,
-    names: tlsNames,
-    acme,
-    caPermitted: splitList(env.TLS_CA_NAME_CONSTRAINTS),
-    certFile: env.TLS_CERT_FILE,
-    keyFile: env.TLS_KEY_FILE,
-    leafDays: env.TLS_LEAF_DAYS ? Number(env.TLS_LEAF_DAYS) : undefined,
-  });
-  await tls.init();
+  // Settings from the web UI (encrypted config), overridden by environment variables
+  const env = mergedEnv(store.getSettings(), process.env);
+  const mcpPath = process.env.MCP_PATH || '/mcp';
+  const ctx = { store, publicUrl, hostname, listenHost: process.env.HOST || '0.0.0.0', mcpPath };
+  const runtime = await buildRuntime(ctx, env);
 
   const auth = new Auth({
     store,
     rpID: hostname,
     origin: publicUrl.origin,
-    recoveryEnabled: env.ADMIN_RECOVERY === 'true',
+    recoveryEnabled: process.env.ADMIN_RECOVERY === 'true',
   });
-
-  // OAuth sign-in for Claude / OpenAI connectors - only when they can reach us with a real certificate
-  const mcpPath = env.MCP_PATH || '/mcp';
-  const oauthDecision = resolveOAuthMode({
-    setting: env.OAUTH,
-    publicUrl,
-    tlsMode,
-    certProblem: tls.publicTrustProblem(hostname),
-  });
-  const oauth = oauthDecision.enabled
-    ? new OAuthProvider({
-        store,
-        issuer: publicUrl.origin,
-        mcpPath,
-        allowedRedirectHosts: [...DEFAULT_REDIRECT_HOSTS, ...splitList(env.OAUTH_ALLOWED_REDIRECT_HOSTS).map(h => h.toLowerCase())],
-      })
-    : undefined;
 
   await startHttpServer({
-    oauth,
-    oauthReason: oauthDecision.reason,
     store,
     auth,
-    tls,
+    runtime,
+    reconfigure: (stored, previous) => buildRuntime(ctx, mergedEnv(stored, process.env), previous),
+    testSettings: (stored, log) => testSettings(ctx, mergedEnv(stored, process.env), log),
+    env: process.env,
     publicUrl,
-    port: Number(env.PORT || 3000),
-    host: env.HOST || '0.0.0.0',
-    trustProxy: env.TRUST_PROXY === 'true',
+    port: Number(process.env.PORT || 3000),
+    host: ctx.listenHost,
     createServer: (caller?: CallContext) => buildServer(caller),
     mcpPath,
     serverVersion: SERVER_VERSION,

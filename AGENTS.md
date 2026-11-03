@@ -19,6 +19,8 @@ src/
 ├── oauth.ts          # OAuth 2.1 server for Claude/OpenAI connectors (only with a publicly trusted cert)
 ├── tls.ts            # Built-in offline CA, BYO certificate files, ACME mode, renewal / hot reload
 ├── acme.ts           # ACME client (Let's Encrypt): http-01 listener, dns-01 via cloudflare / acme-dns / exec
+├── settings.ts       # Settings editable in the web UI (definitions, env > saved > default, validation)
+├── runtime.ts        # Builds TLS manager / OAuth / proxy trust from settings; "Test these settings"
 ├── admin-ui.ts       # Web UI page (single self-contained HTML string, no external assets)
 ├── config-store.ts   # Encrypted config file (AES-256-GCM), env merge, users/tokens/invites
 ├── tools/            # Tool implementations by service
@@ -72,7 +74,7 @@ node dist/index.js
 | OAUTH | No | `auto` (default; on only with https PUBLIC_URL + public cert / proxy), `on`, `off` |
 | OAUTH_ALLOWED_REDIRECT_HOSTS | No | Extra connector redirect hosts (default claude.ai, claude.com, chatgpt.com, openai.com) |
 
-In HTTP mode, service env vars override values from the config file (shown read-only in the UI).
+In HTTP mode, service env vars override values from the config file (shown read-only in the UI). The same holds for the server settings in `src/settings.ts` (TLS/ACME/DNS/OAuth/TRUST_PROXY): editable in the Settings tab, applied live without restart, env wins. When adding a setting, add it to `SETTING_DEFS`; startup-only or dangerous ones (e.g. `ACME_DNS_HOOK`) stay env-only (`STARTUP_KEYS`).
 
 ## Constraints
 
