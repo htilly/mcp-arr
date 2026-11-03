@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- **BREAKING:** `sonarr_delete_series` and `radarr_delete_movie` now default `deleteFiles` to `false`. Pass `deleteFiles: true` to remove files from disk.
+- **BREAKING:** delete tools, `radarr_delete_queue_item`, `tautulli_terminate_session`, `overseerr_approve_request` and `overseerr_decline_request` now require `confirm: true`.
+- **BREAKING:** the server won't start if a configured service URL isn't a full `http://` or `https://` URL.
+- Tool arguments are validated against each tool's schema before dispatch, in both stdio and HTTP mode. Numeric arguments must be integers, IDs must be positive, and IDs are encoded when placed in URLs, so a value like `../downloadclient/1` can no longer redirect a request to another endpoint.
+- `sonarr_delete_season` rejects a missing or non-integer `seasonNumber`, which previously deleted every episode file in the series.
+- API keys are redacted from error text returned to the client.
+- Added `ARR_READ_ONLY=true` to hide and block tools that change state, and `readOnlyHint`/`destructiveHint` tool annotations.
+
 ### Changed
 - **BREAKING (HTTP mode):** `MCP_TRANSPORT=http` now serves **HTTPS with authentication**. It requires `PUBLIC_URL` and a writable `CONFIG_PATH`, and every MCP request needs a per-user access token created in the web UI. Existing unauthenticated plain-HTTP setups (e.g. n8n pointing at `http://host:3000/mcp`) must be updated - see README "Remote server". `TLS_MODE=off` keeps plain HTTP for use behind a TLS-terminating reverse proxy, but tokens are still required. stdio mode is unchanged.
 - **Deploy workflow** (`deploy.yml`): the post-deploy check now works with the authenticated HTTPS server. It accepts `200` (older unauthenticated image, e.g. after a rollback) or `401` + `WWW-Authenticate: Bearer` (auth enforced), and, when `MCP_CHECK_TOKEN` is set on the runner, also runs an authenticated `initialize` over verified HTTPS (`MCP_ARR_CA_FILE`). An untrusted certificate falls back to an unverified liveness check with a warning (the token is never sent over it), and the rollback step also accepts a plain-HTTP older image behind an `https://` `APP_URL`. When the check fails it names the likely cause from curl's exit code (host does not resolve, connection refused, timeout, http/https scheme mismatch, untrusted certificate) without printing any host name. Responses and the token are never printed. The host compose file must run the HTTPS mode - see README "Self-hosted deploy".

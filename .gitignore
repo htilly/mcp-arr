@@ -26,3 +26,6 @@ SESSION-*.md
 config/
 secrets/
 mcp-arr-key.txt
+
+# Local security review output
+.security-review/
