@@ -16,6 +16,7 @@ src/
 ├── index.ts          # Server entry point, tool registration (applyConfig/buildTools/buildServer)
 ├── http-server.ts    # HTTP(S) mode: /mcp (stateless Streamable HTTP), /admin API with roles, /ca.crt
 ├── auth.ts           # Passkey (WebAuthn) registration/login, sessions, setup/recovery codes
+├── oauth.ts          # OAuth 2.1 server for Claude/OpenAI connectors (only with a publicly trusted cert)
 ├── tls.ts            # Built-in offline CA, BYO certificate files, renewal / hot reload
 ├── admin-ui.ts       # Web UI page (single self-contained HTML string, no external assets)
 ├── config-store.ts   # Encrypted config file (AES-256-GCM), env merge, users/tokens/invites
@@ -66,6 +67,8 @@ node dist/index.js
 | KEY_FILE_PATH | No | Fallback auto-generated key file (Docker /secrets/master.key) |
 | ADMIN_RECOVERY | No | `true` prints a one-time code to register a new admin passkey |
 | TRUST_PROXY | No | Use X-Forwarded-For for rate limiting |
+| OAUTH | No | `auto` (default; on only with https PUBLIC_URL + public cert / proxy), `on`, `off` |
+| OAUTH_ALLOWED_REDIRECT_HOSTS | No | Extra connector redirect hosts (default claude.ai, claude.com, chatgpt.com, openai.com) |
 
 In HTTP mode, service env vars override values from the config file (shown read-only in the UI).
 

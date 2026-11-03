@@ -614,8 +614,12 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
       internal ? el('p', { class: 'note', text: 'Set NODE_EXTRA_CA_CERTS in the environment that starts claude (e.g. your shell profile).' }) : null,
       el('h3', { text: 'Claude Desktop (via mcp-remote)' }),
       el('pre', { text: JSON.stringify(desktop, null, 2) }),
-      el('p', { class: 'note', text: 'Claude "custom connectors" are called from Anthropic’s cloud and need a public internet address, so they cannot reach this offline server. Use the local configurations above.' })
-    ])]);
+      d.oauth && d.oauth.enabled ? [
+        el('h3', { text: 'Claude and ChatGPT connectors (sign-in)' }),
+        el('p', { class: 'muted', text: 'Add a custom connector with this URL and leave the OAuth client fields empty. You will be sent back here to sign in and approve - no token needed. Access can be revoked under "Access tokens".' }),
+        el('pre', { text: endpoint })
+      ] : el('p', { class: 'note', text: 'Claude and ChatGPT "custom connectors" are called from the vendors’ clouds. Sign-in for them needs a publicly reachable HTTPS address with a publicly trusted certificate (TLS_MODE=file or a reverse proxy)' + (d.oauth && d.oauth.reason ? ' - currently off: ' + d.oauth.reason + '.' : '.') + ' Use the local configurations above otherwise.' })
+    ].reduce(function (a, b) { return a.concat(b); }, []))]);
   }
 
   function viewTokens(d, redraw) {
@@ -878,13 +882,41 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     app.replaceChildren(nav, content);
   }
 
+  function renderConsent(requestId, user) {
+    return api('GET', '/oauth/request/' + requestId).then(function (r) {
+      var msg = el('div', { class: 'msg' });
+      function finish(action) {
+        approve.disabled = deny.disabled = true;
+        api('POST', '/oauth/request/' + requestId + '/' + action).then(function (res) {
+          history.replaceState(null, '', '/admin');
+          location.href = res.redirect;
+        }, function (e) { approve.disabled = deny.disabled = false; showMsg(msg, 'err', e.message); });
+      }
+      var approve = el('button', { class: 'primary big', type: 'button', text: 'Allow access', onclick: function () { finish('approve'); } });
+      var deny = el('button', { type: 'button', text: 'Cancel', onclick: function () { finish('deny'); } });
+      who.classList.remove('hidden');
+      whoName.textContent = user.name + ' · ' + user.role;
+      app.replaceChildren(el('div', { class: 'center panel' }, [
+        el('h2', { text: 'Connect ' + r.clientName + '?' }),
+        el('p', { text: r.clientName + ' (' + r.redirectHost + ') wants to use your *arr services through this server as ' + r.user + '.' }),
+        el('p', { class: 'muted', text: 'It can then run the same tools you can, including changing your library. You can revoke it any time under "Access tokens". Only continue if you started this connection yourself.' }),
+        el('div', { class: 'row' }, [approve, deny]), msg
+      ]));
+    }, function (e) {
+      history.replaceState(null, '', '/admin');
+      app.replaceChildren(el('div', { class: 'msg err', text: e.message }));
+    });
+  }
+
   function load() {
     var m = /invite=([A-Za-z0-9_-]+)/.exec(location.hash);
+    var oauthReq = /oauth=([A-Za-z0-9_-]+)/.exec(location.hash);
     return api('GET', '/state').then(function (s) {
       lastState = s;
       if (m && !s.user) return renderInvite(m[1]);
       if (s.setupRequired) return renderSetup();
       if (!s.user) return renderLogin(s);
+      if (oauthReq) return renderConsent(oauthReq[1], s.user);
       return api('GET', '/overview').then(renderMain);
     }).catch(function (e) {
       if (e.status === 401) return renderLogin(lastState);

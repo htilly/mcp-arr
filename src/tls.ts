@@ -103,6 +103,25 @@ export class TlsManager {
     return this.caCertPem;
   }
 
+  /**
+   * Cheap sanity check that a TLS_MODE=file certificate could be publicly trusted (the chain
+   * to a public root cannot be verified offline): not self-signed, not expired, covers the host.
+   * Returns a description of the problem, or undefined if nothing looks wrong.
+   */
+  publicTrustProblem(host: string): string | undefined {
+    if (this.mode !== 'file' || !this.material) return undefined;
+    let cert: X509Certificate;
+    try {
+      cert = new X509Certificate(this.material.cert);
+    } catch {
+      return 'the certificate file could not be parsed';
+    }
+    if (cert.subject === cert.issuer) return 'it is self-signed';
+    if (Date.parse(cert.validTo) < Date.now()) return 'it has expired';
+    if (!cert.checkHost(host)) return `it does not cover ${host}`;
+    return undefined;
+  }
+
   onChange(listener: (m: TlsMaterial) => void): void {
     this.listeners.push(listener);
   }

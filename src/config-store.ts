@@ -109,6 +109,28 @@ export interface StoredToken {
   hint: string; // last 4 characters
   createdAt: string;
   lastUsedAt?: string;
+  /** OAuth access tokens expire; manually created tokens never do. */
+  expiresAt?: string;
+  /** Set for tokens issued through OAuth (the registered client). */
+  clientId?: string;
+}
+
+export interface StoredOAuthClient {
+  id: string;
+  name: string;
+  redirectUris: string[];
+  /** sha256 of the client secret; absent for public clients (PKCE only). */
+  secretHash?: string;
+  createdAt: string;
+}
+
+export interface StoredRefreshToken {
+  hash: string;
+  tokenId: string; // the access token it currently belongs to
+  userId: string;
+  clientId: string;
+  createdAt: string;
+  expiresAt: string;
 }
 
 export interface StoredKeyPair {
@@ -127,6 +149,8 @@ interface ConfigData {
   invites: StoredInvite[];
   tokens: StoredToken[];
   tls: StoredTls;
+  oauthClients: StoredOAuthClient[];
+  oauthRefresh: StoredRefreshToken[];
 }
 
 interface EncryptedEnvelope {
@@ -170,7 +194,7 @@ export function validatePassword(password: string): void {
 }
 
 function emptyData(): ConfigData {
-  return { services: {}, users: [], invites: [], tokens: [], tls: {} };
+  return { services: {}, users: [], invites: [], tokens: [], tls: {}, oauthClients: [], oauthRefresh: [] };
 }
 
 export function sha256(value: string): string {
@@ -562,6 +586,7 @@ export class ConfigStore {
     if (user.role === 'admin' && this.adminCount() <= 1) throw new Error('There must be at least one admin');
     this.data.users = this.data.users.filter(u => u.id !== userId);
     this.data.tokens = this.data.tokens.filter(t => t.userId !== userId);
+    this.data.oauthRefresh = this.data.oauthRefresh.filter(r => r.userId !== userId);
     this.save();
   }
 
@@ -639,6 +664,7 @@ export class ConfigStore {
     const before = this.data.tokens.length;
     this.data.tokens = this.data.tokens.filter(t => !(t.id === id && (!ownerId || t.userId === ownerId)));
     if (this.data.tokens.length === before) return false;
+    this.data.oauthRefresh = this.data.oauthRefresh.filter(r => r.tokenId !== id);
     this.save();
     return true;
   }
@@ -647,6 +673,7 @@ export class ConfigStore {
   verifyToken(token: string): StoredUser | undefined {
     const entry = this.data.tokens.find(t => hashMatches(t.hash, token));
     if (!entry) return undefined;
+    if (entry.expiresAt && Date.parse(entry.expiresAt) <= Date.now()) return undefined;
     const user = this.getUser(entry.userId);
     if (!user) return undefined;
     const now = Date.now();
@@ -659,6 +686,92 @@ export class ConfigStore {
       }
     }
     return user;
+  }
+
+  // ---------- OAuth (clients, access + refresh tokens) ----------
+
+  private static readonly MAX_OAUTH_CLIENTS = 200;
+
+  registerOAuthClient(client: Omit<StoredOAuthClient, 'id' | 'createdAt'>): StoredOAuthClient {
+    const entry: StoredOAuthClient = { ...client, id: `marr-client-${randomBytes(12).toString('base64url')}`, createdAt: new Date().toISOString() };
+    this.data.oauthClients.push(entry);
+    if (this.data.oauthClients.length > ConfigStore.MAX_OAUTH_CLIENTS) {
+      this.data.oauthClients = this.data.oauthClients.slice(-ConfigStore.MAX_OAUTH_CLIENTS);
+    }
+    this.save();
+    return entry;
+  }
+
+  getOAuthClient(id: string): StoredOAuthClient | undefined {
+    return this.data.oauthClients.find(c => c.id === id);
+  }
+
+  /** Issue an access token (+ refresh token) for an OAuth client. */
+  issueOAuthTokens(
+    userId: string,
+    client: StoredOAuthClient,
+    ttlSeconds: number,
+    refreshTtlSeconds: number,
+    replaceTokenId?: string
+  ): { accessToken: string; refreshToken: string } {
+    this.requireUser(userId);
+    if (replaceTokenId) {
+      this.data.tokens = this.data.tokens.filter(t => t.id !== replaceTokenId);
+    }
+    const now = Date.now();
+    const accessToken = `marr_${randomBytes(24).toString('base64url')}`;
+    const refreshToken = `marr_rt_${randomBytes(32).toString('base64url')}`;
+    const entry: StoredToken = {
+      id: randomUUID(),
+      userId,
+      name: cleanName(`OAuth: ${client.name}`, 'OAuth client'),
+      hash: sha256(accessToken),
+      hint: accessToken.slice(-4),
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + ttlSeconds * 1000).toISOString(),
+      clientId: client.id,
+    };
+    this.data.tokens.push(entry);
+    this.data.oauthRefresh.push({
+      hash: sha256(refreshToken),
+      tokenId: entry.id,
+      userId,
+      clientId: client.id,
+      createdAt: entry.createdAt,
+      expiresAt: new Date(now + refreshTtlSeconds * 1000).toISOString(),
+    });
+    this.pruneOAuth();
+    this.save();
+    return { accessToken, refreshToken };
+  }
+
+  /** Consume a refresh token (single use). Returns its owner, or undefined if unknown/expired. */
+  takeRefreshToken(refreshToken: string): StoredRefreshToken | undefined {
+    const entry = this.data.oauthRefresh.find(r => hashMatches(r.hash, refreshToken));
+    if (!entry) return undefined;
+    this.data.oauthRefresh = this.data.oauthRefresh.filter(r => r !== entry);
+    this.save();
+    if (Date.parse(entry.expiresAt) <= Date.now() || !this.getUser(entry.userId)) return undefined;
+    return entry;
+  }
+
+  /** Revoke an OAuth access or refresh token (RFC 7009). Unknown tokens are ignored. */
+  revokeOAuthToken(token: string, clientId: string): void {
+    const access = this.data.tokens.find(t => t.clientId === clientId && hashMatches(t.hash, token));
+    const refresh = this.data.oauthRefresh.find(r => r.clientId === clientId && hashMatches(r.hash, token));
+    const tokenId = access?.id ?? refresh?.tokenId;
+    if (!tokenId) return;
+    this.data.tokens = this.data.tokens.filter(t => t.id !== tokenId);
+    this.data.oauthRefresh = this.data.oauthRefresh.filter(r => r.tokenId !== tokenId);
+    this.save();
+  }
+
+  private pruneOAuth(): void {
+    const now = Date.now();
+    this.data.oauthRefresh = this.data.oauthRefresh.filter(r => Date.parse(r.expiresAt) > now);
+    const live = new Set(this.data.oauthRefresh.map(r => r.tokenId));
+    // expired access tokens without a live refresh token are dead weight
+    this.data.tokens = this.data.tokens.filter(t => !t.expiresAt || Date.parse(t.expiresAt) > now || live.has(t.id));
   }
 
   // ---------- TLS material ----------
