@@ -8,10 +8,11 @@
  * - OVERSEERR_URL, OVERSEERR_API_KEY
  * - BAZARR_URL, BAZARR_API_KEY
  *
- * Remote / Docker mode:
- * - MCP_TRANSPORT=http  (default: stdio)
- * - PORT (default 3000), HOST (default 0.0.0.0)
- * - CONFIG_PATH, CONFIG_ENCRYPTION_KEY, ADMIN_PASSWORD, MCP_AUTH_TOKEN, MCP_AUTH_DISABLED
+ * Remote / Docker mode (HTTPS + web UI with passkey login), see README:
+ * - MCP_TRANSPORT=http (default: stdio), PUBLIC_URL, PORT, HOST
+ * - TLS_MODE (internal|file|off), TLS_SANS, TLS_CA_NAME_CONSTRAINTS, TLS_CERT_FILE, TLS_KEY_FILE
+ * - CONFIG_PATH, CONFIG_ENCRYPTION_KEY, CONFIG_ENCRYPTION_KEY_FILE, CONFIG_ENCRYPTION_KEY_PREVIOUS, KEY_FILE_PATH
+ * - ADMIN_RECOVERY, TRUST_PROXY
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -34,8 +35,8 @@ import { TautulliClient } from "./tautulli-client.js";
 import { OverseerrClient } from "./overseerr-client.js";
 import { BazarrClient, BazarrSubtitle } from "./bazarr-client.js";
 import { ConfigStore, EffectiveConfig, SERVICE_DEFS } from "./config-store.js";
-import { startHttpServer } from "./http-server.js";
 import { resolve as resolvePath } from "node:path";
+import { isIP } from "node:net";
 
 // Configuration (environment variables and/or config file, see config-store.ts)
 interface ServiceConfig {
@@ -3271,14 +3272,11 @@ async function main() {
     throw new Error(`Unknown MCP_TRANSPORT '${transportMode}' (use 'stdio' or 'http')`);
   }
 
-  // In HTTP mode the config file is the editable store (default /config/config.json in Docker).
-  // In stdio mode a config file is only read when CONFIG_PATH is set explicitly.
-  const configPath = process.env.CONFIG_PATH || (isHttp ? resolvePath(process.cwd(), 'config', 'config.json') : undefined);
-  const store = new ConfigStore(configPath, process.env.CONFIG_ENCRYPTION_KEY);
-  store.load();
-  applyConfig(store.getEffective());
-
   if (!isHttp) {
+    // stdio: env vars, plus an (encrypted) config file only when CONFIG_PATH is set explicitly
+    const store = new ConfigStore({ path: process.env.CONFIG_PATH || undefined, allowAutoKey: false });
+    store.load();
+    applyConfig(store.getEffective());
     if (!anyServiceConfigured()) {
       console.error("Error: No services configured. Set at least one of: *arr (SONARR_URL+API_KEY, etc.), Tautulli (TAUTULLI_URL+TAUTULLI_API_KEY), Overseerr (OVERSEERR_URL+OVERSEERR_API_KEY), or Bazarr (BAZARR_URL+BAZARR_API_KEY)");
       process.exit(1);
@@ -3289,8 +3287,74 @@ async function main() {
     return;
   }
 
+  // ----- HTTP(S) mode -----
+  const env = process.env;
+  const tlsMode = (env.TLS_MODE || 'internal').toLowerCase();
+  if (tlsMode !== 'internal' && tlsMode !== 'file' && tlsMode !== 'off') {
+    throw new Error(`Unknown TLS_MODE '${tlsMode}' (use 'internal', 'file' or 'off')`);
+  }
+
+  if (!env.PUBLIC_URL) {
+    throw new Error(
+      "PUBLIC_URL is required in HTTP mode, e.g. PUBLIC_URL=https://mcp-arr.home.lan:3000 - " +
+      "the address you open in the browser. Passkeys need a host name (not an IP address); " +
+      "add it to your local DNS or hosts file."
+    );
+  }
+  let publicUrl: URL;
+  try {
+    publicUrl = new URL(env.PUBLIC_URL);
+  } catch {
+    throw new Error(`PUBLIC_URL '${env.PUBLIC_URL}' is not a valid URL`);
+  }
+  const hostname = publicUrl.hostname.replace(/^\[|\]$/g, '');
+  if (isIP(hostname)) {
+    throw new Error(`PUBLIC_URL must use a host name, not an IP address (${hostname}): passkeys cannot be bound to IP addresses. Add a name such as mcp-arr.home.lan to your local DNS or hosts file.`);
+  }
+  if (publicUrl.protocol !== 'https:' && hostname !== 'localhost') {
+    throw new Error('PUBLIC_URL must start with https:// (MCP clients and passkeys require HTTPS)');
+  }
+
+  const store = new ConfigStore({
+    path: env.CONFIG_PATH || resolvePath(process.cwd(), 'config', 'config.json'),
+    allowAutoKey: true,
+  });
+  store.load();
+  applyConfig(store.getEffective());
+
+  const [{ startHttpServer }, { Auth }, { TlsManager }] = await Promise.all([
+    import("./http-server.js"),
+    import("./auth.js"),
+    import("./tls.js"),
+  ]);
+
+  const splitList = (v?: string) => (v ?? '').split(',').map(x => x.trim()).filter(Boolean);
+  const tls = new TlsManager({
+    mode: tlsMode,
+    store,
+    names: [hostname, ...splitList(env.TLS_SANS)],
+    caPermitted: splitList(env.TLS_CA_NAME_CONSTRAINTS),
+    certFile: env.TLS_CERT_FILE,
+    keyFile: env.TLS_KEY_FILE,
+    leafDays: env.TLS_LEAF_DAYS ? Number(env.TLS_LEAF_DAYS) : undefined,
+  });
+  await tls.init();
+
+  const auth = new Auth({
+    store,
+    rpID: hostname,
+    origin: publicUrl.origin,
+    recoveryEnabled: env.ADMIN_RECOVERY === 'true',
+  });
+
   await startHttpServer({
     store,
+    auth,
+    tls,
+    publicUrl,
+    port: Number(env.PORT || 3000),
+    host: env.HOST || '0.0.0.0',
+    trustProxy: env.TRUST_PROXY === 'true',
     createServer,
     onConfigChanged: () => applyConfig(store.getEffective()),
     getConfiguredSummary: () => statusParts,

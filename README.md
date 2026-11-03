@@ -35,13 +35,14 @@ MCP server for the [*arr media management suite](https://wiki.servarr.com/) - So
 | **Tautulli (Plex)** | Activity, history, libraries, users, recently added, server status, terminate session |
 | **Overseerr (Requests)** | List requests, approve/decline, view users, search media, request management |
 | **Bazarr (Subtitles)** | Missing subtitles, series/episode/movie subtitle status, search & download subtitles, history, providers, languages |
+| **Remote server** | Optional HTTPS server with web UI: passkey login per user, encrypted config, offline certificates |
 | **Cross-Service** | Status check, unified search across all configured services |
 | **Configuration** | Quality profiles, download clients, naming conventions, health checks, storage info |
 | **TRaSH Guides** | Reference quality profiles, custom formats, naming conventions, compare against recommendations |
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 20+
 - At least one of:
   - *arr application(s) with API access: [Sonarr](https://sonarr.tv/), [Radarr](https://radarr.video/), [Lidarr](https://lidarr.audio/), [Readarr](https://readarr.com/), [Prowlarr](https://prowlarr.com/)
   - [Tautulli](https://tautulli.com/) (Plex monitoring and statistics)
@@ -136,59 +137,96 @@ Add to `~/.claude.json`:
 
 **Note**: Only configure the services you have running. The server automatically detects which services are available based on the environment variables you provide.
 
-### Remote server (Docker + web UI)
+### Remote server (Docker, HTTPS, web UI with passkeys)
 
-Instead of every MCP client running its own copy, you can run mcp-arr **once** on your server (e.g. next to Sonarr/Radarr) and point all clients at a single URL. In this mode it also serves a **web UI** for managing service URLs, API keys and client access tokens.
+Run mcp-arr **once** on your server (e.g. next to Sonarr/Radarr) and point all MCP clients at one HTTPS URL. A web UI manages service URLs and API keys, users and access tokens. It is built for networks **without internet access**:
+
+- **HTTPS without Let's Encrypt** – a built-in certificate authority issues and renews the server certificate offline. You install its root certificate once per device. The CA is *name-constrained* to your server's names, so it cannot be abused to impersonate other websites. You can also bring your own certificate (step-ca, Caddy, your router, …).
+- **Encrypted at rest** – the whole config file (API keys, users, passkeys, token hashes, CA private keys) is AES-256-GCM encrypted.
+- **Per-user login with passkeys** – no passwords. Roles: *admin* (services, users, invites, certificates) and *user* (own passkeys and access tokens).
+- **Per-user MCP access tokens** – every client gets its own token, revocable at any time.
+
+> **Claude custom connectors** (claude.ai, mobile, Desktop "Connectors") are called from Anthropic's cloud and need a public internet address with OAuth, so they can't reach an offline server. Use **Claude Code** or **Claude Desktop via `mcp-remote`** – both connect from your own machine.
+
+#### Setup
+
+1. **Pick a host name** and make it resolve on your LAN (router / Pi-hole / AdGuard DNS entry, or the hosts file), e.g. `mcp-arr.home.lan`. Passkeys require a host name — an IP address does not work.
+2. **Create the encryption key** (used as a Docker secret):
+   ```bash
+   openssl rand -base64 32 > mcp-arr-key.txt
+   ```
+3. Set `PUBLIC_URL` in `docker-compose.yml` (e.g. `https://mcp-arr.home.lan:3000`) and start:
+   ```bash
+   docker compose up -d
+   docker compose logs mcp-arr     # setup code + CA fingerprint
+   ```
+4. Open `https://mcp-arr.home.lan:3000/ca.crt` (accept the browser warning this once), check that the SHA-256 fingerprint matches the log, and **install the root certificate** (the web UI's *Certificates* tab has steps for macOS, Windows, iOS, Android and Linux).
+5. Open `https://mcp-arr.home.lan:3000/admin`, enter the setup code and **register your passkey** — you are the first admin.
+6. Add your services (**Test**, then **Save** — tools are enabled immediately), invite other people from **Users** (single-use links, 24 h), and create an **access token** per MCP client.
+
+#### Connect MCP clients
+
+Node.js-based clients don't use the system certificate store, so point them at the root certificate with `NODE_EXTRA_CA_CERTS` (not needed with `TLS_MODE=file` and a certificate your system already trusts):
 
 ```bash
-docker compose up -d          # uses docker-compose.yml from this repo
-docker compose logs mcp-arr   # shows the first-run setup code
-```
-
-Then open `http://<server>:3000/admin`:
-
-1. Enter the setup code from the log and choose an admin password (or set `ADMIN_PASSWORD` to skip this)
-2. Add URL + API key for each service — **Test** checks the connection, **Save** enables its tools immediately (connected clients are notified, no restart)
-3. Create an **access token** for each MCP client
-
-Connect a client to `http://<server>:3000/mcp` (Streamable HTTP):
-
-```bash
-# Claude Code
-claude mcp add --transport http arr http://<server>:3000/mcp --header "Authorization: Bearer <token>"
+# Claude Code (set NODE_EXTRA_CA_CERTS in the shell/profile that starts claude)
+export NODE_EXTRA_CA_CERTS=/path/to/mcp-arr-ca.crt
+claude mcp add --transport http arr https://mcp-arr.home.lan:3000/mcp --header "Authorization: Bearer <token>"
 ```
 
 ```json
-// Claude Desktop and other stdio-only clients, via mcp-remote
+// Claude Desktop (claude_desktop_config.json), via the local mcp-remote bridge
 {
   "mcpServers": {
     "arr": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "http://<server>:3000/mcp", "--header", "Authorization: Bearer <token>"]
+      "args": ["-y", "mcp-remote", "https://mcp-arr.home.lan:3000/mcp", "--header", "Authorization: Bearer <token>"],
+      "env": { "NODE_EXTRA_CA_CERTS": "/path/to/mcp-arr-ca.crt" }
     }
   }
 }
 ```
 
-Clients that can't send headers can use `http://<server>:3000/mcp?token=<token>` instead.
+Clients that can't send headers can use `https://…/mcp?token=<token>`. On an offline machine, install `mcp-remote` once while online (`npm i -g mcp-remote`) and use `"command": "mcp-remote"`.
 
-Without Docker: `MCP_TRANSPORT=http CONFIG_PATH=./config/config.json node dist/index.js`.
+#### Certificates (`TLS_MODE`)
 
-**HTTP mode settings**
+| Mode | Use when |
+|------|----------|
+| `internal` (default) | No other CA on your network. Root CA (10 years) + server certificate (397 days, renewed automatically and hot-swapped, no restart). Changing host names outside the CA's name constraints generates a new CA (you'll need to reinstall it) — set `TLS_CA_NAME_CONSTRAINTS=home.lan` to allow any name under a domain. |
+| `file` | You already run a LAN CA, e.g. [step-ca](https://smallstep.com/docs/step-ca/) (which also offers ACME for automatic renewal on an offline network), Caddy's internal CA, your router/NAS, or a certificate obtained elsewhere via DNS-01. Set `TLS_CERT_FILE` / `TLS_KEY_FILE`; files are reloaded automatically when they change. |
+| `off` | A reverse proxy in front terminates HTTPS. Set `TRUST_PROXY=true` so rate limiting uses `X-Forwarded-For`. `PUBLIC_URL` must still be the proxy's `https://` address. |
+
+#### Encryption key
+
+Resolved in this order:
+
+1. `CONFIG_ENCRYPTION_KEY` – passphrase in an environment variable
+2. `CONFIG_ENCRYPTION_KEY_FILE` – file containing the passphrase (recommended: a Docker secret, see `docker-compose.yml`)
+3. Otherwise a random key file is created at `KEY_FILE_PATH` (Docker: `/secrets/master.key`). This protects a copied config file, but not someone who has both volumes — the UI and log show a warning. Keep it on a separate volume.
+
+Switching from the key file to a passphrase is automatic (the file is re-encrypted on start). To change passphrases, start once with the old one in `CONFIG_ENCRYPTION_KEY_PREVIOUS`. Without the right key the server refuses to start — **back up your key**; there is no way to recover the data without it.
+
+#### HTTP mode settings
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MCP_TRANSPORT` | `stdio` | Set to `http` for remote mode |
+| `MCP_TRANSPORT` | `stdio` | Set to `http` for the remote server |
+| `PUBLIC_URL` | – (required) | The URL you open in the browser, e.g. `https://mcp-arr.home.lan:3000` (passkey origin + certificate name) |
 | `PORT` / `HOST` | `3000` / `0.0.0.0` | Listen address |
-| `CONFIG_PATH` | `/config/config.json` (Docker) | Where the web UI stores settings |
-| `ADMIN_PASSWORD` | – | Admin password. If unset, you create one in the web UI on first run (protected by a one-time code printed to the log) |
-| `CONFIG_ENCRYPTION_KEY` | – | If set, API keys are stored AES-256-GCM encrypted in the config file. If unset, they are stored in plain text (file mode 0600). Existing plain-text keys are encrypted automatically when you set it — keep the key, it is needed to read them |
-| `MCP_AUTH_TOKEN` | – | A fixed access token, accepted in addition to tokens created in the web UI |
-| `MCP_AUTH_DISABLED` | `false` | `true` turns off token auth for `/mcp` — only on a fully trusted network |
+| `TLS_MODE` | `internal` | `internal`, `file` or `off` (see above) |
+| `TLS_SANS` | – | Extra names/IPs for the certificate, comma-separated |
+| `TLS_CA_NAME_CONSTRAINTS` | names from `PUBLIC_URL` + `TLS_SANS` | Domains/IPs the built-in CA may issue for |
+| `TLS_CERT_FILE` / `TLS_KEY_FILE` | – | Certificate and key for `TLS_MODE=file` |
+| `CONFIG_PATH` | `/config/config.json` (Docker) | Encrypted config file |
+| `CONFIG_ENCRYPTION_KEY` / `_FILE` / `_PREVIOUS` | – | Encryption key (see above) |
+| `KEY_FILE_PATH` | `/secrets/master.key` (Docker) | Fallback auto-generated key file |
+| `ADMIN_RECOVERY` | `false` | `true` prints a one-time recovery code to register a new admin passkey |
+| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` (only behind your own reverse proxy) |
 
-Service variables (`SONARR_URL`, `SONARR_API_KEY`, …) still work in HTTP mode. They take precedence over the web UI and show as read-only there.
+Service variables (`SONARR_URL`, `SONARR_API_KEY`, …) still work and take precedence over the web UI, where they show as read-only.
 
-> **Security:** this server can delete media and control downloads. Don't expose port 3000 to the internet directly — put it behind a reverse proxy with HTTPS, or keep it on your LAN / Tailscale. Tokens and the admin password are only stored as hashes.
+**Offline notes:** everything works without internet except the TRaSH Guides tools, which fetch guide data from GitHub and return an error when offline. To install on an air-gapped host, build the image elsewhere and move it with `docker save` / `docker load`.
 
 ### Using the local build (Cursor / Claude)
 
@@ -494,13 +532,19 @@ The *arr application is not running or the URL is incorrect. Verify:
 You tried to use a tool for a service that isn't configured. Add the corresponding URL and API_KEY environment variables (or configure it in the web UI in HTTP mode).
 
 ### HTTP mode: "Unauthorized" from `/mcp`
-Create an access token in the web UI (`/admin` → Access tokens) and send it as `Authorization: Bearer <token>`.
+Create an access token in the web UI (**Access tokens**) and send it as `Authorization: Bearer <token>`. Tokens stop working when they are revoked or their user is deleted.
 
-### HTTP mode: lost the admin password
-Stop the server, remove the `admin` entry from the config file (or set `ADMIN_PASSWORD`), and start it again — a new setup code is printed to the log.
+### HTTP mode: certificate errors (`self-signed certificate in certificate chain`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE`)
+Install the root certificate from `/ca.crt` on the device, and for Node.js clients (Claude Code, `mcp-remote`) set `NODE_EXTRA_CA_CERTS=/path/to/mcp-arr-ca.crt`. Connect using a name that is in the certificate (`PUBLIC_URL` host or `TLS_SANS`).
 
-### HTTP mode: "CONFIG_ENCRYPTION_KEY does not match" / "is not set"
-The config file contains API keys encrypted with a different key. Start with the original `CONFIG_ENCRYPTION_KEY`, or remove the `services` and `encryption` entries from the config file and re-enter the API keys.
+### HTTP mode: passkey prompt fails or "Passkeys unavailable"
+Passkeys only work over trusted HTTPS on the exact host name in `PUBLIC_URL` (not an IP address, not a different alias). Install the root certificate and open the configured URL.
+
+### HTTP mode: lost all admin passkeys
+Start the server once with `ADMIN_RECOVERY=true`. The log shows a one-time recovery code; on the sign-in page choose "Lost your passkey?" to register a new admin. Remove the variable afterwards.
+
+### HTTP mode: "encryption key does not match" / "no key is available"
+The config file was encrypted with a different key. Start with the original `CONFIG_ENCRYPTION_KEY` (or restore the key file). To change keys, put the old one in `CONFIG_ENCRYPTION_KEY_PREVIOUS` for one start. Without the key the data can't be recovered — move the config file away to start fresh.
 
 ## Contributing
 

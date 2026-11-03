@@ -1,31 +1,57 @@
-# Remote mcp-arr server with web UI.
-#   docker compose up -d
-#   Web UI:       http://<host>:3000/admin   (first-run setup code: `docker compose logs mcp-arr`)
-#   MCP endpoint: http://<host>:3000/mcp     (create an access token in the web UI)
+# mcp-arr as an HTTPS server with web UI - works without internet access.
 #
-# Put this behind HTTPS (reverse proxy, Tailscale, ...) if it is reachable from outside your LAN.
+#   1. Pick a host name for this server and make it resolve on your LAN
+#      (router/Pi-hole/AdGuard DNS entry, or the hosts file on each device), e.g. mcp-arr.home.lan.
+#      Passkeys require a host name - an IP address does not work.
+#   2. Create the encryption key secret:   openssl rand -base64 32 > mcp-arr-key.txt
+#   3. docker compose up -d
+#   4. docker compose logs mcp-arr   -> first-run setup code + CA fingerprint
+#   5. Open https://mcp-arr.home.lan:3000/admin, download + install the root certificate
+#      (Certificates tab, or /ca.crt), enter the setup code and register your passkey.
+#
+# Air-gapped host: build/pull the image elsewhere, then `docker save mcp-arr | ...` and `docker load`.
 services:
   mcp-arr:
     build: .
+    image: mcp-arr
     container_name: mcp-arr
     restart: unless-stopped
     ports:
       - "3000:3000"
     volumes:
-      - ./config:/config
+      - ./config:/config          # encrypted config (services, API keys, users, passkeys, CA keys)
+    secrets:
+      - mcp_arr_key
     environment:
       MCP_TRANSPORT: http
-      # Optional - otherwise you create the admin password in the web UI on first run:
-      # ADMIN_PASSWORD: change-me
-      # Optional - encrypt API keys stored in /config/config.json:
-      # CONFIG_ENCRYPTION_KEY: a-long-random-string
-      # Optional - a fixed MCP access token in addition to tokens created in the web UI:
-      # MCP_AUTH_TOKEN: a-long-random-token
-      # Optional - services can also be set here instead of in the web UI (they become read-only in the UI):
+      PUBLIC_URL: https://mcp-arr.home.lan:3000      # the address you open in the browser
+      CONFIG_ENCRYPTION_KEY_FILE: /run/secrets/mcp_arr_key
+      # Extra names/IPs for the certificate (e.g. to reach it by IP from MCP clients):
+      # TLS_SANS: 192.168.1.10,mcp-arr
+      # Allow any name under a domain without regenerating the CA:
+      # TLS_CA_NAME_CONSTRAINTS: home.lan,192.168.1.10
+      # Use your own certificate instead of the built-in CA (e.g. from step-ca / Caddy / your router):
+      # TLS_MODE: file
+      # TLS_CERT_FILE: /certs/fullchain.pem
+      # TLS_KEY_FILE: /certs/privkey.pem
+      # Behind a reverse proxy that terminates HTTPS:
+      # TLS_MODE: "off"
+      # TRUST_PROXY: "true"
+      # Lost all admin passkeys? Start once with:
+      # ADMIN_RECOVERY: "true"
+      # Services can also be set here (they become read-only in the UI):
       # SONARR_URL: http://sonarr:8989
       # SONARR_API_KEY: your-sonarr-api-key
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      test: ["CMD", "wget", "-q", "--no-check-certificate", "-O-", "https://127.0.0.1:3000/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
+
+secrets:
+  mcp_arr_key:
+    file: ./mcp-arr-key.txt
+
+# Without the secret, a random key file is generated in /secrets instead (less secure if both
+# volumes are copied together; the web UI shows a warning). To use that, remove `secrets:` and
+# CONFIG_ENCRYPTION_KEY_FILE above and add a separate volume:  - ./secrets:/secrets

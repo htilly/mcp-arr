@@ -11,13 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Docker image: `@modelcontextprotocol/sdk` is now a runtime dependency (it was a devDependency, so `npm ci --omit=dev` in the image left it out and the server could not start)
 
 ### Added
-- **Remote HTTP mode + web UI** (`MCP_TRANSPORT=http`):
-  - Streamable HTTP MCP endpoint at `/mcp` so many clients can share one server (e.g. in Docker on a NAS)
-  - Web UI at `/admin` to manage service URLs/API keys (with connection test), MCP access tokens and the admin password; changes apply live and connected clients get a `tools/list_changed` notification
-  - Admin auth via `ADMIN_PASSWORD`, or a first-run setup screen protected by a one-time code printed to the log
-  - Config stored in `CONFIG_PATH`; API keys optionally encrypted with `CONFIG_ENCRYPTION_KEY` (AES-256-GCM)
-  - MCP auth via tokens created in the UI and/or `MCP_AUTH_TOKEN` (`Authorization: Bearer` or `?token=`)
-  - `docker-compose.yml` example; Dockerfile exposes port 3000 with a `/config` volume
+- **Remote HTTPS server + web UI** (`MCP_TRANSPORT=http`, `PUBLIC_URL`), designed for networks without internet access:
+  - Streamable HTTP MCP endpoint at `/mcp` over HTTPS so many clients can share one server
+  - Built-in offline certificate authority (`TLS_MODE=internal`): name-constrained root CA, server certificate auto-renewed and hot-swapped; or bring your own certificate (`TLS_MODE=file`, reloaded on change), or `TLS_MODE=off` behind a reverse proxy
+  - Whole config file encrypted at rest (AES-256-GCM): API keys, users, passkeys, token hashes, CA keys. Key from `CONFIG_ENCRYPTION_KEY` / `CONFIG_ENCRYPTION_KEY_FILE` (Docker secret) or an auto-generated key file (with warning); key migration and rotation (`CONFIG_ENCRYPTION_KEY_PREVIOUS`)
+  - Per-user login with passkeys (WebAuthn), roles admin/user, single-use invite links, multiple passkeys per user, `ADMIN_RECOVERY` for lost passkeys
+  - Per-user MCP access tokens (`Authorization: Bearer` or `?token=`), revoked when the user is deleted
+  - Web UI: services (with connection test, live tool reload + `tools/list_changed`), users & invites, tokens, passkeys, certificates (download + install guide), security status
+  - `docker-compose.yml` example with Docker secret; Dockerfile with `/config` and `/secrets` volumes
+- Node.js 20+ is now required
 - **Bazarr (subtitles) integration** – optional, enabled with `BAZARR_URL` + `BAZARR_API_KEY`; server can run with only Bazarr configured:
   - `bazarr_status`, `bazarr_get_health`, `bazarr_get_badges` – System status, health, missing-subtitle counts
   - `bazarr_get_series`, `bazarr_get_episodes`, `bazarr_get_movies` – Subtitle status per series/episode/movie

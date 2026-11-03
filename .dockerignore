@@ -22,3 +22,5 @@ docker-registry
 
 # Local config volume
 config
+secrets
+mcp-arr-key.txt

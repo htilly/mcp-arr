@@ -1,35 +1,34 @@
 /**
- * HTTP mode: Streamable HTTP MCP endpoint (/mcp) + web admin UI (/admin).
+ * HTTP(S) mode: Streamable HTTP MCP endpoint (/mcp) + web admin UI (/admin).
  *
- * Auth:
- * - /mcp requires a bearer token (Authorization: Bearer <token> or ?token=<token>).
- *   Valid tokens: MCP_AUTH_TOKEN env var and/or tokens created in the web UI.
- *   Set MCP_AUTH_DISABLED=true to turn auth off (only on a trusted network!).
- * - /admin requires the admin password: ADMIN_PASSWORD env var, or a password created on
- *   first run (protected by a one-time setup code printed to the server log).
+ * - Served over HTTPS (see tls.ts) - designed for LAN use without internet access.
+ * - Web UI: per-user login with passkeys (see auth.ts), roles admin/user.
+ * - /mcp: per-user access tokens (Authorization: Bearer <token>, or ?token=<token>).
  */
 
 import { createServer as createHttpServer, IncomingMessage, ServerResponse } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import {
-  ConfigStore,
-  SERVICE_DEFS,
-  ServiceId,
-  isServiceId,
-  safeEqual,
-  verifyPassword,
-} from './config-store.js';
+import { ConfigStore, Role, SERVICE_DEFS, ServiceId, StoredUser, isServiceId } from './config-store.js';
 import { SonarrClient, RadarrClient, LidarrClient, ReadarrClient, ProwlarrClient } from './arr-client.js';
 import { TautulliClient } from './tautulli-client.js';
 import { OverseerrClient } from './overseerr-client.js';
 import { BazarrClient } from './bazarr-client.js';
 import { renderAdminPage } from './admin-ui.js';
+import { Auth, AuthError } from './auth.js';
+import { TlsManager } from './tls.js';
 
 export interface HttpServerOptions {
   store: ConfigStore;
+  auth: Auth;
+  tls: TlsManager;
+  publicUrl: URL;
+  port: number;
+  host: string;
+  trustProxy: boolean;
   createServer: () => Server;
   onConfigChanged: () => void;
   getConfiguredSummary: () => string[];
@@ -38,6 +37,7 @@ export interface HttpServerOptions {
 interface McpSession {
   transport: StreamableHTTPServerTransport;
   server: Server;
+  userId: string;
   lastSeen: number;
 }
 
@@ -48,12 +48,11 @@ class HttpError extends Error {
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
-const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const MCP_SESSION_IDLE_MS = 2 * 60 * 60 * 1000;
-const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-const LOGIN_MAX_FAILURES = 5;
+const RATE_WINDOW_MS = 15 * 60 * 1000;
+const RATE_MAX_FAILURES = 10;
 const TEST_TIMEOUT_MS = 10_000;
-const MIN_PASSWORD_LENGTH = 8;
+const SESSION_COOKIE = '__Host-marr_session';
 
 // ---------- helpers ----------
 
@@ -69,11 +68,12 @@ async function readBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function readJson(req: IncomingMessage): Promise<unknown> {
+async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const text = await readBody(req);
   if (!text) return {};
   try {
-    return JSON.parse(text);
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' ? parsed : {};
   } catch {
     throw new HttpError(400, 'Invalid JSON body');
   }
@@ -88,22 +88,24 @@ function parseCookies(req: IncomingMessage): Record<string, string> {
   const out: Record<string, string> = {};
   for (const part of (req.headers.cookie ?? '').split(';')) {
     const idx = part.indexOf('=');
-    if (idx > 0) out[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
+    if (idx > 0) {
+      try {
+        out[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
+      } catch {
+        // ignore malformed cookie
+      }
+    }
   }
   return out;
 }
 
-function clientIp(req: IncomingMessage): string {
-  return req.socket.remoteAddress ?? 'unknown';
-}
-
-function isSecureRequest(req: IncomingMessage): boolean {
-  return (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0].trim() === 'https'
-    || Boolean((req.socket as { encrypted?: boolean }).encrypted);
-}
-
 function str(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+function role(value: unknown): Role {
+  if (value === 'admin' || value === 'user') return value;
+  throw new HttpError(400, "Role must be 'admin' or 'user'");
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -145,26 +147,49 @@ export async function testServiceConnection(
   }
 }
 
+function publicUser(u: StoredUser) {
+  return { id: u.id, name: u.name, role: u.role, createdAt: u.createdAt, passkeys: u.credentials.length };
+}
+
 // ---------- server ----------
 
 export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
-  const { store } = opts;
-  const port = Number(process.env.PORT || 3000);
-  const host = process.env.HOST || '0.0.0.0';
-  const authDisabled = process.env.MCP_AUTH_DISABLED === 'true';
-  const envToken = process.env.MCP_AUTH_TOKEN || undefined;
-  const envAdminPassword = process.env.ADMIN_PASSWORD || undefined;
-
-  if (!store.writable) throw new Error('HTTP mode requires a writable config file (CONFIG_PATH)');
-
-  let setupCode: string | undefined;
-  if (!envAdminPassword && !store.getAdminPasswordHash()) {
-    setupCode = randomBytes(4).toString('hex').toUpperCase().replace(/(.{4})/, '$1-');
-  }
+  const { store, auth, tls } = opts;
+  const publicOrigin = opts.publicUrl.origin;
 
   const mcpSessions = new Map<string, McpSession>();
-  const adminSessions = new Map<string, number>(); // session id -> expiry timestamp
-  const loginFailures = new Map<string, { count: number; first: number }>();
+  const failures = new Map<string, { count: number; first: number }>();
+
+  function clientIp(req: IncomingMessage): string {
+    if (opts.trustProxy) {
+      const fwd = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim();
+      if (fwd) return fwd;
+    }
+    return req.socket.remoteAddress ?? 'unknown';
+  }
+
+  function rateLimited(req: IncomingMessage): boolean {
+    const f = failures.get(clientIp(req));
+    return Boolean(f && f.count >= RATE_MAX_FAILURES && Date.now() - f.first < RATE_WINDOW_MS);
+  }
+
+  function recordFailure(req: IncomingMessage): void {
+    const ip = clientIp(req);
+    const f = failures.get(ip);
+    if (!f || Date.now() - f.first > RATE_WINDOW_MS) failures.set(ip, { count: 1, first: Date.now() });
+    else f.count++;
+  }
+
+  /** Run an auth step; count failures for rate limiting. */
+  async function guarded<T>(req: IncomingMessage, fn: () => Promise<T>): Promise<T> {
+    if (rateLimited(req)) throw new HttpError(429, 'Too many failed attempts - try again later');
+    try {
+      return await fn();
+    } catch (error) {
+      if (error instanceof AuthError && (error.status === 401 || error.status === 403)) recordFailure(req);
+      throw error;
+    }
+  }
 
   function configChanged(): void {
     opts.onConfigChanged();
@@ -173,7 +198,16 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     }
   }
 
-  // Periodic cleanup of idle MCP sessions and expired admin sessions
+  /** Close MCP sessions belonging to a user (after deletion). */
+  function closeUserMcpSessions(userId: string): void {
+    for (const [id, s] of mcpSessions) {
+      if (s.userId === userId) {
+        mcpSessions.delete(id);
+        s.transport.close().catch(() => {});
+      }
+    }
+  }
+
   const cleanup = setInterval(() => {
     const now = Date.now();
     for (const [id, s] of mcpSessions) {
@@ -182,33 +216,25 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
         s.transport.close().catch(() => {});
       }
     }
-    for (const [id, exp] of adminSessions) if (exp < now) adminSessions.delete(id);
-    for (const [ip, f] of loginFailures) if (now - f.first > LOGIN_WINDOW_MS) loginFailures.delete(ip);
+    for (const [ip, f] of failures) if (now - f.first > RATE_WINDOW_MS) failures.delete(ip);
+    auth.cleanup();
   }, 5 * 60 * 1000);
   cleanup.unref();
 
   // ----- MCP endpoint -----
 
-  function mcpAuthorized(req: IncomingMessage, url: URL): boolean {
-    if (authDisabled) return true;
+  function mcpUser(req: IncomingMessage, url: URL): StoredUser | undefined {
     const header = req.headers.authorization;
     const token = header?.startsWith('Bearer ') ? header.slice(7).trim() : url.searchParams.get('token') ?? undefined;
-    if (!token) return false;
-    if (envToken && safeEqual(token, envToken)) return true;
-    return store.verifyToken(token);
+    return token ? store.verifyToken(token) : undefined;
   }
 
   async function handleMcp(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-    if (!mcpAuthorized(req, url)) {
-      const noTokens = !envToken && !store.hasTokens();
+    const user = mcpUser(req, url);
+    if (!user) {
       sendJson(res, 401, {
         jsonrpc: '2.0',
-        error: {
-          code: -32001,
-          message: noTokens
-            ? 'Unauthorized: no MCP access token exists yet. Create one in the web UI (/admin).'
-            : 'Unauthorized: missing or invalid access token',
-        },
+        error: { code: -32001, message: 'Unauthorized: missing or invalid access token. Create one in the web UI (/admin).' },
         id: null,
       }, { 'WWW-Authenticate': 'Bearer' });
       return;
@@ -216,6 +242,10 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
 
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
     const existing = sessionId ? mcpSessions.get(sessionId) : undefined;
+    if (existing && existing.userId !== user.id) {
+      sendJson(res, 403, { jsonrpc: '2.0', error: { code: -32001, message: 'Session belongs to another user' }, id: null });
+      return;
+    }
 
     if (req.method === 'POST') {
       const body = await readJson(req);
@@ -235,6 +265,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       const server = opts.createServer();
       const session: McpSession = {
         server,
+        userId: user.id,
         lastSeen: Date.now(),
         transport: new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
@@ -262,68 +293,46 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     sendJson(res, 405, { error: 'Method not allowed' }, { Allow: 'GET, POST, DELETE' });
   }
 
-  // ----- admin auth -----
+  // ----- admin helpers -----
 
-  function isAdmin(req: IncomingMessage): boolean {
-    const sid = parseCookies(req).marr_admin;
-    if (!sid) return false;
-    const exp = adminSessions.get(sid);
-    if (!exp || exp < Date.now()) {
-      adminSessions.delete(sid);
-      return false;
+  function sessionCookie(sid: string): string {
+    return `${SESSION_COOKIE}=${sid}; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=${auth.sessionTtlSeconds}`;
+  }
+
+  function currentUser(req: IncomingMessage): StoredUser | undefined {
+    return auth.sessionUser(parseCookies(req)[SESSION_COOKIE]);
+  }
+
+  function requireUser(req: IncomingMessage): StoredUser {
+    const user = currentUser(req);
+    if (!user) throw new HttpError(401, 'Not logged in');
+    return user;
+  }
+
+  function requireAdmin(req: IncomingMessage): StoredUser {
+    const user = requireUser(req);
+    if (user.role !== 'admin') throw new HttpError(403, 'Admin role required');
+    return user;
+  }
+
+  /** CSRF protection for state-changing requests (in addition to SameSite=Strict cookies). */
+  function checkMutation(req: IncomingMessage): void {
+    if (!(req.headers['content-type'] ?? '').includes('application/json')) {
+      throw new HttpError(415, 'Content-Type must be application/json');
     }
-    return true;
-  }
-
-  function startAdminSession(req: IncomingMessage, res: ServerResponse): string {
-    const sid = randomBytes(32).toString('base64url');
-    adminSessions.set(sid, Date.now() + ADMIN_SESSION_TTL_MS);
-    const secure = isSecureRequest(req) ? '; Secure' : '';
-    return `marr_admin=${sid}; HttpOnly; SameSite=Strict; Path=/admin; Max-Age=${ADMIN_SESSION_TTL_MS / 1000}${secure}`;
-  }
-
-  function checkPassword(password: string): boolean {
-    if (envAdminPassword) return safeEqual(password, envAdminPassword);
-    const hash = store.getAdminPasswordHash();
-    return hash ? verifyPassword(password, hash) : false;
-  }
-
-  function rateLimited(req: IncomingMessage): boolean {
-    const f = loginFailures.get(clientIp(req));
-    return Boolean(f && f.count >= LOGIN_MAX_FAILURES && Date.now() - f.first < LOGIN_WINDOW_MS);
-  }
-
-  function recordFailure(req: IncomingMessage): void {
-    const ip = clientIp(req);
-    const f = loginFailures.get(ip);
-    if (!f || Date.now() - f.first > LOGIN_WINDOW_MS) loginFailures.set(ip, { count: 1, first: Date.now() });
-    else f.count++;
-  }
-
-  /** Basic CSRF protection for state-changing admin requests (in addition to SameSite=Strict cookies). */
-  function checkMutationOrigin(req: IncomingMessage): void {
-    const contentType = req.headers['content-type'] ?? '';
-    if (!contentType.includes('application/json')) throw new HttpError(415, 'Content-Type must be application/json');
-    const origin = req.headers.origin;
-    if (origin) {
-      let originHost: string;
-      try {
-        originHost = new URL(origin).host;
-      } catch {
-        throw new HttpError(403, 'Invalid Origin');
-      }
-      const allowed = [req.headers.host, req.headers['x-forwarded-host']].filter(Boolean).map(h => String(h).split(',')[0].trim());
-      if (!allowed.includes(originHost)) throw new HttpError(403, 'Cross-origin request blocked');
+    if (req.headers.origin !== publicOrigin) {
+      throw new HttpError(403, `Origin not allowed - open the web UI at ${publicOrigin}`);
     }
   }
 
-  function servicesView() {
+  function servicesView(includeDetails: boolean) {
     const effective = store.getEffective();
     return SERVICE_DEFS.map(def => {
       const e = effective[def.id];
+      const base = { id: def.id, displayName: def.displayName, configured: Boolean(e.url && e.apiKey) };
+      if (!includeDetails) return base;
       return {
-        id: def.id,
-        displayName: def.displayName,
+        ...base,
         exampleUrl: def.exampleUrl,
         envPrefix: def.envPrefix,
         url: e.url ?? '',
@@ -331,91 +340,180 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
         hasApiKey: Boolean(e.apiKey),
         apiKeyHint: e.apiKey && e.apiKey.length >= 12 ? e.apiKey.slice(-4) : '',
         apiKeySource: e.apiKeySource,
-        configured: Boolean(e.url && e.apiKey),
       };
     });
+  }
+
+  function tokensView(user: StoredUser) {
+    const users = new Map(store.listUsers().map(u => [u.id, u.name]));
+    return store.listTokens(user.role === 'admin' ? undefined : user.id).map(t => ({
+      ...t,
+      owner: users.get(t.userId) ?? 'unknown',
+      own: t.userId === user.id,
+    }));
+  }
+
+  function overview(user: StoredUser) {
+    const isAdmin = user.role === 'admin';
+    return {
+      me: {
+        ...publicUser(user),
+        credentials: user.credentials.map(c => ({ id: c.id, name: c.name, createdAt: c.createdAt, lastUsedAt: c.lastUsedAt })),
+      },
+      publicUrl: publicOrigin,
+      services: servicesView(isAdmin),
+      configuredSummary: opts.getConfiguredSummary(),
+      tokens: tokensView(user),
+      tls: tls.info(),
+      ...(isAdmin ? {
+        users: store.listUsers().map(publicUser),
+        invites: store.listInvites().map(i => ({ id: i.id, role: i.role, createdAt: i.createdAt, expiresAt: i.expiresAt })),
+        security: {
+          keySource: store.keySource,
+          keyFilePath: store.keySource === 'key-file' ? store.keyFilePath : undefined,
+          warnings: store.warnings,
+          configPath: store.path,
+          trustProxy: opts.trustProxy,
+        },
+        activeMcpSessions: mcpSessions.size,
+      } : {}),
+    };
   }
 
   // ----- admin API -----
 
   async function handleAdminApi(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
     const method = req.method ?? 'GET';
-    if (method !== 'GET') checkMutationOrigin(req);
+    if (method !== 'GET') checkMutation(req);
 
-    // Public endpoints
+    // --- public ---
     if (path === '/state' && method === 'GET') {
+      const user = currentUser(req);
       sendJson(res, 200, {
-        setupRequired: Boolean(setupCode),
-        authenticated: isAdmin(req),
+        setupRequired: auth.setupRequired,
+        recoveryAvailable: auth.recoveryAvailable,
+        user: user ? publicUser(user) : null,
+        rpID: auth.rpID,
       });
       return;
     }
 
-    if (path === '/setup' && method === 'POST') {
-      if (!setupCode) throw new HttpError(409, 'Setup already completed');
-      if (rateLimited(req)) throw new HttpError(429, 'Too many attempts, try again later');
-      const body = (await readJson(req)) as Record<string, unknown>;
-      const code = (str(body.code) ?? '').trim().toUpperCase();
-      const password = str(body.password) ?? '';
-      if (!safeEqual(code, setupCode)) {
-        recordFailure(req);
-        throw new HttpError(403, 'Invalid setup code (see the server log)');
-      }
-      if (password.length < MIN_PASSWORD_LENGTH) throw new HttpError(400, `Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
-      store.setAdminPassword(password);
-      setupCode = undefined;
-      sendJson(res, 200, { ok: true }, { 'Set-Cookie': startAdminSession(req, res) });
+    if (path === '/register/options' && method === 'POST') {
+      const body = await readJson(req);
+      const kind = str(body.kind);
+      if (kind !== 'setup' && kind !== 'invite' && kind !== 'recovery' && kind !== 'add') throw new HttpError(400, 'Invalid kind');
+      const user = kind === 'add' ? requireUser(req) : undefined;
+      const result = await guarded(req, () => auth.startRegistration({
+        kind,
+        name: str(body.name),
+        code: str(body.code),
+        inviteToken: str(body.inviteToken),
+        user,
+      }));
+      sendJson(res, 200, result);
       return;
     }
 
-    if (path === '/login' && method === 'POST') {
-      if (setupCode) throw new HttpError(409, 'Setup required');
-      if (rateLimited(req)) throw new HttpError(429, 'Too many failed attempts, try again later');
-      const body = (await readJson(req)) as Record<string, unknown>;
-      if (!checkPassword(str(body.password) ?? '')) {
-        recordFailure(req);
-        throw new HttpError(401, 'Wrong password');
+    if (path === '/register/verify' && method === 'POST') {
+      const body = await readJson(req);
+      const current = currentUser(req);
+      const user = await guarded(req, () => auth.finishRegistration(
+        str(body.flowId) ?? '',
+        body.response as never,
+        str(body.credentialName),
+        current
+      ));
+      if (current && current.id === user.id) {
+        sendJson(res, 200, { ok: true, user: publicUser(user) });
+      } else {
+        sendJson(res, 200, { ok: true, user: publicUser(user) }, { 'Set-Cookie': sessionCookie(auth.createSession(user.id)) });
       }
-      loginFailures.delete(clientIp(req));
-      sendJson(res, 200, { ok: true }, { 'Set-Cookie': startAdminSession(req, res) });
+      return;
+    }
+
+    if (path === '/invite/check' && method === 'POST') {
+      const body = await readJson(req);
+      if (rateLimited(req)) throw new HttpError(429, 'Too many failed attempts - try again later');
+      const invite = store.findInvite(str(body.token) ?? '');
+      if (!invite) recordFailure(req);
+      sendJson(res, 200, invite ? { valid: true, role: invite.role, expiresAt: invite.expiresAt } : { valid: false });
+      return;
+    }
+
+    if (path === '/login/options' && method === 'POST') {
+      if (rateLimited(req)) throw new HttpError(429, 'Too many failed attempts - try again later');
+      sendJson(res, 200, await auth.startLogin());
+      return;
+    }
+
+    if (path === '/login/verify' && method === 'POST') {
+      const body = await readJson(req);
+      const user = await guarded(req, () => auth.finishLogin(str(body.flowId) ?? '', body.response as never));
+      sendJson(res, 200, { ok: true, user: publicUser(user) }, { 'Set-Cookie': sessionCookie(auth.createSession(user.id)) });
       return;
     }
 
     if (path === '/logout' && method === 'POST') {
-      const sid = parseCookies(req).marr_admin;
-      if (sid) adminSessions.delete(sid);
-      sendJson(res, 200, { ok: true }, { 'Set-Cookie': 'marr_admin=; HttpOnly; SameSite=Strict; Path=/admin; Max-Age=0' });
+      auth.destroySession(parseCookies(req)[SESSION_COOKIE]);
+      sendJson(res, 200, { ok: true }, { 'Set-Cookie': `${SESSION_COOKIE}=; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=0` });
       return;
     }
 
-    // Everything below requires an admin session
-    if (!isAdmin(req)) throw new HttpError(401, 'Not logged in');
+    // --- any logged-in user ---
+    const user = requireUser(req);
 
     if (path === '/overview' && method === 'GET') {
-      sendJson(res, 200, {
-        services: servicesView(),
-        configuredSummary: opts.getConfiguredSummary(),
-        security: {
-          passwordFromEnv: Boolean(envAdminPassword),
-          encryption: store.encryptionEnabled,
-          configPath: store.path,
-          mcpAuthDisabled: authDisabled,
-          envTokenSet: Boolean(envToken),
-        },
-        tokens: store.listTokens(),
-        activeMcpSessions: mcpSessions.size,
-      });
+      sendJson(res, 200, overview(user));
       return;
     }
 
+    const passkeyMatch = path.match(/^\/me\/passkeys\/([A-Za-z0-9_-]+)$/);
+    if (passkeyMatch) {
+      const body = method === 'PATCH' ? await readJson(req) : {};
+      try {
+        if (method === 'PATCH') store.renameCredential(user.id, passkeyMatch[1], str(body.name) ?? '');
+        else if (method === 'DELETE') store.removeCredential(user.id, passkeyMatch[1]);
+        else throw new HttpError(405, 'Method not allowed');
+      } catch (error) {
+        if (error instanceof HttpError) throw error;
+        throw new HttpError(400, error instanceof Error ? error.message : String(error));
+      }
+      sendJson(res, 200, overview(store.getUser(user.id)!));
+      return;
+    }
+
+    if (path === '/me' && method === 'PATCH') {
+      const body = await readJson(req);
+      store.renameUser(user.id, str(body.name) ?? '');
+      sendJson(res, 200, overview(store.getUser(user.id)!));
+      return;
+    }
+
+    if (path === '/tokens' && method === 'POST') {
+      const body = await readJson(req);
+      const created = store.createToken(user.id, str(body.name) ?? '');
+      sendJson(res, 200, { token: created.token, info: created.info, tokens: tokensView(user) });
+      return;
+    }
+
+    const tokenMatch = path.match(/^\/tokens\/([0-9a-f-]+)$/);
+    if (tokenMatch && method === 'DELETE') {
+      const ok = store.deleteToken(tokenMatch[1], user.role === 'admin' ? undefined : user.id);
+      if (!ok) throw new HttpError(404, 'Token not found');
+      sendJson(res, 200, { ok: true, tokens: tokensView(user) });
+      return;
+    }
+
+    // --- admin only ---
     const serviceMatch = path.match(/^\/services\/([a-z]+)(\/test)?$/);
     if (serviceMatch) {
+      requireAdmin(req);
       const id = serviceMatch[1];
       if (!isServiceId(id)) throw new HttpError(404, 'Unknown service');
       const effective = store.getEffective()[id];
 
       if (serviceMatch[2] && method === 'POST') {
-        const body = (await readJson(req)) as Record<string, unknown>;
+        const body = await readJson(req);
         const url = (str(body.url) || effective.url || '').trim();
         const apiKey = (str(body.apiKey) || effective.apiKey || '').trim();
         if (!url || !apiKey) throw new HttpError(400, 'URL and API key are required to test');
@@ -424,7 +522,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       }
 
       if (!serviceMatch[2] && method === 'PUT') {
-        const body = (await readJson(req)) as Record<string, unknown>;
+        const body = await readJson(req);
         const update: { url?: string; apiKey?: string } = {};
         if (body.url !== undefined) {
           if (effective.urlSource === 'env') throw new HttpError(409, 'URL is set by an environment variable');
@@ -440,35 +538,53 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
           throw new HttpError(400, error instanceof Error ? error.message : String(error));
         }
         configChanged();
-        sendJson(res, 200, { ok: true, services: servicesView(), configuredSummary: opts.getConfiguredSummary() });
+        sendJson(res, 200, { ok: true, services: servicesView(true), configuredSummary: opts.getConfiguredSummary() });
         return;
       }
     }
 
-    if (path === '/tokens' && method === 'POST') {
-      const body = (await readJson(req)) as Record<string, unknown>;
-      const created = store.createToken(str(body.name) ?? '');
-      sendJson(res, 200, { token: created.token, info: created.info, tokens: store.listTokens() });
+    const userMatch = path.match(/^\/users\/([0-9a-f-]+)$/);
+    if (userMatch) {
+      const admin = requireAdmin(req);
+      const targetId = userMatch[1];
+      try {
+        if (method === 'PATCH') {
+          const body = await readJson(req);
+          if (body.role !== undefined) store.setUserRole(targetId, role(body.role));
+          if (body.name !== undefined) store.renameUser(targetId, str(body.name) ?? '');
+        } else if (method === 'DELETE') {
+          if (targetId === admin.id) throw new HttpError(400, 'You cannot delete yourself');
+          store.deleteUser(targetId);
+          auth.destroyUserSessions(targetId);
+          closeUserMcpSessions(targetId);
+        } else {
+          throw new HttpError(405, 'Method not allowed');
+        }
+      } catch (error) {
+        if (error instanceof HttpError) throw error;
+        throw new HttpError(400, error instanceof Error ? error.message : String(error));
+      }
+      sendJson(res, 200, overview(store.getUser(admin.id)!));
       return;
     }
 
-    const tokenMatch = path.match(/^\/tokens\/([0-9a-f-]+)$/);
-    if (tokenMatch && method === 'DELETE') {
-      if (!store.deleteToken(tokenMatch[1])) throw new HttpError(404, 'Token not found');
-      sendJson(res, 200, { ok: true, tokens: store.listTokens() });
+    if (path === '/invites' && method === 'POST') {
+      const admin = requireAdmin(req);
+      const body = await readJson(req);
+      const { token, invite } = store.createInvite(role(body.role ?? 'user'), admin.id);
+      sendJson(res, 200, {
+        link: `${publicOrigin}/admin#invite=${token}`,
+        invite: { id: invite.id, role: invite.role, expiresAt: invite.expiresAt },
+        overview: overview(admin),
+      });
       return;
     }
 
-    if (path === '/password' && method === 'POST') {
-      if (envAdminPassword) throw new HttpError(409, 'Admin password is set by the ADMIN_PASSWORD environment variable');
-      const body = (await readJson(req)) as Record<string, unknown>;
-      if (!checkPassword(str(body.current) ?? '')) throw new HttpError(403, 'Current password is wrong');
-      const next = str(body.password) ?? '';
-      if (next.length < MIN_PASSWORD_LENGTH) throw new HttpError(400, `Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
-      store.setAdminPassword(next);
-      // Invalidate all other sessions
-      adminSessions.clear();
-      sendJson(res, 200, { ok: true }, { 'Set-Cookie': startAdminSession(req, res) });
+    const inviteMatch = path.match(/^\/invites\/([0-9a-f-]+)$/);
+    if (inviteMatch && method === 'DELETE') {
+      const admin = requireAdmin(req);
+      if (!store.deleteInvite(inviteMatch[1])) throw new HttpError(404, 'Invite not found');
+      sendJson(res, 200, overview(admin));
       return;
     }
 
@@ -477,16 +593,30 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
 
   // ----- router -----
 
-  const httpServer = createHttpServer(async (req, res) => {
+  async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
     try {
+      if (tls.mode !== 'off') {
+        res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+      }
       if (path === '/mcp' || path === '/mcp/') {
         await handleMcp(req, res, url);
         return;
       }
       if (path === '/healthz') {
         sendJson(res, 200, { ok: true });
+        return;
+      }
+      if (path === '/ca.crt' && req.method === 'GET') {
+        const pem = tls.caPem();
+        if (!pem) throw new HttpError(404, 'No built-in CA in use (TLS_MODE is not internal)');
+        res.writeHead(200, {
+          'Content-Type': 'application/x-x509-ca-cert',
+          'Content-Disposition': 'attachment; filename="mcp-arr-ca.crt"',
+          'Cache-Control': 'no-store',
+        });
+        res.end(pem);
         return;
       }
       if (path === '/' && req.method === 'GET') {
@@ -517,37 +647,58 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
         res.end();
         return;
       }
-      if (error instanceof HttpError) {
+      if (error instanceof HttpError || error instanceof AuthError) {
         sendJson(res, error.status, { error: error.message });
       } else {
         console.error('HTTP request error:', error);
         sendJson(res, 500, { error: 'Internal server error' });
       }
     }
-  });
+  }
+
+  const material = tls.current();
+  const server = material
+    ? createHttpsServer({ cert: material.cert, key: material.key, minVersion: 'TLSv1.2' }, handler)
+    : createHttpServer(handler);
+  if (material) {
+    tls.onChange(m => (server as ReturnType<typeof createHttpsServer>).setSecureContext({ cert: m.cert, key: m.key, minVersion: 'TLSv1.2' }));
+  }
 
   await new Promise<void>((resolve, reject) => {
-    httpServer.once('error', reject);
-    httpServer.listen(port, host, () => resolve());
+    server.once('error', reject);
+    server.listen(opts.port, opts.host, () => resolve());
   });
 
   const summary = opts.getConfiguredSummary();
-  console.error(`*arr MCP server running (http) on http://${host}:${port}`);
-  console.error(`  MCP endpoint: /mcp   Web UI: /admin   Config: ${store.path}${store.encryptionEnabled ? ' (API keys encrypted)' : ''}`);
-  console.error(`  Configured services: ${summary.length ? summary.join(', ') : '(none yet - add them in the web UI)'}`);
-  if (authDisabled) console.error('  WARNING: MCP_AUTH_DISABLED=true - the MCP endpoint accepts unauthenticated requests');
-  if (setupCode) {
+  const info = tls.info();
+  console.error(`*arr MCP server running (${material ? 'https' : 'http'}) on ${opts.host}:${opts.port}`);
+  console.error(`  Public URL:  ${publicOrigin}   MCP endpoint: ${publicOrigin}/mcp   Web UI: ${publicOrigin}/admin`);
+  console.error(`  Config:      ${store.path} (encrypted, key from ${store.keySource})`);
+  for (const w of store.warnings) console.error(`  WARNING: ${w}`);
+  if (info.mode === 'internal' && info.ca) {
+    console.error(`  TLS:         built-in CA - download ${publicOrigin}/ca.crt and install it on your devices`);
+    console.error(`  CA SHA-256:  ${info.ca.fingerprint256}`);
+  } else if (info.mode === 'file') {
+    console.error(`  TLS:         certificate from ${info.certFile}`);
+  } else {
+    console.error('  TLS:         off - make sure a reverse proxy terminates HTTPS');
+  }
+  console.error(`  Services:    ${summary.length ? summary.join(', ') : '(none yet - add them in the web UI)'}`);
+  const code = auth.pendingSetupCode ?? auth.pendingRecoveryCode;
+  if (code) {
+    const what = auth.pendingSetupCode ? 'First-run setup' : 'Admin recovery';
     console.error('');
     console.error('  ================================================');
-    console.error(`  First-run setup code: ${setupCode}`);
-    console.error('  Open /admin and enter this code to set the admin password.');
+    console.error(`  ${what} code: ${code}`);
+    console.error(`  Open ${publicOrigin}/admin and enter this code to register a passkey.`);
     console.error('  ================================================');
     console.error('');
   }
 
   const shutdown = () => {
+    tls.stop();
     for (const s of mcpSessions.values()) s.transport.close().catch(() => {});
-    httpServer.close(() => process.exit(0));
+    server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000).unref();
   };
   process.once('SIGTERM', shutdown);
