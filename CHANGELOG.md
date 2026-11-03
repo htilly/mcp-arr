@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Synced with upstream `aplaceforallmystuff/mcp-arr` v1.7.3.** Fork-only features are kept; where both sides changed the same tool, the result is a superset:
+  - `sonarr_get_series` and `radarr_get_movies` accept upstream's `limit` / `offset` / `search` **and** the fork's `sortBy` / `sortDir`. Sorting is applied before pagination. **Behaviour change for fork users:** `limit` now defaults to 25 (max 100) instead of returning everything, and the response uses upstream's pagination fields (`total`, `returned`, `hasMore`, `nextOffset`, ...) instead of `totalCount` / `count` / `limitedTo`.
+  - The server starts in TRaSH-only mode when nothing is configured, instead of exiting.
+  - Readarr support is gone (removed upstream in 1.6.1); the Readarr tools no longer exist.
+
+### Fixed
+- `@modelcontextprotocol/sdk` is a runtime dependency again (as upstream). It sat in `devDependencies`, so a production install (`npm ci --omit=dev`, as the Dockerfile does) left it out and the container crashed on start with `ERR_MODULE_NOT_FOUND`.
+- `radarr_get_movies` reads `rating` / `ratingVotes` from the TMDB entry of Radarr's per-source `ratings` map. It read `ratings.value`, which does not exist on a Radarr movie, so the rating was never populated. The per-source `ratings` map from upstream is returned alongside.
+
 ### Added
 - **Bazarr (subtitles) integration** – optional, enabled with `BAZARR_URL` + `BAZARR_API_KEY`; server can run with only Bazarr configured:
   - `bazarr_status`, `bazarr_get_health`, `bazarr_get_badges` – System status, health, missing-subtitle counts
@@ -49,6 +59,137 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - `overseerr_decline_request` – Decline a pending media request
   - `overseerr_search` – Search for movies and TV shows (uses TMDB)
   - `overseerr_status` – Get Overseerr server status and version
+
+## [1.7.3] - 2026-07-29
+
+### Fixed
+- **Server no longer reports a stale version to clients.** `SERVER_VERSION` was hardcoded to `1.6.3` and had not been updated for three releases, so every client saw `1.6.3` in the `initialize` response regardless of the version actually running. It is now read from `package.json` at startup, which cannot drift. Falls back to `0.0.0-unknown` with a diagnostic on stderr if the file is unreadable, rather than failing startup.
+- **`server.json` no longer drifts from the released version.** The MCP registry manifest was also stuck at `1.6.3`, in both its top-level `version` and its npm package entry. Because it is plain JSON it cannot read `package.json` at runtime, so it is now rewritten at bump time by `scripts/sync-server-json.mjs`, wired into the npm `version` lifecycle script. Running `npm version patch|minor|major` keeps the manifest in step automatically.
+
+### Documentation
+- Documented `sonarr_refresh_series` and `radarr_refresh_movie` in the README tool tables. Both shipped in 1.6.1 (via [#9](https://github.com/aplaceforallmystuff/mcp-arr/pull/9)) but were never listed, leaving 43 of 45 tools documented.
+
+### Security
+- Bumped `@modelcontextprotocol/sdk` from 1.29.0 to **1.30.0** and refreshed `package-lock.json` to clear seven Dependabot advisories in transitive dependencies. All were pulled in via the SDK; none are direct dependencies of this project, and none are reachable from the code paths this server uses (it imports only `Server`, `StdioServerTransport` and `StreamableHTTPServerTransport`, and builds its own listener on `node:http`). The lockfile still matters because the Docker image installs with `npm ci`.
+  - `fast-uri` 3.1.2 → **3.1.4** (via `ajv`) — host confusion via literal backslash authority delimiter (GHSA-v2hh-gcrm-f6hx, high) and via failed IDN canonicalization (GHSA-4c8g-83qw-93j6, high).
+  - `hono` 4.12.26 → **4.12.32** — server-side XSS via JSX escaping bypass in `cx()` (GHSA-w62v-xxxg-mg59), `hono/jsx` cross-request context disclosure (GHSA-hvrm-45r6-mjfj), and API Gateway v1 adapter dropping a repeated request header during de-duplication (GHSA-xgm2-5f3f-mvvc). This server uses no JSX and no Lambda adapter.
+  - `@hono/node-server` 1.19.14 → **2.0.12** — `serve-static` path traversal on Windows via encoded backslash `%5C` (GHSA-frvp-7c67-39w9). Required the SDK bump: 1.29.0 pinned `^1.19.9`, which cannot reach the patched 2.0.5; 1.30.0 widens the range to `^1.19.9 || ^2.0.5`. This server does not use `serve-static`.
+  - `body-parser` 2.2.2 → **2.3.0** (via `express`) — denial of service when an invalid limit value silently disables size enforcement (GHSA-v422-hmwv-36x6). This server does not use Express.
+
+## [1.7.2] - 2026-06-30
+
+### Fixed
+- **HTTP transport no longer deadlocks behind a gateway/proxy** ([#22](https://github.com/aplaceforallmystuff/mcp-arr/pull/22), by [@rwlove](https://github.com/rwlove); fixes [#21](https://github.com/aplaceforallmystuff/mcp-arr/issues/21)). The previous implementation shared a single module-level `Server` and serialized every request through a queue, because one `Server` can only be connected to one transport at a time. The moment a streamable-HTTP client (e.g. an MCP gateway/proxy such as n8n) opened its long-lived `GET` SSE stream, that request never completed and blocked the queue permanently — every subsequent `POST` (`initialize`, `tools/list`, `tools/call`, …) hung with no response. The transport now builds a **fresh `Server` + `StreamableHTTPServerTransport` per request** (the SDK's documented stateless pattern) and tears them down on response close, so a long-lived stream can no longer block other requests. The stdio transport is unchanged. Verified: with a GET stream held open, a concurrent POST went from timing out at 8 s to returning in ~2 ms.
+
+## [1.7.1] - 2026-06-30
+
+### Security
+- Bumped `hono` from 4.12.22 to **4.12.26** ([#26](https://github.com/aplaceforallmystuff/mcp-arr/pull/26)) to clear five advisories affecting `hono <= 4.12.24`: CORS middleware reflecting any origin with credentials (GHSA-88fw-hqm2-52qc), `serve-static` path traversal via encoded backslash on Windows (GHSA-wwfh-h76j-fc44), body-limit bypass on AWS Lambda (GHSA-rv63-4mwf-qqc2), and `Set-Cookie` / repeated-header dropping in the Lambda adapters (GHSA-j6c9-x7qj-28xf, GHSA-wgpf-jwqj-8h8p). Thanks to [@acesplit](https://github.com/acesplit) (#25) for the early report.
+
+## [1.7.0] - 2026-06-30
+
+### Added
+- **Radarr feature expansion** ([#12](https://github.com/aplaceforallmystuff/mcp-arr/pull/12), by [@rappo](https://github.com/rappo)):
+  - `radarr_update_movie` — update an existing movie's monitored state, quality profile, and other editable fields
+  - `radarr_search_movies` — bulk-trigger searches across multiple movies at once
+  - `radarr_delete_queue_item` — remove a stuck or unwanted item from the Radarr download queue
+  - Quality-profile and quality fields surfaced on movie responses
+- **Tag-triggered release pipeline** ([#20](https://github.com/aplaceforallmystuff/mcp-arr/pull/20), based on [#11](https://github.com/aplaceforallmystuff/mcp-arr/pull/11) by [@alejandrosnz](https://github.com/alejandrosnz)):
+  - Multi-arch Docker images (`linux/amd64` + `linux/arm64`) built and pushed to **GHCR** on every `vX.Y.Z` tag, tagged `latest` / major / minor / exact
+  - GitHub Release created automatically with notes pulled from this CHANGELOG
+  - Hardened: every action pinned to a commit SHA, `workflow_dispatch` inputs passed via env vars, per-job least-privilege permissions, strict semver + package.json + CHANGELOG validation guards
+  - **No npm publish and no stored `NPM_TOKEN`** — the pipeline uses only the per-run, auto-expiring `GITHUB_TOKEN`. npm publishing stays manual and passkey-gated.
+- **`docker-compose.yml`** for self-hosters (n8n etc.) to run the server in HTTP mode in one command. Note: the compose HTTP endpoint is unauthenticated — intended for LAN / behind a reverse proxy only. Addresses the public-image request in [#5](https://github.com/aplaceforallmystuff/mcp-arr/issues/5).
+
+## [1.6.5] - 2026-06-11
+
+### Fixed
+- HTTP transport now runs in **stateless mode** — a fresh `StreamableHTTPServerTransport` per request with no `Mcp-Session-Id` issued — fixing `400 Bad Request: Mcp-Session-Id header is required` for MCP clients that do not echo the session header back (notably **Claude Code**). The stateful implementation in 1.6.3/1.6.4 only worked for clients that round-tripped the session id. Request handling is serialized so the shared server is only ever connected to one transport at a time, and a fresh transport per request still sidesteps the SDK 1.27.x stateless-reuse guard. Added a regression test that exercises the no-session-header path. Thanks to [@jakefriz](https://github.com/jakefriz) (#15) and [@alejandrosnz](https://github.com/alejandrosnz) (#11) for independently identifying the stateless fix.
+
+## [1.6.4] - 2026-06-10
+
+### Security
+- Bumped `@modelcontextprotocol/sdk` to `^1.29.0` to clear transitive CVEs in nested dependencies
+
+### Note
+- Supersedes the never-published-to-npm 1.6.3 (which was tagged but not released); 1.6.4 includes all 1.6.3 changes plus the dependency security update.
+
+## [1.6.3] - 2026-04-27
+
+### Fixed
+- Fixed remote HTTP MCP mode failing after initialization with `@modelcontextprotocol/sdk` 1.27.x by enabling stateful HTTP sessions with generated MCP session IDs (#5, reported by [@michaelheyman](https://github.com/michaelheyman))
+
+## [1.6.2] - 2026-04-22
+
+### Fixed
+- Upgraded `hono` and `path-to-regexp` to resolve 1 high and 2 moderate severity vulnerabilities (cookie name handling, path traversal in `toSSG`, static-serve middleware bypass, JSX SSR injection, IPv6 matching in `ipRestriction`, and ReDoS in `path-to-regexp`)
+
+## [1.6.1] - 2026-04-22
+
+### Added
+- Remote HTTP MCP mode via `MCP_TRANSPORT=http` (with `HOST`, `PORT`, `MCP_PATH` env vars)
+- Generic `search` and `fetch` tools for hosted/remote MCP clients (e.g. ChatGPT connectors)
+- Docker usage examples in the README for both stdio and HTTP mode
+- `limit` / `offset` pagination for:
+  - `sonarr_get_queue`
+  - `radarr_get_queue`
+  - `lidarr_get_queue`
+- `sonarr_refresh_series` and `radarr_refresh_movie` tools for triggering targeted metadata refresh ([#9](https://github.com/aplaceforallmystuff/mcp-arr/pull/9), contributed by [@ismael9291](https://github.com/ismael9291))
+- `limit` / `offset` / `search` pagination for `sonarr_get_series` and `radarr_get_movies` ([#9](https://github.com/aplaceforallmystuff/mcp-arr/pull/9), contributed by [@ismael9291](https://github.com/ismael9291))
+
+### Changed
+- The server now starts in TRaSH-only mode even when no local *arr services are configured
+- Queue responses now include pagination metadata (`total`, `returned`, `hasMore`, `nextOffset`, etc.)
+- Refresh tool responses validate that the target exists before dispatching the command, and echo the resolved `id` / `title` / `year`
+- README and server metadata updated to reflect remote MCP support and current versioning
+
+### Fixed
+- Broken README architecture image path
+- Version drift between `package.json`, `server.json`, and runtime version metadata
+
+### Removed
+- Readarr (Books) support — replaced by Booklore + Shelfmark in Docker stack
+
+## [1.5.4] - 2026-03-19
+
+### Fixed
+- Duplicate tool registrations for `sonarr_get_quality_profiles`, `sonarr_get_root_folders`, `radarr_get_quality_profiles`, and `radarr_get_root_folders` — each was registered twice (via `addConfigTools()` and manually), causing 8 duplicate entries ([#6](https://github.com/aplaceforallmystuff/mcp-arr/issues/6), reported by [@a1ad](https://github.com/a1ad))
+- Updated dependencies to fix 3 high severity vulnerabilities (hono, @hono/node-server, express-rate-limit)
+
+## [1.5.3] - 2026-02-27
+
+### Fixed
+- `lidarr_search` now returns `artistName` and `disambiguation` instead of generic `title` field
+- `lidarr_search` accepts `term`, `query`, `artist`, or `name` parameters with validation
+- Fixed null safety on `overview` field truncation in Lidarr search results
+
+Based on [PR #2](https://github.com/aplaceforallmystuff/mcp-arr/pull/2) by [@bndlfm](https://github.com/bndlfm).
+
+## [1.5.2] - 2026-02-27
+
+### Fixed
+- `@modelcontextprotocol/sdk` moved from devDependencies to dependencies — fixes `ERR_MODULE_NOT_FOUND` when installed via `npx` (#3)
+
+## [1.5.1] - 2026-02-27
+
+### Added
+- Optional `tags` parameter on all add tools (`sonarr_add_series`, `radarr_add_movie`, `lidarr_add_artist`, `readarr_add_author`) - accepts array of tag IDs from the corresponding `*_get_tags` tool
+
+## [1.5.0] - 2026-02-25
+
+### Added
+- `sonarr_add_series` - Add TV series to Sonarr library
+- `radarr_add_movie` - Add movies to Radarr library
+- `lidarr_add_artist` - Add artists to Lidarr library
+- `readarr_add_author` - Add authors to Readarr library
+- Helper tools for each service: `*_get_root_folders`, `*_get_quality_profiles`
+- `lidarr_get_metadata_profiles` and `readarr_get_metadata_profiles` helpers
+
+### Changed
+- Search tool descriptions now reference the add workflow (e.g., "returns tvdbId needed for sonarr_add_series")
+
+### Fixed
+- Dependency vulnerabilities in @modelcontextprotocol/sdk, ajv, hono, and qs
 
 ## [1.4.1] - 2026-01-13
 

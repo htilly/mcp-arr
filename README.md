@@ -1,23 +1,26 @@
 # MCP *arr Server
 
-![Architecture](docs/images/architecture-diagram.png)
+![Architecture](docs/mcp-arr-architecture-diagram.png)
 
 <!-- <p align="center">
   <img src="docs/mcp-arr-logo.png" alt="MCP *arr Server" width="400">
 </p> -->
 
+[![Oathe Security](https://img.shields.io/endpoint?url=https%3A%2F%2Faudit-engine.oathe.ai%2Fapi%2Fbadge%2Faplaceforallmystuff%2Fmcp-arr&style=for-the-badge&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCcgZmlsbD0nd2hpdGUnPjxwYXRoIGQ9J00xMiAyQzkuMjQgMiA3IDQuMjQgNyA3djNINmMtMS4xIDAtMiAuOS0yIDJ2OGMwIDEuMS45IDIgMiAyaDEyYzEuMSAwIDItLjkgMi0ydi04YzAtMS4xLS45LTItMi0yaC0xVjdjMC0yLjc2LTIuMjQtNS01LTV6bTMgMTBIOVY3YzAtMS42NiAxLjM0LTMgMy0zczMgMS4zNCAzIDN2M3onLz48L3N2Zz4=&labelColor=000000&cacheSeconds=3600)](https://oathe.ai/report/aplaceforallmystuff/mcp-arr)
 [![npm version](https://img.shields.io/npm/v/mcp-arr-server.svg)](https://www.npmjs.com/package/mcp-arr-server)
 [![CI](https://github.com/aplaceforallmystuff/mcp-arr/actions/workflows/ci.yml/badge.svg)](https://github.com/aplaceforallmystuff/mcp-arr/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io)
 
-MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, Readarr, Prowlarr, plus [Overseerr](https://overseerr.dev/) for request management and [Bazarr](https://www.bazarr.media/) for subtitles.
+MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, and Prowlarr, plus [Tautulli](https://tautulli.com/) for Plex statistics, [Overseerr](https://overseerr.dev/) for request management and [Bazarr](https://www.bazarr.media/) for subtitles.
+
+Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP mode for hosted MCP clients such as ChatGPT connectors.
 
 ## Why Use This?
 
 - **Unified media management** - Control all your *arr applications from one interface
 - **Natural language queries** - Ask about your library in plain English
-- **Cross-service search** - Find content across TV, movies, music, and books simultaneously
+- **Cross-service search** - Find content across TV, movies, and music simultaneously
 - **Download monitoring** - Check queue status and progress across all services
 - **Calendar integration** - See upcoming releases for all media types
 - **Configuration review** - Get AI-powered suggestions for optimizing your setup
@@ -30,7 +33,6 @@ MCP server for the [*arr media management suite](https://wiki.servarr.com/) - So
 | **Sonarr (TV)** | List series, view episodes, search shows, trigger downloads, check queue, view calendar, review setup |
 | **Radarr (Movies)** | List movies, search films, trigger downloads, check queue, view releases, review setup |
 | **Lidarr (Music)** | List artists, view albums, search musicians, trigger downloads, check queue, view calendar, review setup |
-| **Readarr (Books)** | List authors, view books, search writers, trigger downloads, check queue, view calendar, review setup |
 | **Prowlarr (Indexers)** | List indexers, search across all trackers, test health, view statistics |
 | **Tautulli (Plex)** | Activity, history, libraries, users, recently added, server status, terminate session |
 | **Overseerr (Requests)** | List requests, approve/decline, view users, search media, request management |
@@ -43,7 +45,7 @@ MCP server for the [*arr media management suite](https://wiki.servarr.com/) - So
 
 - Node.js 18+
 - At least one of:
-  - *arr application(s) with API access: [Sonarr](https://sonarr.tv/), [Radarr](https://radarr.video/), [Lidarr](https://lidarr.audio/), [Readarr](https://readarr.com/), [Prowlarr](https://prowlarr.com/)
+  - *arr application(s) with API access: [Sonarr](https://sonarr.tv/), [Radarr](https://radarr.video/), [Lidarr](https://lidarr.audio/), [Prowlarr](https://prowlarr.com/)
   - [Tautulli](https://tautulli.com/) (Plex monitoring and statistics)
   - [Overseerr](https://overseerr.dev/) (request management for Plex)
   - [Bazarr](https://www.bazarr.media/) (subtitle management for Sonarr/Radarr)
@@ -54,6 +56,80 @@ MCP server for the [*arr media management suite](https://wiki.servarr.com/) - So
 
 ```bash
 npx mcp-arr-server
+```
+
+### Remote HTTP Mode
+
+```bash
+MCP_TRANSPORT=http PORT=3000 npx mcp-arr-server
+```
+
+By default the remote server listens on `127.0.0.1:3000` and serves MCP on `/mcp`.
+
+Environment variables for remote mode:
+
+- `MCP_TRANSPORT=http` to enable remote Streamable HTTP transport
+- `HOST` to override the bind host (default `127.0.0.1`)
+- `PORT` to override the port (default `3000`)
+- `MCP_PATH` to override the MCP endpoint path (default `/mcp`)
+
+### Docker
+
+Prebuilt images are published to GitHub Container Registry on every release. You do not need to
+build anything:
+
+```bash
+docker pull ghcr.io/aplaceforallmystuff/mcp-arr:latest
+```
+
+Tags follow the release version — `latest`, `1`, `1.7`, and each exact version such as `1.7.3`.
+Pin to a major or minor tag if you want updates without surprises.
+
+Run in local stdio mode:
+
+```bash
+docker run --rm -i \
+  -e SONARR_URL=http://host.docker.internal:8989 \
+  -e SONARR_API_KEY=your-sonarr-api-key \
+  ghcr.io/aplaceforallmystuff/mcp-arr:latest
+```
+
+Run in remote HTTP mode:
+
+```bash
+docker run --rm -p 3000:3000 \
+  -e MCP_TRANSPORT=http \
+  -e HOST=0.0.0.0 \
+  -e PORT=3000 \
+  -e SONARR_URL=http://host.docker.internal:8989 \
+  -e SONARR_API_KEY=your-sonarr-api-key \
+  ghcr.io/aplaceforallmystuff/mcp-arr:latest
+```
+
+Minimal `docker-compose.yml`:
+
+```yaml
+services:
+  mcp-arr:
+    image: ghcr.io/aplaceforallmystuff/mcp-arr:latest
+    ports:
+      - "3000:3000"
+    environment:
+      MCP_TRANSPORT: http
+      HOST: 0.0.0.0
+      PORT: 3000
+      SONARR_URL: http://host.docker.internal:8989
+      SONARR_API_KEY: your-sonarr-api-key
+      RADARR_URL: http://host.docker.internal:7878
+      RADARR_API_KEY: your-radarr-api-key
+```
+
+#### Building it yourself
+
+Only needed if you are developing against a change that is not released yet:
+
+```bash
+docker build -t mcp-arr .
 ```
 
 ### From Source
@@ -97,8 +173,6 @@ Add to your Claude Desktop config file:
         "RADARR_API_KEY": "your-radarr-api-key",
         "LIDARR_URL": "http://localhost:8686",
         "LIDARR_API_KEY": "your-lidarr-api-key",
-        "READARR_URL": "http://localhost:8787",
-        "READARR_API_KEY": "your-readarr-api-key",
         "PROWLARR_URL": "http://localhost:9696",
         "PROWLARR_API_KEY": "your-prowlarr-api-key",
         "TAUTULLI_URL": "http://localhost:8181",
@@ -149,7 +223,7 @@ If you develop from source and run `npm run build`, the **published npm package*
   "mcpServers": {
     "arr": {
       "command": "node",
-      "args": ["/Users/Henrik.Tilly/Documents/dev/private/mcp-arr/dist/index.js"],
+      "args": ["/absolute/path/to/mcp-arr/dist/index.js"],
       "env": {
         "TAUTULLI_URL": "http://localhost:8181",
         "TAUTULLI_API_KEY": "your-tautulli-api-key",
@@ -167,19 +241,34 @@ Use your actual paths and API keys. Only include the services you use.
 
 4. **Claude Desktop**: Same idea — set `"command": "node"` and `"args": ["/absolute/path/to/mcp-arr/dist/index.js"]` with `env` in `claude_desktop_config.json`.
 
+**TRaSH-only mode**: if you don’t configure any *arr services, the server still starts and exposes the TRaSH Guides reference tools plus generic `search` and `fetch`.
+
+## ChatGPT / Remote MCP
+
+To use `mcp-arr` with ChatGPT, run the server in remote HTTP mode on a reachable host and connect ChatGPT to the `/mcp` endpoint.
+
+The server now exposes the generic `search` and `fetch` tools expected by ChatGPT-style remote MCP integrations:
+
+- `search` discovers matching *arr media and TRaSH profiles
+- `fetch` returns structured detail for a selected search result
+
+The existing service-specific tools remain available for richer local or power-user workflows.
+
 ## Usage Examples
 
 ### Library Management
 - "Show me all my TV series"
 - "What movies do I have in Radarr?"
 - "List all artists in my music library"
-- "How many books do I have by this author?"
 
-### Searching for Content
+### Searching & Adding Content
 - "Search for sci-fi shows on Sonarr"
 - "Find action movies from the 90s"
-- "Search for jazz albums"
-- "Look up fantasy book series"
+- "Add this show to my TV library"
+- "Add that movie to Radarr"
+- "Search for jazz albums and add this artist"
+- "Add this movie with my '4k' tag"
+- "What tags do I have in Sonarr?"
 
 ### Download Queue
 - "What's downloading right now?"
@@ -190,14 +279,12 @@ Use your actual paths and API keys. Only include the services you use.
 - "What TV episodes are coming this week?"
 - "Show upcoming movie releases"
 - "Any new albums coming out this month?"
-- "Show me upcoming book releases"
 
 ### Downloading Content
 - "What episodes of this show am I missing?"
 - "Download the missing episodes for that series"
 - "Search for this specific movie"
 - "Grab that album I'm missing"
-- "Download all missing books for this author"
 
 ### Indexer Management
 - "Are my indexers healthy?"
@@ -237,6 +324,8 @@ The AI will answer from the tool definitions (sortBy, limit, etc.) without needi
 |------|-------------|
 | `arr_status` | Get connection status for all configured *arr services |
 | `arr_search_all` | Search across all configured services simultaneously |
+| `search` | Generic discovery tool for remote MCP clients such as ChatGPT |
+| `fetch` | Generic detail-fetch tool for items returned by `search` |
 
 **Note:** `radarr_get_movies`, `radarr_search`, and `sonarr_get_series` include `imdbId`, `rating` (TMDB/TVDB), and `ratingVotes` from the connected *arr services.
 
@@ -244,9 +333,12 @@ The AI will answer from the tool definitions (sortBy, limit, etc.) without needi
 
 | Tool | Description |
 |------|-------------|
-| `sonarr_get_series` | List all TV series. Optional: sortBy (dateAdded, sizeOnDisk), sortDir (asc, desc), limit (e.g. 100) |
-| `sonarr_search` | Search for TV series to add |
-| `sonarr_get_queue` | View current download queue |
+| `sonarr_get_series` | List TV series in your library, with `limit`/`offset`/`search` pagination and optional `sortBy` (dateAdded, sizeOnDisk) / `sortDir` (asc, desc). Includes `imdbId` and rating |
+| `sonarr_search` | Search for TV series by name (returns tvdbId for adding) |
+| `sonarr_add_series` | Add a TV series to Sonarr (supports tags) |
+| `sonarr_get_root_folders` | Get available root folders for adding series |
+| `sonarr_get_quality_profiles` | Get available quality profiles for adding series |
+| `sonarr_get_queue` | View current download queue with `limit` and `offset` pagination |
 | `sonarr_get_calendar` | See upcoming episodes |
 | `sonarr_get_episodes` | List episodes for a series (shows missing vs available; includes episodeFileId for delete) |
 | `sonarr_search_missing` | Trigger search for all missing episodes in a series |
@@ -254,16 +346,24 @@ The AI will answer from the tool definitions (sortBy, limit, etc.) without needi
 | `sonarr_delete_series` | Delete a whole series (optionally delete files, add import list exclusion) |
 | `sonarr_delete_season` | Delete all episode files for a specific season |
 | `sonarr_delete_episode_files` | Delete specific episode file(s) by episode file ID |
+| `sonarr_refresh_series` | Trigger a metadata refresh for a specific series in Sonarr |
 
 ### Radarr Tools (Movies)
 
 | Tool | Description |
 |------|-------------|
-| `radarr_get_movies` | List all movies. Optional: sortBy (dateAdded, sizeOnDisk), sortDir (asc, desc), limit (e.g. 100) |
-| `radarr_search` | Search for movies to add |
-| `radarr_get_queue` | View current download queue |
+| `radarr_get_movies` | List movies in your library, with `limit`/`offset`/`search` pagination and optional `sortBy` (dateAdded, sizeOnDisk) / `sortDir` (asc, desc). Includes `imdbId` and rating |
+| `radarr_search` | Search for movies by name (returns tmdbId for adding) |
+| `radarr_add_movie` | Add a movie to Radarr (supports tags) |
+| `radarr_get_root_folders` | Get available root folders for adding movies |
+| `radarr_get_quality_profiles` | Get available quality profiles for adding movies |
+| `radarr_get_queue` | View current download queue with `limit` and `offset` pagination |
 | `radarr_get_calendar` | See upcoming releases |
 | `radarr_search_movie` | Trigger search to download a movie in your library |
+| `radarr_search_movies` | Bulk-trigger searches for multiple movie IDs at once |
+| `radarr_update_movie` | Update a movie's quality profile, monitored status, minimum availability, tags, or path |
+| `radarr_delete_queue_item` | Remove an item from the download queue (optionally blocklist the release) |
+| `radarr_refresh_movie` | Trigger a metadata refresh for a specific movie in Radarr |
 | `radarr_delete_movie` | Delete a movie (optionally delete files from disk, add import exclusion) |
 
 ### Lidarr Tools (Music)
@@ -271,24 +371,16 @@ The AI will answer from the tool definitions (sortBy, limit, etc.) without needi
 | Tool | Description |
 |------|-------------|
 | `lidarr_get_artists` | List all artists in your library |
-| `lidarr_search` | Search for artists to add |
-| `lidarr_get_queue` | View current download queue |
+| `lidarr_search` | Search for artists by name (returns foreignArtistId for adding) |
+| `lidarr_add_artist` | Add an artist to Lidarr (supports tags) |
+| `lidarr_get_root_folders` | Get available root folders for adding artists |
+| `lidarr_get_quality_profiles` | Get available quality profiles for adding artists |
+| `lidarr_get_metadata_profiles` | Get available metadata profiles for adding artists |
+| `lidarr_get_queue` | View current download queue with `limit` and `offset` pagination |
 | `lidarr_get_albums` | List albums for an artist (shows missing vs available) |
 | `lidarr_search_album` | Trigger search for a specific album |
 | `lidarr_search_missing` | Trigger search for all missing albums for an artist |
 | `lidarr_get_calendar` | See upcoming album releases |
-
-### Readarr Tools (Books)
-
-| Tool | Description |
-|------|-------------|
-| `readarr_get_authors` | List all authors in your library |
-| `readarr_search` | Search for authors to add |
-| `readarr_get_queue` | View current download queue |
-| `readarr_get_books` | List books for an author (shows missing vs available) |
-| `readarr_search_book` | Trigger search for specific book(s) |
-| `readarr_search_missing` | Trigger search for all missing books for an author |
-| `readarr_get_calendar` | See upcoming book releases |
 
 ### Prowlarr Tools (Indexers)
 
@@ -361,7 +453,7 @@ Series and episode IDs are Sonarr IDs; movie IDs are Radarr IDs. `arr_status` in
 
 ### Configuration Review Tools
 
-These tools are available for Sonarr, Radarr, Lidarr, and Readarr. Replace `{service}` with the service name (e.g., `sonarr_get_quality_profiles`).
+These tools are available for Sonarr, Radarr, and Lidarr. Replace `{service}` with the service name (e.g., `sonarr_get_quality_profiles`).
 
 | Tool | Description |
 |------|-------------|
@@ -379,7 +471,7 @@ The `{service}_review_setup` tool returns all configuration in a single call, en
 
 ### TRaSH Guides Tools
 
-Access community-curated quality profiles, custom formats, and naming conventions from [TRaSH Guides](https://trash-guides.info/) directly through Claude. These tools work without any *arr configuration - they fetch reference data from the TRaSH Guides GitHub repository.
+Access community-curated quality profiles, custom formats, and naming conventions from [TRaSH Guides](https://trash-guides.info/) directly through Claude or ChatGPT. These tools work without any *arr configuration - they fetch reference data from the TRaSH Guides GitHub repository.
 
 | Tool | Description |
 |------|-------------|
@@ -439,9 +531,9 @@ The *arr application is not running or the URL is incorrect. Verify:
 ### "Sonarr/Radarr/etc not configured"
 You tried to use a tool for a service that isn't configured. Add the corresponding URL and API_KEY environment variables.
 
-## Contributing
+## Need help building or securing MCP servers?
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+I build and maintain MCP servers like this one, and I review AI and agent setups for security. If your team needs a custom server, an integration, or a security review of one you already run, see [jimchristian.net/work](https://jimchristian.net/work/) or book a [discovery session](https://jimchristian.net/discovery/).
 
 ## License
 
