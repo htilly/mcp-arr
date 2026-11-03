@@ -524,8 +524,8 @@ function loadFiles(certFile: string, keyFile: string): TlsMaterial {
 function summarize(certPem: string): CertSummary {
   const c = new X509Certificate(certPem);
   return {
-    subject: c.subject.replace(/\n/g, ', '),
-    issuer: c.issuer.replace(/\n/g, ', '),
+    subject: (c.subject ?? '').replace(/\n/g, ', '),
+    issuer: (c.issuer ?? '').replace(/\n/g, ', '),
     notBefore: new Date(c.validFrom).toISOString(),
     notAfter: new Date(c.validTo).toISOString(),
     fingerprint256: c.fingerprint256,

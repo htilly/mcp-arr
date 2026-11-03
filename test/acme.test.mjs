@@ -226,7 +226,7 @@ test("TLS_MODE=acme gets a certificate via http-01, hot-swaps it and reuses it a
     // Restart: the stored certificate is served immediately, no new order
     await stop(mcp);
     mcp = startMcp(env);
-    await waitFor(async () => /Pebble Intermediate/.test(await peerIssuer(mcp.port, "mcp.example.test")), 15000, "restart");
+    await waitFor(async () => /Pebble Intermediate/.test(await peerIssuer(mcp.port, "mcp.example.test")), 15000, "restart").catch((e) => { throw new Error(e.message + "\n" + mcp.out()); });
     assert.match(mcp.out(), /certificate valid/);
     assert.doesNotMatch(mcp.out(), /requesting a certificate/);
   } finally {
