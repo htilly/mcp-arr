@@ -9,6 +9,9 @@
  *  - file: bring your own certificate (TLS_CERT_FILE / TLS_KEY_FILE), e.g. from a LAN CA such as
  *    step-ca (incl. its ACME server), Caddy, your router, or a DNS-01 certificate copied in.
  *    The files are watched and reloaded on change.
+ *  - acme: a publicly trusted certificate from Let's Encrypt (or any ACME CA), obtained and renewed
+ *    automatically - http-01 for servers reachable from the internet, dns-01 for LAN-only servers
+ *    and wildcards (see acme.ts). Account and certificate keys are stored in the encrypted config.
  *  - off: plain HTTP - only for running behind a reverse proxy that terminates TLS.
  */
 
@@ -19,14 +22,43 @@ import { GeneralName, GeneralSubtree, GeneralSubtrees, NameConstraints, id_ce_na
 import { X509Certificate, createPrivateKey, randomBytes, webcrypto } from 'node:crypto';
 import { existsSync, readFileSync, unwatchFile, watchFile } from 'node:fs';
 import { isIP } from 'node:net';
-import { ConfigStore, StoredKeyPair } from './config-store.js';
+import type { Server } from 'node:http';
+import { ConfigStore, StoredKeyPair, StoredTls } from './config-store.js';
+import {
+  AcmeClient,
+  AcmeSettings,
+  AcmeState,
+  DnsSolver,
+  LETSENCRYPT_STAGING,
+  PendingCname,
+  createDnsSolver,
+  errMsg,
+  generateKeyPem,
+  startChallengeServer,
+} from './acme.js';
 
 type CryptoKey = webcrypto.CryptoKey;
 type CryptoKeyPair = webcrypto.CryptoKeyPair;
 
 x509.cryptoProvider.set(webcrypto as never);
 
-export type TlsMode = 'internal' | 'file' | 'off';
+export type TlsMode = 'internal' | 'file' | 'acme' | 'off';
+
+/** ACME CAs whose roots are in the public trust stores (for the OAuth auto check). */
+const PUBLIC_ACME_HOSTS = ['acme-v02.api.letsencrypt.org', 'acme.zerossl.com', 'dv.acme-v02.api.pki.goog', 'api.buypass.com', 'acme.ssl.com'];
+
+export interface AcmeInfo {
+  directoryUrl: string;
+  staging: boolean;
+  challenge: string;
+  dnsProvider?: string;
+  domains: string[];
+  status: 'pending' | 'issuing' | 'valid' | 'waiting-dns' | 'error';
+  /** acme-dns: CNAME records the user still has to create. */
+  pendingCnames?: PendingCname[];
+  nextAttempt?: string;
+  httpPort?: number;
+}
 
 export interface TlsMaterial {
   cert: string;
@@ -49,6 +81,7 @@ export interface TlsInfo {
   leaf?: CertSummary;
   certFile?: string;
   keyFile?: string;
+  acme?: AcmeInfo;
   lastError?: string;
 }
 
@@ -63,6 +96,8 @@ export interface TlsManagerOptions {
   keyFile?: string;
   /** Server certificate lifetime in days (default 397, the browser maximum). */
   leafDays?: number;
+  /** TLS_MODE=acme settings (see acmeSettingsFromEnv). */
+  acme?: AcmeSettings;
 }
 
 const ALG = { name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256' } as const;
@@ -82,6 +117,18 @@ export class TlsManager {
   private listeners: ((m: TlsMaterial) => void)[] = [];
   private timer?: NodeJS.Timeout;
   private lastError?: string;
+  private readonly acme?: AcmeSettings;
+  private acmeClient?: AcmeClient;
+  private dnsSolver?: DnsSolver;
+  private challengeServer?: Server;
+  private readonly httpTokens = new Map<string, string>();
+  private acmeStatus: AcmeInfo['status'] = 'pending';
+  private pendingCnames?: PendingCname[];
+  private acmeTimer?: NodeJS.Timeout;
+  private nextAttempt?: Date;
+  private failures = 0;
+  private issuing = false;
+  private stopped = false;
 
   constructor(opts: TlsManagerOptions) {
     this.mode = opts.mode;
@@ -91,6 +138,8 @@ export class TlsManager {
     this.leafDays = opts.leafDays ?? 397;
     this.certFile = opts.certFile;
     this.keyFile = opts.keyFile;
+    this.acme = opts.acme;
+    if (this.mode === 'acme' && !this.acme) throw new Error('TLS_MODE=acme needs ACME settings');
   }
 
   /** Current certificate + key (undefined in 'off' mode). */
@@ -109,6 +158,16 @@ export class TlsManager {
    * Returns a description of the problem, or undefined if nothing looks wrong.
    */
   publicTrustProblem(host: string): string | undefined {
+    if (this.mode === 'acme') {
+      if (this.acme!.staging || this.acme!.directoryUrl === LETSENCRYPT_STAGING) return "it comes from Let's Encrypt staging (ACME_STAGING=true), which is not trusted";
+      const dirHost = new URL(this.acme!.directoryUrl).hostname;
+      if (!PUBLIC_ACME_HOSTS.includes(dirHost)) return `it is issued by a custom ACME CA (${dirHost}) that may not be publicly trusted`;
+      const covers = (d: string) => d === host || (d.startsWith('*.') && host.endsWith(d.slice(1)) && host.split('.').length === d.split('.').length);
+      if (!this.acme!.domains.some(covers)) {
+        return `ACME_DOMAINS does not include ${host}`;
+      }
+      return undefined;
+    }
     if (this.mode !== 'file' || !this.material) return undefined;
     let cert: X509Certificate;
     try {
@@ -134,6 +193,19 @@ export class TlsManager {
       ...(this.mode === 'internal' && tls.ca ? { ca: { ...summarize(tls.ca.certPem), permitted: tls.ca.permitted } } : {}),
       ...(this.material ? { leaf: summarize(this.material.cert) } : {}),
       ...(this.mode === 'file' ? { certFile: this.certFile, keyFile: this.keyFile } : {}),
+      ...(this.mode === 'acme' ? {
+        acme: {
+          directoryUrl: this.acme!.directoryUrl,
+          staging: this.acme!.staging,
+          challenge: this.acme!.challenge,
+          dnsProvider: this.acme!.dnsProvider,
+          domains: this.acme!.domains,
+          status: this.acmeStatus,
+          ...(this.pendingCnames?.length ? { pendingCnames: this.pendingCnames } : {}),
+          ...(this.nextAttempt ? { nextAttempt: this.nextAttempt.toISOString() } : {}),
+          ...(this.acme!.challenge === 'http-01' ? { httpPort: this.acme!.httpPort } : {}),
+        },
+      } : {}),
       ...(this.lastError ? { lastError: this.lastError } : {}),
     };
   }
@@ -144,6 +216,10 @@ export class TlsManager {
       if (!this.certFile || !this.keyFile) throw new Error('TLS_MODE=file requires TLS_CERT_FILE and TLS_KEY_FILE');
       this.material = loadFiles(this.certFile, this.keyFile);
       for (const f of [this.certFile, this.keyFile]) watchFile(f, { interval: 5000 }, () => this.reloadFiles());
+      return;
+    }
+    if (this.mode === 'acme') {
+      await this.initAcme();
       return;
     }
     await this.ensureInternal();
@@ -159,7 +235,10 @@ export class TlsManager {
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
+    if (this.acmeTimer) clearTimeout(this.acmeTimer);
+    this.challengeServer?.close();
     if (this.certFile) unwatchFile(this.certFile);
     if (this.keyFile) unwatchFile(this.keyFile);
   }
@@ -184,6 +263,103 @@ export class TlsManager {
     }
   }
 
+  // ----- ACME (Let's Encrypt) -----
+
+  private async initAcme(): Promise<void> {
+    const a = this.acme!;
+    const tls = this.store.getTls();
+    let state = tls.acme;
+    if (!state || state.directoryUrl !== a.directoryUrl) {
+      // New CA (or staging -> production): new account, keep acme-dns registrations
+      state = { directoryUrl: a.directoryUrl, accountKeyPem: await generateKeyPem(), acmeDns: state?.acmeDns };
+      this.saveAcme(state);
+    }
+    const saveState = (st: AcmeState) => this.saveAcme(st);
+    const log = (m: string) => console.error(`ACME: ${m}`);
+    this.acmeClient = new AcmeClient({ settings: a, state: state as AcmeState, saveState, log, httpTokens: this.httpTokens });
+    this.dnsSolver = createDnsSolver(a, state as AcmeState, saveState, log);
+
+    const cert = state.cert;
+    if (cert && cert.directoryUrl === a.directoryUrl && sameSet(cert.sans, a.domains) && Date.parse(new X509Certificate(cert.certPem).validTo) > Date.now()) {
+      this.material = { cert: cert.certPem, key: cert.keyPem };
+      this.acmeStatus = 'valid';
+    } else {
+      // Serve a temporary self-signed certificate until the CA has issued the real one
+      this.material = await createSelfSigned(a.domains);
+      this.acmeStatus = 'pending';
+    }
+    if (a.challenge === 'http-01') this.challengeServer = await startChallengeServer(a, this.httpTokens);
+    this.scheduleAcme(0);
+  }
+
+  private saveAcme(state: NonNullable<StoredTls['acme']>): void {
+    this.store.setTls({ ...this.store.getTls(), acme: state });
+  }
+
+  private scheduleAcme(ms: number): void {
+    if (this.stopped) return;
+    if (this.acmeTimer) clearTimeout(this.acmeTimer);
+    this.nextAttempt = new Date(Date.now() + ms);
+    this.acmeTimer = setTimeout(() => void this.acmeTick(), ms);
+    this.acmeTimer.unref();
+  }
+
+  private needsAcmeCert(): boolean {
+    const cert = this.store.getTls().acme?.cert;
+    if (!cert || cert.directoryUrl !== this.acme!.directoryUrl || !sameSet(cert.sans, this.acme!.domains)) return true;
+    const c = new X509Certificate(cert.certPem);
+    const from = Date.parse(c.validFrom);
+    const to = Date.parse(c.validTo);
+    // Renew when a third of the lifetime is left (30 days for a 90-day certificate)
+    return to - Date.now() < (to - from) / 3;
+  }
+
+  /** Issue or renew when needed. Exposed for tests. */
+  async acmeTick(): Promise<void> {
+    if (this.issuing || this.stopped) return;
+    this.issuing = true;
+    try {
+      if (!this.needsAcmeCert()) {
+        this.acmeStatus = 'valid';
+        this.scheduleAcme(12 * 3600_000);
+        return;
+      }
+      // acme-dns: the one-time CNAME must exist first - checking is free, asking the CA is not
+      if (this.dnsSolver?.pendingSetup) {
+        this.pendingCnames = await this.dnsSolver.pendingSetup();
+        if (this.pendingCnames.length) {
+          this.acmeStatus = 'waiting-dns';
+          this.lastError = `Waiting for DNS: create ${this.pendingCnames.map(p => `${p.name} CNAME ${p.target}`).join(' and ')} at your DNS provider`;
+          console.error(`ACME: ${this.lastError}`);
+          this.scheduleAcme(120_000);
+          return;
+        }
+      }
+      this.acmeStatus = 'issuing';
+      console.error(`ACME: requesting a certificate for ${this.acme!.domains.join(', ')} from ${new URL(this.acme!.directoryUrl).host} (${this.acme!.challenge}${this.acme!.dnsProvider ? ` via ${this.acme!.dnsProvider}` : ''})`);
+      const issued = await this.acmeClient!.issue(this.dnsSolver);
+      const acme = this.store.getTls().acme!;
+      this.saveAcme({ ...acme, cert: { ...issued, sans: this.acme!.domains, directoryUrl: this.acme!.directoryUrl } });
+      this.material = { cert: issued.certPem, key: issued.keyPem };
+      this.acmeStatus = 'valid';
+      this.lastError = undefined;
+      this.failures = 0;
+      console.error(`ACME: certificate issued, valid until ${new X509Certificate(issued.certPem).validTo}`);
+      this.emit();
+      this.scheduleAcme(12 * 3600_000);
+    } catch (err) {
+      this.failures++;
+      // Let's Encrypt allows 5 failed validations per name per hour - back off: 15m, 30m, 1h, 2h ... 12h
+      const delay = Math.min(12 * 3600_000, 15 * 60_000 * 2 ** (this.failures - 1));
+      this.acmeStatus = 'error';
+      this.lastError = `Certificate request failed: ${errMsg(err)}`;
+      console.error(`ACME: ${this.lastError} - retrying in ${Math.round(delay / 60_000)} min`);
+      this.scheduleAcme(delay);
+    } finally {
+      this.issuing = false;
+    }
+  }
+
   // ----- internal CA -----
 
   private async ensureInternal(): Promise<void> {
@@ -196,7 +372,7 @@ export class TlsManager {
       && new Date(new X509Certificate(tls.ca.certPem).validTo).getTime() > Date.now() + 2 * this.leafDays * DAY_MS;
     if (!caValid) {
       if (tls.ca) console.error('Host names changed or CA expiring - generating a NEW local CA. Re-install the root certificate on your devices.');
-      tls = { ca: { ...(await createCa(this.caPermitted)), permitted: this.caPermitted } };
+      tls = { ...tls, ca: { ...(await createCa(this.caPermitted)), permitted: this.caPermitted }, leaf: undefined };
       changed = true;
     }
 
@@ -289,6 +465,26 @@ async function createCa(permitted: string[]): Promise<StoredKeyPair> {
   return { certPem: cert.toString('pem') + '\n', keyPem: await exportKeyPem(keys.privateKey) };
 }
 
+/** Short-lived self-signed certificate, served while the first ACME certificate is pending. */
+async function createSelfSigned(names: string[]): Promise<TlsMaterial> {
+  const keys = (await webcrypto.subtle.generateKey(ALG, true, ['sign', 'verify'])) as CryptoKeyPair;
+  const dnsNames = names.map(n => n.replace(/^\*\./, ''));
+  const cert = await x509.X509CertificateGenerator.createSelfSigned({
+    serialNumber: serial(),
+    name: `CN=${dnsNames[0]}, O=mcp-arr (temporary - waiting for ACME)`,
+    notBefore: new Date(Date.now() - 3600_000),
+    notAfter: new Date(Date.now() + 90 * DAY_MS),
+    keys,
+    signingAlgorithm: ALG,
+    extensions: [
+      new x509.BasicConstraintsExtension(false, undefined, true),
+      new x509.ExtendedKeyUsageExtension([x509.ExtendedKeyUsage.serverAuth]),
+      new x509.SubjectAlternativeNameExtension(names.map(value => ({ type: 'dns' as const, value }))),
+    ],
+  });
+  return { cert: cert.toString('pem') + '\n', key: await exportKeyPem(keys.privateKey) };
+}
+
 async function createLeaf(ca: StoredKeyPair, names: string[], days: number): Promise<StoredKeyPair> {
   const caCert = new x509.X509Certificate(ca.certPem);
   const caKey = await importKeyPem(ca.keyPem);
@@ -328,8 +524,8 @@ function loadFiles(certFile: string, keyFile: string): TlsMaterial {
 function summarize(certPem: string): CertSummary {
   const c = new X509Certificate(certPem);
   return {
-    subject: c.subject.replace(/\n/g, ', '),
-    issuer: c.issuer.replace(/\n/g, ', '),
+    subject: (c.subject ?? '').replace(/\n/g, ', '),
+    issuer: (c.issuer ?? '').replace(/\n/g, ', '),
     notBefore: new Date(c.validFrom).toISOString(),
     notAfter: new Date(c.validTo).toISOString(),
     fingerprint256: c.fingerprint256,
