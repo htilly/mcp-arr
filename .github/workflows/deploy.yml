@@ -26,17 +26,21 @@ name: Deploy to tillyse
 # The MCP server runs HTTPS with per-user access tokens (see the README, "Remote
 # server"), so an unauthenticated request is answered 401 - and that is a healthy
 # server. The liveness check below accepts either "200 + serverInfo" (an older,
-# unauthenticated image, e.g. after a rollback) or "401 + WWW-Authenticate:
-# Bearer" (auth enforced). Two OPTIONAL runner variables make it stricter:
+# unauthenticated image, e.g. after a rollback) or a "401" that carries a
+# "WWW-Authenticate: Bearer" challenge or a JSON-RPC error body (auth enforced).
+# Two OPTIONAL runner variables make it stricter:
 #   MCP_ARR_CA_FILE   path to the server's root certificate (the /ca.crt of the
 #                     built-in CA). Without it an https APP_URL that the runner
 #                     does not already trust is checked with certificate
 #                     verification OFF - liveness only, and the token below is
 #                     never sent.
-#   MCP_DEPLOY_TOKEN  an access token (create it in the web UI, e.g. for a
+#   MCP_CHECK_TOKEN  an access token (create it in the web UI, e.g. for a
 #                     "deploy" user). With it the check also runs a full
 #                     authenticated initialize. Only ever sent over a verified
 #                     https connection, never printed.
+# After a rollback the previous image may be an older server that speaks plain
+# http while APP_URL is https: only the rollback step then also accepts the same
+# host:port over http (liveness only, with a warning, no token).
 
 on:
   workflow_run:
@@ -196,9 +200,13 @@ jobs:
       #
       # Passes when POST /mcp initialize answers
       #   - 200 with serverInfo        (server without authentication), or
-      #   - 401 + WWW-Authenticate: Bearer   (authentication enforced; the server
-      #     is up), and, if MCP_DEPLOY_TOKEN is set and the TLS connection is
-      #     verified, an authenticated initialize then answers 200 with serverInfo.
+      #   - 401 + a "WWW-Authenticate: Bearer" challenge or a JSON-RPC error body
+      #     (authentication enforced; the server is up), and, if MCP_CHECK_TOKEN
+      #     is set and the TLS connection is verified, an authenticated initialize
+      #     then answers 200 with serverInfo.
+      # With LIVENESS_PLAIN_HTTP_OK=1 (set by the rollback step only) an https
+      # APP_URL whose server answers with a TLS-protocol error (curl 35: a plain
+      # http server) is retried over http on the same host:port.
       #
       # Redaction: the Actions log is PUBLIC. Only status codes and yes/no facts
       # are printed - never a response body, never the token. The token reaches
@@ -212,7 +220,8 @@ jobs:
           cat > "$DIR/liveness.sh" <<'LIVENESS'
           #!/usr/bin/env bash
           # usage: liveness.sh [attempts] [seconds-between-attempts]
-          # env:   APP_URL (required), MCP_ARR_CA_FILE, MCP_DEPLOY_TOKEN (optional)
+          # env:   APP_URL (required), MCP_ARR_CA_FILE, MCP_CHECK_TOKEN (optional),
+          #        LIVENESS_PLAIN_HTTP_OK=1 (allow an http retry for an https APP_URL)
           set -uo pipefail
           ATTEMPTS="${1:-24}"
           PAUSE="${2:-5}"
@@ -223,6 +232,9 @@ jobs:
           TMP=$(mktemp -d)
           trap 'rm -rf "$TMP"' EXIT
 
+          BASE="$APP_URL"
+          SUFFIX=""
+          downgraded=0
           tls=()
           [ -n "${MCP_ARR_CA_FILE:-}" ] && tls=(--cacert "$MCP_ARR_CA_FILE")
           verified=0
@@ -230,14 +242,14 @@ jobs:
           warned=0
 
           token_file=""
-          if [ -n "${MCP_DEPLOY_TOKEN:-}" ]; then
+          if [ -n "${MCP_CHECK_TOKEN:-}" ]; then
             token_file="$TMP/auth-header"
-            printf 'Authorization: Bearer %s\n' "$MCP_DEPLOY_TOKEN" > "$token_file"
+            printf 'Authorization: Bearer %s\n' "$MCP_CHECK_TOKEN" > "$token_file"
           fi
 
           summary() {
             if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-              printf '\nMCP check: %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+              printf '\nMCP check: %s%s\n' "$1" "$SUFFIX" >> "$GITHUB_STEP_SUMMARY"
             fi
             return 0
           }
@@ -251,7 +263,7 @@ jobs:
               ${tls[@]+"${tls[@]}"} \
               -H 'Content-Type: application/json' \
               -H 'Accept: application/json, text/event-stream' \
-              "$@" -X POST "$APP_URL/mcp" --data "$INIT" 2>/dev/null)
+              "$@" -X POST "$BASE/mcp" --data "$INIT" 2>/dev/null)
             CURL_RC=$?
             CODE="${CODE:-000}"
           }
@@ -273,6 +285,21 @@ jobs:
               fi
               post_init "$TMP/r"
             fi
+            # Rollback only: the previous image may speak plain http on the port an
+            # https APP_URL points at (curl 35 = "wrong version number", 52/56 =
+            # connection dropped). Retry the same host:port over http - liveness
+            # only, never with the token.
+            if [ "${LIVENESS_PLAIN_HTTP_OK:-0}" = 1 ] && [ "$downgraded" = 0 ] \
+               && [ "${APP_URL#https://}" != "$APP_URL" ] \
+               && { [ "$CURL_RC" -eq 35 ] || [ "$CURL_RC" -eq 52 ] || [ "$CURL_RC" -eq 56 ]; }; then
+              BASE="http://${APP_URL#https://}"
+              downgraded=1
+              verified=0
+              tls=()
+              SUFFIX=" [answered over plain http: an older image after a rollback; the token was not sent]"
+              echo "::warning::$APP_URL does not speak TLS but the same host:port answers over http (older image after a rollback?): checking liveness over http, token not sent"
+              post_init "$TMP/r"
+            fi
             if [ "$CURL_RC" -eq 77 ]; then
               echo "::error::curl cannot use MCP_ARR_CA_FILE (exit 77) - is it a PEM certificate?"
               summary "FAILED: MCP_ARR_CA_FILE could not be used"
@@ -285,15 +312,15 @@ jobs:
               exit 0
             fi
 
-            if [ "$CODE" = "401" ] && grep -qi '^www-authenticate:[[:space:]]*bearer' "$TMP/r.hdr"; then
-              echo "/mcp initialize http=401 with Bearer challenge: the server is up and enforces authentication"
+            if [ "$CODE" = "401" ] && { grep -qi '^www-authenticate:[[:space:]]*bearer' "$TMP/r.hdr" || grep -q '"jsonrpc"' "$TMP/r.body"; }; then
+              echo "/mcp initialize http=401 (Bearer challenge or JSON-RPC error): the server is up and enforces authentication"
               if [ -z "$token_file" ]; then
-                echo "::notice::MCP_DEPLOY_TOKEN is not set - authentication was not exercised end to end"
-                summary "server up, authentication enforced (no MCP_DEPLOY_TOKEN, so no authenticated request was made)"
+                echo "::notice::MCP_CHECK_TOKEN is not set - authentication was not exercised end to end"
+                summary "server up, authentication enforced (no MCP_CHECK_TOKEN, so no authenticated request was made)"
                 exit 0
               fi
               if [ "$verified" != 1 ]; then
-                echo "::warning::MCP_DEPLOY_TOKEN is set but the connection is not verified https - token not sent"
+                echo "::warning::MCP_CHECK_TOKEN is set but the connection is not verified https - token not sent"
                 summary "server up, authentication enforced (token NOT sent: connection not verified https)"
                 exit 0
               fi
@@ -304,7 +331,7 @@ jobs:
                 exit 0
               fi
               if [ "$CODE" = "401" ] || [ "$CODE" = "403" ]; then
-                echo "::error::MCP_DEPLOY_TOKEN was rejected (http=$CODE) - revoked token or deleted user?"
+                echo "::error::MCP_CHECK_TOKEN was rejected (http=$CODE) - revoked token or deleted user?"
                 summary "FAILED: the access token was rejected (http=$CODE)"
                 exit 1
               fi
@@ -492,7 +519,7 @@ jobs:
 
           # The previous image may be the older unauthenticated server or this
           # authenticated one - the liveness check accepts both.
-          if bash "$RUNNER_TEMP/mcp-arr/liveness.sh" 24 5; then
+          if LIVENESS_PLAIN_HTTP_OK=1 bash "$RUNNER_TEMP/mcp-arr/liveness.sh" 24 5; then
             echo "rolled back, mcp-arr answers on /mcp"
             exit 0
           fi

@@ -184,6 +184,7 @@ export class Auth {
         break;
     }
     if (input.kind !== 'add' && !name) throw new AuthError(400, 'Please enter your name');
+    if (input.kind !== 'add' && this.store.isNameTaken(name)) throw new AuthError(400, 'That name is already taken');
 
     const options = await generateRegistrationOptions({
       rpName: this.rpName,
@@ -267,6 +268,62 @@ export class Auth {
         return this.store.createUser(flow.name, flow.role, stored, flow.handle);
       }
     }
+  }
+
+  // ---------- name / password ----------
+
+  /** Create a user that signs in with name + password (setup, recovery or invite flows). */
+  registerWithPassword(input: {
+    kind: Exclude<RegistrationKind, 'add'>;
+    name?: string;
+    password?: string;
+    code?: string;
+    inviteToken?: string;
+  }): StoredUser {
+    const name = (input.name ?? '').trim();
+    let role: Role = 'user';
+    let inviteId: string | undefined;
+    switch (input.kind) {
+      case 'setup':
+        if (!this.setupCode) throw new AuthError(409, 'Setup already completed');
+        if (!input.code || !safeEqual(input.code.trim().toUpperCase(), this.setupCode)) {
+          throw new AuthError(403, 'Invalid setup code (see the server log)');
+        }
+        role = 'admin';
+        break;
+      case 'recovery':
+        if (!this.recoveryCode) throw new AuthError(409, 'Recovery is not enabled (start the server with ADMIN_RECOVERY=true)');
+        if (!input.code || !safeEqual(input.code.trim().toUpperCase(), this.recoveryCode)) {
+          throw new AuthError(403, 'Invalid recovery code (see the server log)');
+        }
+        role = 'admin';
+        break;
+      case 'invite': {
+        const invite = input.inviteToken ? this.store.findInvite(input.inviteToken) : undefined;
+        if (!invite) throw new AuthError(403, 'This invite link is invalid or has expired');
+        role = invite.role;
+        inviteId = invite.id;
+        break;
+      }
+    }
+    if (!name) throw new AuthError(400, 'Please enter your name');
+    let user: StoredUser;
+    try {
+      user = this.store.createUser(name, role, undefined, randomBytes(32).toString('base64url'), input.password ?? '');
+    } catch (error) {
+      throw new AuthError(400, error instanceof Error ? error.message : String(error));
+    }
+    // Consume one-time secrets only after the account exists
+    if (input.kind === 'setup') this.setupCode = undefined;
+    else if (input.kind === 'recovery') this.recoveryCode = undefined;
+    else if (inviteId) this.store.deleteInvite(inviteId);
+    return user;
+  }
+
+  loginWithPassword(name: string, password: string): StoredUser {
+    const user = this.store.verifyPassword(name, password);
+    if (!user) throw new AuthError(401, 'Wrong name or password');
+    return user;
   }
 
   // ---------- login ----------

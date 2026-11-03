@@ -9,13 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 - **BREAKING (HTTP mode):** `MCP_TRANSPORT=http` now serves **HTTPS with authentication**. It requires `PUBLIC_URL` and a writable `CONFIG_PATH`, and every MCP request needs a per-user access token created in the web UI. Existing unauthenticated plain-HTTP setups (e.g. n8n pointing at `http://host:3000/mcp`) must be updated - see README "Remote server". `TLS_MODE=off` keeps plain HTTP for use behind a TLS-terminating reverse proxy, but tokens are still required. stdio mode is unchanged.
-- **Deploy workflow** (`deploy.yml`): the post-deploy check now works with the authenticated HTTPS server. It accepts `200` (older unauthenticated image, e.g. after a rollback) or `401` + `WWW-Authenticate: Bearer` (auth enforced), and, when `MCP_DEPLOY_TOKEN` is set on the runner, also runs an authenticated `initialize` over verified HTTPS (`MCP_ARR_CA_FILE`). Responses and the token are never printed. The host compose file must run the HTTPS mode - see README "Self-hosted deploy".
+- **Deploy workflow** (`deploy.yml`): the post-deploy check now works with the authenticated HTTPS server. It accepts `200` (older unauthenticated image, e.g. after a rollback) or `401` + `WWW-Authenticate: Bearer` (auth enforced), and, when `MCP_CHECK_TOKEN` is set on the runner, also runs an authenticated `initialize` over verified HTTPS (`MCP_ARR_CA_FILE`). An untrusted certificate falls back to an unverified liveness check with a warning (the token is never sent over it), and the rollback step also accepts a plain-HTTP older image behind an `https://` `APP_URL`. Responses and the token are never printed. The host compose file must run the HTTPS mode - see README "Self-hosted deploy".
 - **Synced with upstream `aplaceforallmystuff/mcp-arr` v1.7.3.** Fork-only features are kept; where both sides changed the same tool, the result is a superset:
   - `sonarr_get_series` and `radarr_get_movies` accept upstream's `limit` / `offset` / `search` **and** the fork's `sortBy` / `sortDir`. Sorting is applied before pagination. **Behaviour change for fork users:** `limit` now defaults to 25 (max 100) instead of returning everything, and the response uses upstream's pagination fields (`total`, `returned`, `hasMore`, `nextOffset`, ...) instead of `totalCount` / `count` / `limitedTo`.
   - The server starts in TRaSH-only mode when nothing is configured, instead of exiting.
   - Readarr support is gone (removed upstream in 1.6.1); the Readarr tools no longer exist.
 
+### Added
+- Web UI: simple **name + password** sign-in as an alternative to passkeys. Available in setup, recovery and invite flows, and under "My sign-in" for existing users (set / change / remove). Passwords are scrypt-hashed, minimum 8 characters, rate-limited like other sign-in attempts. User names are now unique (case-insensitive). The UI works on pages where passkeys are unavailable (untrusted certificate).
+
 ### Fixed
+- Passkey errors in the web UI now show the browser's error name/message and a hint about the usual cause (untrusted root certificate, wrong host name) instead of only "cancelled or timed out".
 - `@modelcontextprotocol/sdk` is a runtime dependency again (as upstream). It sat in `devDependencies`, so a production install (`npm ci --omit=dev`, as the Dockerfile does) left it out and the container crashed on start with `ERR_MODULE_NOT_FOUND`.
 - `radarr_get_movies` reads `rating` / `ratingVotes` from the TMDB entry of Radarr's per-source `ratings` map. It read `ratings.value`, which does not exist on a Radarr movie, so the rating was never populated. The per-source `ratings` map from upstream is returned alongside.
 

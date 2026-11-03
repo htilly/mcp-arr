@@ -182,7 +182,7 @@ Run mcp-arr **once** on your server (e.g. next to Sonarr/Radarr) and point all M
 
 - **HTTPS without Let's Encrypt** – a built-in certificate authority issues and renews the server certificate offline. You install its root certificate once per device. The CA is *name-constrained* to your server's names, so it cannot be abused to impersonate other websites. You can also bring your own certificate (step-ca, Caddy, your router, …).
 - **Encrypted at rest** – the whole config file (API keys, users, passkeys, token hashes, CA private keys) is AES-256-GCM encrypted.
-- **Per-user login with passkeys** – no passwords. Roles: *admin* (services, users, invites, certificates) and *user* (own passkeys and access tokens).
+- **Per-user login with passkeys or name + password** – roles: *admin* (services, users, invites, certificates) and *user* (own sign-in methods and access tokens). Passwords are scrypt-hashed inside the encrypted config; a user can have a password, passkeys, or both.
 - **Per-user MCP access tokens** – every client gets its own token, revocable at any time.
 
 > **Claude custom connectors** (claude.ai, mobile, Desktop "Connectors") are called from Anthropic's cloud and need a public internet address with OAuth, so they can't reach an offline server. Use **Claude Code** or **Claude Desktop via `mcp-remote`** – both connect from your own machine.
@@ -298,7 +298,9 @@ The repo's `deploy.yml` pulls the image built from `main` and recreates the `mcp
    | Variable | Effect |
    |----------|--------|
    | `MCP_ARR_CA_FILE` | Path to a copy of the server's root certificate (`/ca.crt`). Without it, a certificate the runner doesn't trust is checked with verification **off** (liveness only, with a warning) and no token is ever sent. |
-   | `MCP_DEPLOY_TOKEN` | An access token (create a "deploy" user in the web UI and a token for it). With it, the deploy also runs an authenticated `initialize`, so a broken auth setup fails the deploy instead of passing on the `401`. Only sent over verified HTTPS, never printed. |
+   | `MCP_CHECK_TOKEN` | An access token (create a "deploy" user in the web UI and a token for it). With it, the deploy also runs an authenticated `initialize`, so a broken auth setup fails the deploy instead of passing on the `401`. Only sent over verified HTTPS, never printed. |
+
+The first deploy of the HTTPS version can still fail and roll back to an older image that speaks plain HTTP. When `APP_URL` is `https://`, the rollback step also accepts the same host:port over plain HTTP (liveness only, with a warning, never with the token), so the rollback is not reported as failed just because the old image has no TLS.
 
 ### Using the local build (Cursor / Claude)
 
@@ -629,6 +631,7 @@ Install the root certificate from `/ca.crt` on the device, and for Node.js clien
 
 ### HTTP mode: passkey prompt fails or "Passkeys unavailable"
 Passkeys only work over trusted HTTPS on the exact host name in `PUBLIC_URL` (not an IP address, not a different alias). Install the root certificate and open the configured URL.
+The error message now includes the browser's error name. Until that is fixed you can sign in with a name and password (set one under "My sign-in", or choose a password during setup).
 
 ### HTTP mode: lost all admin passkeys
 Start the server once with `ADMIN_RECOVERY=true`. The log shows a one-time recovery code; on the sign-in page choose "Lost your passkey?" to register a new admin. Remove the variable afterwards.
