@@ -50,8 +50,8 @@ jobs:
         run: npm audit --audit-level=high
         continue-on-error: true
 
-  acme:
-    # TLS_MODE=acme end-to-end against Pebble (Let's Encrypt's ACME test server)
+  test:
+    # All tests, incl. TLS_MODE=acme and the Settings tab end-to-end against Pebble (Let's Encrypt's ACME test server)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,5 +75,5 @@ jobs:
 
       - run: npm ci
       - run: npm run build
-      - name: ACME tests
-        run: node --test test/acme.test.mjs
+      - name: Tests
+        run: node --test test/*.test.mjs
