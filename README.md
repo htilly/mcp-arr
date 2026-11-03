@@ -237,18 +237,64 @@ The *Services* tab shows a live **status board**: calls per connection, success 
 | Mode | Use when |
 |------|----------|
 | `internal` (default) | No other CA on your network. Root CA (10 years) + server certificate (397 days, renewed automatically and hot-swapped, no restart). Changing host names outside the CA's name constraints generates a new CA (you'll need to reinstall it) — set `TLS_CA_NAME_CONSTRAINTS=home.lan` to allow any name under a domain. |
+| `acme` | You own a domain and want a **publicly trusted certificate** (Let's Encrypt, or any ACME CA) - nothing to install on your devices, and OAuth for Claude/ChatGPT connectors works. Obtained and renewed automatically, hot-swapped without restart. Works for internet-facing servers (`http-01`) **and LAN-only servers** (`dns-01`). See below. |
 | `file` | You already run a LAN CA, e.g. [step-ca](https://smallstep.com/docs/step-ca/) (which also offers ACME for automatic renewal on an offline network), Caddy's internal CA, your router/NAS, or a certificate obtained elsewhere via DNS-01. Set `TLS_CERT_FILE` / `TLS_KEY_FILE`; files are reloaded automatically when they change. |
 | `off` | A reverse proxy in front terminates HTTPS. Set `TRUST_PROXY=true` so rate limiting uses `X-Forwarded-For`. `PUBLIC_URL` must still be the proxy's `https://` address. |
 
+#### Let's Encrypt (`TLS_MODE=acme`)
+
+The certificate covers the `PUBLIC_URL` host name plus any DNS names in `TLS_SANS` (or exactly `ACME_DOMAINS`). Account and certificate keys are stored in the encrypted config file. The certificate is renewed when a third of its lifetime is left (30 days for Let's Encrypt's 90-day certificates); until the first one is issued, a temporary self-signed certificate is served. Failed requests are retried with back-off (15 min, 30 min, 1 h ... 12 h) to stay within Let's Encrypt's rate limits. Start with `ACME_STAGING=true` and switch it off once the log says `certificate issued` - the account and certificate are re-requested automatically.
+
+Choose how the CA checks that you control the name:
+
+| Your server | Challenge | What you need |
+|-------------|-----------|---------------|
+| Reachable from the internet on port 80 | `http-01` (default) | Port 80 forwarded to the server. A small listener on `ACME_HTTP_PORT` (default 80; 8080 in the Docker image - publish it with `"80:8080"`) answers the check and redirects everything else to `PUBLIC_URL`. |
+| LAN only, or a wildcard name | `dns-01` (set `ACME_DNS_PROVIDER`) | A DNS record is created for the check - nothing has to be reachable from the internet. The name must still resolve to the server on your LAN (local DNS record in your router/Pi-hole/UniFi). |
+
+DNS providers for `dns-01`:
+
+- **`cloudflare`**: `CLOUDFLARE_DNS_API_TOKEN` (an API token with *Zone:Read* + *DNS:Edit*, ideally limited to the zone). The zone is found automatically; set `CLOUDFLARE_ZONE_ID` to skip the lookup.
+- **`acme-dns`**: works with **every DNS provider** and needs no DNS credentials at all. On first start the server registers at an [acme-dns](https://github.com/joohoi/acme-dns) server (`ACMEDNS_API_BASE`, default `https://auth.acme-dns.io` - better: run your own) and the log and the web UI's *Certificates* tab show one CNAME record to create, e.g. `_acme-challenge.mcp-arr.example.com CNAME 1b2c....auth.acme-dns.io`. The server checks every two minutes and continues on its own once the record exists. To use an existing acme-dns account, set `ACMEDNS_USERNAME`, `ACMEDNS_PASSWORD` and `ACMEDNS_SUBDOMAIN`.
+- **`exec`**: `ACME_DNS_HOOK=/path/to/script`, called as `script present <fqdn> <value>` and `script cleanup <fqdn> <value>` (the same interface as lego's `exec` provider), for any DNS API you can script.
+
+Before asking the CA, the server waits until the TXT record is visible on public resolvers (`ACME_DNS_RESOLVERS`, default `1.1.1.1,8.8.8.8`, up to `ACME_DNS_TIMEOUT` seconds) plus `ACME_DNS_DELAY` seconds.
+
+Other ACME CAs: set `ACME_DIRECTORY_URL` (e.g. ZeroSSL `https://acme.zerossl.com/v2/DV90`, Google Trust Services, or your own step-ca), plus `ACME_EAB_KID` / `ACME_EAB_HMAC_KEY` when the CA requires external account binding. `ACME_PROFILE` selects a certificate profile (e.g. Let's Encrypt `shortlived`). TLS-ALPN-01 is not supported; use `http-01` or `dns-01`.
+
+Example: LAN-only server with Cloudflare DNS
+
+```yaml
+    environment:
+      MCP_TRANSPORT: http
+      PUBLIC_URL: https://mcp-arr.example.com:3000   # local DNS record -> the server's LAN IP
+      TLS_MODE: acme
+      ACME_DNS_PROVIDER: cloudflare
+      CLOUDFLARE_DNS_API_TOKEN: ${CF_TOKEN}
+```
+
+Example: internet-facing server on the standard ports
+
+```yaml
+    ports:
+      - "443:3000"
+      - "80:8080"
+    environment:
+      MCP_TRANSPORT: http
+      PUBLIC_URL: https://mcp-arr.example.com
+      TLS_MODE: acme
+      ACME_EMAIL: you@example.com
+```
+
 #### Sign-in for Claude and ChatGPT connectors (OAuth)
 
-Claude "custom connectors" and OpenAI/ChatGPT connectors are called from the vendors' clouds, so they need an address reachable from the internet **and a publicly trusted certificate** (`TLS_MODE=file` with e.g. a Let's Encrypt certificate, or a reverse proxy with `TLS_MODE=off`). When that is the case the server automatically offers OAuth 2.1 sign-in, so nobody has to paste an access token:
+Claude "custom connectors" and OpenAI/ChatGPT connectors are called from the vendors' clouds, so they need an address reachable from the internet **and a publicly trusted certificate** (`TLS_MODE=acme`, `TLS_MODE=file` with e.g. a Let's Encrypt certificate, or a reverse proxy with `TLS_MODE=off`). When that is the case the server automatically offers OAuth 2.1 sign-in, so nobody has to paste an access token:
 
 1. In Claude (Settings → Connectors → Add custom connector) or ChatGPT (developer mode → add connector) enter `https://<PUBLIC_URL>/mcp`. Leave the OAuth client fields empty - the connector registers itself (RFC 7591).
 2. You are sent to the web UI, sign in with your usual passkey or password, and approve the connection.
 3. The connector gets a 1-hour access token and a rotating refresh token. They show up under "Access tokens" as `OAuth: <connector>` and can be revoked there; deleting the user revokes them too.
 
-OAuth is **off** with `TLS_MODE=internal` (the built-in CA is not trusted by Claude/OpenAI), with an `http://` `PUBLIC_URL`, or when a `TLS_MODE=file` certificate is self-signed, expired or does not cover the host name. The startup log and the "Connect" tab say why. Redirect URIs are limited to `claude.ai`, `claude.com`, `chatgpt.com`, `openai.com` (and subdomains) plus loopback addresses; add more hosts with `OAUTH_ALLOWED_REDIRECT_HOSTS`. Endpoints: `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/oauth/register`, `/oauth/authorize`, `/oauth/token`, `/oauth/revoke`. Manually created access tokens keep working alongside OAuth.
+OAuth is **off** with `TLS_MODE=internal` (the built-in CA is not trusted by Claude/OpenAI), with an `http://` `PUBLIC_URL`, when a `TLS_MODE=file` certificate is self-signed, expired or does not cover the host name, or with `TLS_MODE=acme` and `ACME_STAGING=true` or a custom `ACME_DIRECTORY_URL`. The startup log and the "Connect" tab say why. Redirect URIs are limited to `claude.ai`, `claude.com`, `chatgpt.com`, `openai.com` (and subdomains) plus loopback addresses; add more hosts with `OAUTH_ALLOWED_REDIRECT_HOSTS`. Endpoints: `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/oauth/register`, `/oauth/authorize`, `/oauth/token`, `/oauth/revoke`. Manually created access tokens keep working alongside OAuth.
 
 #### Encryption key
 
@@ -267,10 +313,22 @@ Switching from the key file to a passphrase is automatic (the file is re-encrypt
 | `MCP_TRANSPORT` | `stdio` | Set to `http` for the remote server |
 | `PUBLIC_URL` | – (required) | The URL you open in the browser, e.g. `https://mcp-arr.home.lan:3000` (passkey origin + certificate name) |
 | `PORT` / `HOST` | `3000` / `0.0.0.0` | Listen address |
-| `TLS_MODE` | `internal` | `internal`, `file` or `off` (see above) |
+| `TLS_MODE` | `internal` | `internal`, `file`, `acme` or `off` (see above) |
 | `TLS_SANS` | – | Extra names/IPs for the certificate, comma-separated |
 | `TLS_CA_NAME_CONSTRAINTS` | names from `PUBLIC_URL` + `TLS_SANS` | Domains/IPs the built-in CA may issue for |
 | `TLS_CERT_FILE` / `TLS_KEY_FILE` | – | Certificate and key for `TLS_MODE=file` |
+| `ACME_EMAIL` | – | Contact address for the ACME account (optional) |
+| `ACME_STAGING` | `false` | `true` uses Let's Encrypt staging (untrusted test certificates, generous rate limits) |
+| `ACME_DOMAINS` | `PUBLIC_URL` host + DNS names in `TLS_SANS` | Names for the certificate, comma-separated; `*.example.com` needs dns-01 |
+| `ACME_CHALLENGE` | `http-01`, or `dns-01` when `ACME_DNS_PROVIDER` is set | Validation method |
+| `ACME_HTTP_PORT` | `80` (Docker: `8080`) | Listener for http-01; port 80 on the internet must reach it |
+| `ACME_DNS_PROVIDER` | – | `cloudflare`, `acme-dns` or `exec` (dns-01) |
+| `CLOUDFLARE_DNS_API_TOKEN` / `CLOUDFLARE_ZONE_ID` | – | Cloudflare token (Zone:Read + DNS:Edit) / optional zone id |
+| `ACMEDNS_API_BASE` | `https://auth.acme-dns.io` | acme-dns server; `ACMEDNS_USERNAME` / `_PASSWORD` / `_SUBDOMAIN` for an existing account |
+| `ACME_DNS_HOOK` | – | Script for `exec`: `<script> present\|cleanup <fqdn> <value>` |
+| `ACME_DNS_RESOLVERS` / `ACME_DNS_TIMEOUT` / `ACME_DNS_DELAY` | `1.1.1.1,8.8.8.8` / `300` / `10` | Propagation check before validation (seconds) |
+| `ACME_DIRECTORY_URL` | Let's Encrypt | Other ACME CA; `ACME_EAB_KID` / `ACME_EAB_HMAC_KEY` for external account binding |
+| `ACME_PROFILE` | – | Certificate profile, e.g. `shortlived` |
 | `CONFIG_PATH` | `/config/config.json` (Docker) | Encrypted config file |
 | `CONFIG_ENCRYPTION_KEY` / `_FILE` / `_PREVIOUS` | – | Encryption key (see above) |
 | `KEY_FILE_PATH` | `/secrets/master.key` (Docker) | Fallback auto-generated key file |

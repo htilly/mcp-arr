@@ -38,9 +38,11 @@ RUN addgroup -g 1001 -S nodejs && \
 ENV CONFIG_PATH=/config/config.json \
     KEY_FILE_PATH=/secrets/master.key \
     TLS_MODE=internal \
-    PORT=3000
+    PORT=3000 \
+    ACME_HTTP_PORT=8080
 VOLUME ["/config", "/secrets"]
-EXPOSE 3000
+# 3000: HTTPS (web UI + MCP). 8080: only with TLS_MODE=acme + http-01 - publish it as port 80 ("80:8080").
+EXPOSE 3000 8080
 
 USER nodejs
 

@@ -778,7 +778,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
         el('h3', { text: 'Claude and ChatGPT connectors (sign-in)' }),
         el('p', { class: 'muted', text: 'Add a custom connector with this URL and leave the OAuth client fields empty. You will be sent back here to sign in and approve - no token needed. Access can be revoked under "Access tokens".' }),
         el('pre', { text: endpoint })
-      ] : el('p', { class: 'note', text: 'Claude and ChatGPT "custom connectors" are called from the vendors’ clouds. Sign-in for them needs a publicly reachable HTTPS address with a publicly trusted certificate (TLS_MODE=file or a reverse proxy)' + (d.oauth && d.oauth.reason ? ' - currently off: ' + d.oauth.reason + '.' : '.') + ' Use the local configurations above otherwise.' })
+      ] : el('p', { class: 'note', text: 'Claude and ChatGPT "custom connectors" are called from the vendors’ clouds. Sign-in for them needs a publicly reachable HTTPS address with a publicly trusted certificate (TLS_MODE=acme, TLS_MODE=file or a reverse proxy)' + (d.oauth && d.oauth.reason ? ' - currently off: ' + d.oauth.reason + '.' : '.') + ' Use the local configurations above otherwise.' })
     ].reduce(function (a, b) { return a.concat(b); }, []))]);
   }
 
@@ -968,13 +968,34 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
       );
     } else if (t.mode === 'file') {
       items.push(el('p', { text: 'Using your own certificate from ' + t.certFile + ' (reloaded automatically when the file changes).' }));
+    } else if (t.mode === 'acme' && t.acme) {
+      var a = t.acme;
+      var ca = a.staging ? 'Let’s Encrypt (staging - not trusted, for testing only)' : a.directoryUrl.indexOf('letsencrypt.org') >= 0 ? 'Let’s Encrypt' : a.directoryUrl;
+      var how = a.challenge === 'http-01' ? 'HTTP-01 (port ' + a.httpPort + ' must be reachable from the internet)' : 'DNS-01 via ' + a.dnsProvider;
+      var status = { valid: 'Certificate issued - renewed automatically', issuing: 'Requesting a certificate…', pending: 'Waiting for the first certificate (a temporary self-signed certificate is served until then)', 'waiting-dns': 'Waiting for a DNS record (see below)', error: 'Last request failed' }[a.status] || a.status;
+      items.push(
+        el('p', { text: 'Publicly trusted certificate from ' + ca + ', obtained and renewed automatically. No root certificate needs to be installed on your devices.' }),
+        el('div', { class: 'table-wrap' }, [el('table', null, [el('tbody', null, [
+          el('tr', null, [el('th', { text: 'Status' }), el('td', { text: status })]),
+          el('tr', null, [el('th', { text: 'Names' }), el('td', { text: a.domains.join(', ') })]),
+          el('tr', null, [el('th', { text: 'Validation' }), el('td', { text: how })]),
+          a.nextAttempt && a.status !== 'valid' ? el('tr', null, [el('th', { text: 'Next attempt' }), el('td', { text: fmtDate(a.nextAttempt) })]) : null
+        ])])])
+      );
+      if (a.pendingCnames && a.pendingCnames.length) {
+        items.push(
+          el('h3', { text: 'One-time DNS setup' }),
+          el('p', { text: 'Create these CNAME records at your DNS provider. They let the acme-dns server answer the Let’s Encrypt check for you - your DNS provider’s credentials stay with you. The server checks every two minutes and continues on its own.' }),
+          el('pre', { text: a.pendingCnames.map(function (p) { return p.name + '.  CNAME  ' + p.target + '.'; }).join('\n') })
+        );
+      }
     } else {
       items.push(el('p', { text: 'TLS is terminated by a reverse proxy (TLS_MODE=off).' }));
     }
     if (t.leaf) {
       items.push(el('h3', { text: 'Server certificate' }), el('div', { class: 'table-wrap' }, [el('table', null, [el('tbody', null, [
         el('tr', null, [el('th', { text: 'Names' }), el('td', { text: t.leaf.sans.join(', ') })]),
-        el('tr', null, [el('th', { text: 'Valid until' }), el('td', { text: fmtDate(t.leaf.notAfter) + (t.mode === 'internal' ? ' (renewed automatically)' : '') })]),
+        el('tr', null, [el('th', { text: 'Valid until' }), el('td', { text: fmtDate(t.leaf.notAfter) + (t.mode === 'internal' || t.mode === 'acme' ? ' (renewed automatically)' : '') })]),
         el('tr', null, [el('th', { text: 'Issuer' }), el('td', { text: t.leaf.issuer })])
       ])])]));
     }

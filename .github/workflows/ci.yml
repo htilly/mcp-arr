@@ -49,3 +49,31 @@ jobs:
       - name: Security audit
         run: npm audit --audit-level=high
         continue-on-error: true
+
+  acme:
+    # TLS_MODE=acme end-to-end against Pebble (Let's Encrypt's ACME test server)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: false
+
+      - name: Install Pebble
+        run: |
+          GOBIN="$RUNNER_TEMP/pebble" go install github.com/letsencrypt/pebble/v2/cmd/pebble@v2.7.0
+          GOBIN="$RUNNER_TEMP/pebble" go install github.com/letsencrypt/pebble/v2/cmd/pebble-challtestsrv@v2.7.0
+          echo "PEBBLE_BIN=$RUNNER_TEMP/pebble" >> "$GITHUB_ENV"
+          echo "PEBBLE_DIR=$(go env GOMODCACHE)/github.com/letsencrypt/pebble/v2@v2.7.0" >> "$GITHUB_ENV"
+
+      - run: npm ci
+      - run: npm run build
+      - name: ACME tests
+        run: node --test test/acme.test.mjs

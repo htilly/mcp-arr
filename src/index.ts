@@ -16,7 +16,7 @@
  *
  * Remote / Docker mode (HTTPS + web UI with passkey login), see README:
  * - MCP_TRANSPORT=http (default: stdio), PUBLIC_URL, PORT, HOST
- * - TLS_MODE (internal|file|off), TLS_SANS, TLS_CA_NAME_CONSTRAINTS, TLS_CERT_FILE, TLS_KEY_FILE
+ * - TLS_MODE (internal|file|acme|off), ACME_* (see acme.ts), TLS_SANS, TLS_CA_NAME_CONSTRAINTS, TLS_CERT_FILE, TLS_KEY_FILE
  * - CONFIG_PATH, CONFIG_ENCRYPTION_KEY, CONFIG_ENCRYPTION_KEY_FILE, CONFIG_ENCRYPTION_KEY_PREVIOUS, KEY_FILE_PATH
  * - ADMIN_RECOVERY, TRUST_PROXY
  */
@@ -3857,8 +3857,8 @@ async function main() {
   // ----- HTTP(S) mode -----
   const env = process.env;
   const tlsMode = (env.TLS_MODE || 'internal').toLowerCase();
-  if (tlsMode !== 'internal' && tlsMode !== 'file' && tlsMode !== 'off') {
-    throw new Error(`Unknown TLS_MODE '${tlsMode}' (use 'internal', 'file' or 'off')`);
+  if (tlsMode !== 'internal' && tlsMode !== 'file' && tlsMode !== 'acme' && tlsMode !== 'off') {
+    throw new Error(`Unknown TLS_MODE '${tlsMode}' (use 'internal', 'file', 'acme' or 'off')`);
   }
 
   if (!env.PUBLIC_URL) {
@@ -3890,18 +3890,22 @@ async function main() {
   applyConfig(store.getEffective());
   if (store.path) stats.attachFile(joinPath(dirname(store.path), 'stats.json'));
 
-  const [{ startHttpServer }, { Auth }, { TlsManager }, { OAuthProvider, resolveOAuthMode, DEFAULT_REDIRECT_HOSTS }] = await Promise.all([
+  const [{ startHttpServer }, { Auth }, { TlsManager }, { OAuthProvider, resolveOAuthMode, DEFAULT_REDIRECT_HOSTS }, { acmeSettingsFromEnv }] = await Promise.all([
     import("./http-server.js"),
     import("./auth.js"),
     import("./tls.js"),
     import("./oauth.js"),
+    import("./acme.js"),
   ]);
 
   const splitList = (v?: string) => (v ?? '').split(',').map(x => x.trim()).filter(Boolean);
+  const tlsNames = [hostname, ...splitList(env.TLS_SANS)];
+  const acme = tlsMode === 'acme' ? acmeSettingsFromEnv(env, tlsNames, publicUrl.origin, env.HOST || '0.0.0.0') : undefined;
   const tls = new TlsManager({
     mode: tlsMode,
     store,
-    names: [hostname, ...splitList(env.TLS_SANS)],
+    names: tlsNames,
+    acme,
     caPermitted: splitList(env.TLS_CA_NAME_CONSTRAINTS),
     certFile: env.TLS_CERT_FILE,
     keyFile: env.TLS_KEY_FILE,

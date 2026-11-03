@@ -34,6 +34,18 @@ services:
       # TLS_SANS: 192.168.1.10,mcp-arr
       # Allow any name under a domain without regenerating the CA:
       # TLS_CA_NAME_CONSTRAINTS: home.lan,192.168.1.10
+      # Publicly trusted certificate from Let's Encrypt, obtained + renewed automatically (no root
+      # certificate to install on your devices). Needs a domain you own. Pick ONE validation method:
+      # TLS_MODE: acme
+      # ACME_EMAIL: you@example.com                    # optional, for the CA's notices
+      # ACME_STAGING: "true"                           # test first (untrusted certs, no rate limits)
+      #  a) Server reachable from the internet on port 80 (http-01): also add "80:8080" under ports.
+      #  b) LAN-only server (dns-01) - nothing has to be reachable from the internet:
+      # ACME_DNS_PROVIDER: cloudflare
+      # CLOUDFLARE_DNS_API_TOKEN: your-token           # Zone:Read + DNS:Edit
+      #    or, for ANY DNS provider (one-time CNAME record, no DNS credentials needed):
+      # ACME_DNS_PROVIDER: acme-dns                    # the log/web UI shows the CNAME to create
+      #  For dns-01 the name must still resolve to this server on your LAN (local DNS record).
       # Use your own certificate instead of the built-in CA (e.g. from step-ca / Caddy / your router):
       # TLS_MODE: file
       # TLS_CERT_FILE: /certs/fullchain.pem

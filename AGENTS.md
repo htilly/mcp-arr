@@ -17,7 +17,8 @@ src/
 ├── http-server.ts    # HTTP(S) mode: /mcp (stateless Streamable HTTP), /admin API with roles, /ca.crt
 ├── auth.ts           # Passkey (WebAuthn) registration/login, sessions, setup/recovery codes
 ├── oauth.ts          # OAuth 2.1 server for Claude/OpenAI connectors (only with a publicly trusted cert)
-├── tls.ts            # Built-in offline CA, BYO certificate files, renewal / hot reload
+├── tls.ts            # Built-in offline CA, BYO certificate files, ACME mode, renewal / hot reload
+├── acme.ts           # ACME client (Let's Encrypt): http-01 listener, dns-01 via cloudflare / acme-dns / exec
 ├── admin-ui.ts       # Web UI page (single self-contained HTML string, no external assets)
 ├── config-store.ts   # Encrypted config file (AES-256-GCM), env merge, users/tokens/invites
 ├── tools/            # Tool implementations by service
@@ -58,7 +59,8 @@ node dist/index.js
 | MCP_TRANSPORT | No | `stdio` (default) or `http` (HTTPS server + web UI) |
 | PUBLIC_URL | HTTP mode | Browser URL, e.g. https://mcp-arr.home.lan:3000 (host name, not IP - passkeys) |
 | PORT / HOST / MCP_PATH | No | Listen address and MCP path (default 3000 / 0.0.0.0 / /mcp) |
-| TLS_MODE | No | `internal` (built-in CA, default), `file`, `off` |
+| TLS_MODE | No | `internal` (built-in CA, default), `file`, `acme` (Let's Encrypt), `off` |
+| ACME_* | TLS_MODE=acme | `ACME_EMAIL`, `ACME_STAGING`, `ACME_DOMAINS`, `ACME_CHALLENGE` (http-01/dns-01), `ACME_HTTP_PORT`, `ACME_DNS_PROVIDER` (cloudflare/acme-dns/exec) + provider vars, `ACME_DIRECTORY_URL`, `ACME_EAB_*` - see README |
 | TLS_SANS / TLS_CA_NAME_CONSTRAINTS | No | Extra certificate names / CA name constraints |
 | TLS_CERT_FILE / TLS_KEY_FILE | TLS_MODE=file | Own certificate + key |
 | CONFIG_PATH | No | Encrypted config file (HTTP default ./config/config.json, Docker /config/config.json) |

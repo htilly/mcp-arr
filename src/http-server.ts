@@ -880,6 +880,9 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     console.error(`  CA SHA-256:  ${info.ca.fingerprint256}`);
   } else if (info.mode === 'file') {
     console.error(`  TLS:         certificate from ${info.certFile}`);
+  } else if (info.mode === 'acme' && info.acme) {
+    const a = info.acme;
+    console.error(`  TLS:         ACME (${a.staging ? "Let's Encrypt STAGING" : new URL(a.directoryUrl).host}) for ${a.domains.join(', ')} via ${a.challenge}${a.dnsProvider ? ` (${a.dnsProvider})` : ` on port ${a.httpPort}`} - ${a.status === 'valid' ? 'certificate valid' : 'requesting certificate (temporary self-signed until then)'}`);
   } else {
     console.error('  TLS:         off - make sure a reverse proxy terminates HTTPS');
   }

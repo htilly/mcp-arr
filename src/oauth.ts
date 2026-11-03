@@ -61,7 +61,7 @@ export interface OAuthDecision {
 export function resolveOAuthMode(input: {
   setting: string | undefined;
   publicUrl: URL;
-  tlsMode: 'internal' | 'file' | 'off';
+  tlsMode: 'internal' | 'file' | 'acme' | 'off';
   /** Result of inspecting the configured certificate (file mode only). */
   certProblem?: string;
 }): OAuthDecision {
@@ -77,14 +77,16 @@ export function resolveOAuthMode(input: {
   }
   if (setting === 'on') return { enabled: true, reason: 'enabled with OAUTH=on' };
   if (input.tlsMode === 'internal') {
-    return { enabled: false, reason: 'TLS_MODE=internal uses a private CA that Claude/OpenAI do not trust - use TLS_MODE=file with a public certificate, or a reverse proxy (TLS_MODE=off)' };
+    return { enabled: false, reason: 'TLS_MODE=internal uses a private CA that Claude/OpenAI do not trust - use TLS_MODE=acme (Let\'s Encrypt), TLS_MODE=file with a public certificate, or a reverse proxy (TLS_MODE=off)' };
   }
-  if (input.tlsMode === 'file' && input.certProblem) {
+  if ((input.tlsMode === 'file' || input.tlsMode === 'acme') && input.certProblem) {
     return { enabled: false, reason: `certificate does not look publicly trusted: ${input.certProblem} (set OAUTH=on to override)` };
   }
   return {
     enabled: true,
-    reason: input.tlsMode === 'file' ? 'own certificate configured' : 'HTTPS terminated by a reverse proxy',
+    reason: input.tlsMode === 'file' ? 'own certificate configured'
+      : input.tlsMode === 'acme' ? 'publicly trusted ACME certificate (Let\'s Encrypt)'
+      : 'HTTPS terminated by a reverse proxy',
   };
 }
 

@@ -141,6 +141,14 @@ export interface StoredKeyPair {
 export interface StoredTls {
   ca?: StoredKeyPair & { permitted: string[] };
   leaf?: StoredKeyPair & { sans: string[] };
+  /** TLS_MODE=acme: ACME account (key, URL, acme-dns registrations) and the issued certificate. */
+  acme?: {
+    directoryUrl: string;
+    accountKeyPem: string;
+    accountUrl?: string;
+    acmeDns?: Record<string, { server: string; username: string; password: string; subdomain: string; fulldomain: string }>;
+    cert?: StoredKeyPair & { sans: string[]; directoryUrl: string };
+  };
 }
 
 interface ConfigData {
