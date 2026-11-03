@@ -1,8 +1,8 @@
 {
   "name": "mcp-arr-server",
-  "version": "1.4.1",
+  "version": "1.7.3",
   "mcpName": "io.github.aplaceforallmystuff/mcp-arr",
-  "description": "MCP server for *arr media management suite - Sonarr, Radarr, Lidarr, Readarr, Prowlarr, Bazarr",
+  "description": "MCP server for *arr media management suite - Sonarr, Radarr, Lidarr, Prowlarr, Bazarr",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -14,9 +14,13 @@
   ],
   "scripts": {
     "build": "tsc",
+    "test": "npm run build && node --test",
     "watch": "tsc --watch",
     "test": "node scripts/test.mjs",
     "test:dummy": "node scripts/dummy_test.mjs",
+    "start": "node dist/index.js",
+    "sync-server-json": "node scripts/sync-server-json.mjs",
+    "version": "npm run sync-server-json && git add server.json",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -24,7 +28,6 @@
     "sonarr",
     "radarr",
     "lidarr",
-    "readarr",
     "prowlarr",
     "bazarr",
     "subtitles",
@@ -32,12 +35,15 @@
     "plex",
     "model-context-protocol",
     "claude",
+    "chatgpt",
     "ai"
   ],
   "author": "Jim Christian",
   "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.25.2",
     "@types/node": "^20.19.29",
     "typescript": "^5.3.0"
   },

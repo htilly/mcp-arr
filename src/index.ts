@@ -2,8 +2,14 @@
 /**
  * MCP Server for *arr Media Management Suite + Tautulli + Overseerr + Bazarr
  *
+ * Provides tools for managing Sonarr (TV), Radarr (Movies), Lidarr (Music),
+ * and Prowlarr (Indexers) through Claude Code, plus optional Tautulli (Plex),
+ * Overseerr (requests) and Bazarr (subtitles).
+ *
  * Environment variables:
  * - SONARR_URL, SONARR_API_KEY, RADARR_URL, RADARR_API_KEY, etc.
+ * - LIDARR_URL, LIDARR_API_KEY
+ * - PROWLARR_URL, PROWLARR_API_KEY
  * - TAUTULLI_URL, TAUTULLI_API_KEY
  * - OVERSEERR_URL, OVERSEERR_API_KEY
  * - BAZARR_URL, BAZARR_API_KEY
@@ -11,16 +17,18 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
+import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
 import {
   SonarrClient,
   RadarrClient,
   LidarrClient,
-  ReadarrClient,
   ProwlarrClient,
   ArrService,
 } from "./arr-client.js";
@@ -28,6 +36,32 @@ import { trashClient, TrashService } from "./trash-client.js";
 import { TautulliClient } from "./tautulli-client.js";
 import { OverseerrClient } from "./overseerr-client.js";
 import { BazarrClient, BazarrSubtitle } from "./bazarr-client.js";
+
+// Read from package.json rather than hardcoding, so the version reported to
+// clients can never drift from the released version. package.json sits at the
+// package root in every distribution: npm always ships it, and the Dockerfile
+// copies it alongside dist/.
+function readServerVersion(): string {
+  try {
+    const pkgUrl = new URL("../package.json", import.meta.url);
+    const pkg = JSON.parse(readFileSync(pkgUrl, "utf8")) as { version?: string };
+    if (pkg.version) return pkg.version;
+    console.error("[mcp-arr] package.json has no version field");
+  } catch (error) {
+    console.error(
+      `[mcp-arr] could not read version from package.json: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  return "0.0.0-unknown";
+}
+
+const SERVER_VERSION = readServerVersion();
+const TRANSPORT_MODE = (process.env.MCP_TRANSPORT || "stdio").toLowerCase();
+const HTTP_HOST = process.env.HOST || "127.0.0.1";
+const HTTP_PORT = Number(process.env.PORT || "3000");
+const HTTP_PATH = process.env.MCP_PATH || "/mcp";
 
 // Configuration from environment
 interface ServiceConfig {
@@ -41,7 +75,6 @@ const services: ServiceConfig[] = [
   { name: 'sonarr', displayName: 'Sonarr (TV)', url: process.env.SONARR_URL, apiKey: process.env.SONARR_API_KEY },
   { name: 'radarr', displayName: 'Radarr (Movies)', url: process.env.RADARR_URL, apiKey: process.env.RADARR_API_KEY },
   { name: 'lidarr', displayName: 'Lidarr (Music)', url: process.env.LIDARR_URL, apiKey: process.env.LIDARR_API_KEY },
-  { name: 'readarr', displayName: 'Readarr (Books)', url: process.env.READARR_URL, apiKey: process.env.READARR_API_KEY },
   { name: 'prowlarr', displayName: 'Prowlarr (Indexers)', url: process.env.PROWLARR_URL, apiKey: process.env.PROWLARR_API_KEY },
 ];
 
@@ -56,16 +89,11 @@ const bazarrUrl = process.env.BAZARR_URL;
 const bazarrApiKey = process.env.BAZARR_API_KEY;
 const bazarrConfigured = Boolean(bazarrUrl && bazarrApiKey);
 
-if (configuredServices.length === 0 && !tautulliConfigured && !overseerrConfigured && !bazarrConfigured) {
-  console.error("Error: No services configured. Set at least one of: *arr (SONARR_URL+API_KEY, etc.), Tautulli (TAUTULLI_URL+TAUTULLI_API_KEY), Overseerr (OVERSEERR_URL+OVERSEERR_API_KEY), or Bazarr (BAZARR_URL+BAZARR_API_KEY)");
-  process.exit(1);
-}
-
+// Initialize clients for configured services
 const clients: {
   sonarr?: SonarrClient;
   radarr?: RadarrClient;
   lidarr?: LidarrClient;
-  readarr?: ReadarrClient;
   prowlarr?: ProwlarrClient;
 } = {};
 
@@ -96,9 +124,6 @@ for (const service of configuredServices) {
     case 'lidarr':
       clients.lidarr = new LidarrClient(config);
       break;
-    case 'readarr':
-      clients.readarr = new ReadarrClient(config);
-      break;
     case 'prowlarr':
       clients.prowlarr = new ProwlarrClient(config);
       break;
@@ -112,11 +137,41 @@ if (bazarrConfigured) statusParts.push('Bazarr (Subtitles)');
 const TOOLS: Tool[] = [
   {
     name: "arr_status",
-    description: `Get status of all configured services. Currently configured: ${statusParts.join(', ')}`,
+    description: statusParts.length > 0
+      ? `Get status of all configured services. Currently configured: ${statusParts.join(', ')}`
+      : "Get status of all supported services. No local services are currently configured, but TRaSH reference tools remain available.",
     inputSchema: {
       type: "object" as const,
       properties: {},
       required: [],
+    },
+  },
+  {
+    name: "search",
+    description: "Search across configured *arr libraries plus TRaSH Guides reference profiles. This is the primary discovery tool for remote MCP clients such as ChatGPT.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: "Natural-language search query",
+        },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "fetch",
+    description: "Fetch a specific item returned by search. Accepts an opaque item id from the search tool.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: {
+          type: "string",
+          description: "Opaque result id returned by search",
+        },
+      },
+      required: ["id"],
     },
   },
 ];
@@ -197,14 +252,13 @@ function addConfigTools(serviceName: string, displayName: string) {
 if (clients.sonarr) addConfigTools('sonarr', 'Sonarr (TV)');
 if (clients.radarr) addConfigTools('radarr', 'Radarr (Movies)');
 if (clients.lidarr) addConfigTools('lidarr', 'Lidarr (Music)');
-if (clients.readarr) addConfigTools('readarr', 'Readarr (Books)');
 
 // Sonarr tools
 if (clients.sonarr) {
   TOOLS.push(
     {
       name: "sonarr_get_series",
-      description: "Get all TV series in Sonarr library. Optional sortBy: 'dateAdded' or 'sizeOnDisk'. Optional sortDir: 'asc' or 'desc'. Optional limit: return only the first N items.",
+      description: "Get TV series from Sonarr library with optional pagination, title filtering and sorting. Defaults to limit=25 to avoid very large responses. Use offset to fetch additional pages. Optional sortBy: 'dateAdded' or 'sizeOnDisk' (applied before pagination). Optional sortDir: 'asc' or 'desc'.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -220,7 +274,15 @@ if (clients.sonarr) {
           },
           limit: {
             type: "number",
-            description: "Return only the first N series (e.g. 100). Omit for all. Max 1000.",
+            description: "Maximum number of series to return (default: 25, max: 100)",
+          },
+          offset: {
+            type: "number",
+            description: "Number of series to skip before returning results (default: 0)",
+          },
+          search: {
+            type: "string",
+            description: "Optional case-insensitive title filter",
           },
         },
         required: [],
@@ -228,7 +290,7 @@ if (clients.sonarr) {
     },
     {
       name: "sonarr_search",
-      description: "Search for TV series to add to Sonarr",
+      description: "Search for TV series by name. Returns results with tvdbId needed for sonarr_add_series.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -242,10 +304,19 @@ if (clients.sonarr) {
     },
     {
       name: "sonarr_get_queue",
-      description: "Get Sonarr download queue",
+      description: "Get Sonarr download queue. Supports pagination with limit and offset.",
       inputSchema: {
         type: "object" as const,
-        properties: {},
+        properties: {
+          limit: {
+            type: "number",
+            description: "Maximum number of queue items to return (default: 25, max: 100)",
+          },
+          offset: {
+            type: "number",
+            description: "Number of queue items to skip before returning results (default: 0)",
+          },
+        },
         required: [],
       },
     },
@@ -324,6 +395,20 @@ if (clients.sonarr) {
       },
     },
     {
+      name: "sonarr_refresh_series",
+      description: "Trigger a metadata refresh for a specific series in Sonarr",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          seriesId: {
+            type: "number",
+            description: "Series ID to refresh",
+          },
+        },
+        required: ["seriesId"],
+      },
+    },
+    {
       name: "sonarr_delete_season",
       description: "Delete all episode files for a specific season of a series",
       inputSchema: {
@@ -349,7 +434,46 @@ if (clients.sonarr) {
         },
         required: ["episodeFileIds"],
       },
-    }
+    },
+    {
+      name: "sonarr_add_series",
+      description: "Add a TV series to Sonarr. Use sonarr_search first to find the tvdbId, and sonarr_get_root_folders / sonarr_get_quality_profiles to get valid values for rootFolderPath and qualityProfileId. Use sonarr_get_tags to get valid tag IDs.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          tvdbId: {
+            type: "number",
+            description: "TVDB ID from sonarr_search results",
+          },
+          title: {
+            type: "string",
+            description: "Series title",
+          },
+          qualityProfileId: {
+            type: "number",
+            description: "Quality profile ID from sonarr_get_quality_profiles",
+          },
+          rootFolderPath: {
+            type: "string",
+            description: "Root folder path from sonarr_get_root_folders",
+          },
+          monitored: {
+            type: "boolean",
+            description: "Whether to monitor the series (default: true)",
+          },
+          seasonFolder: {
+            type: "boolean",
+            description: "Whether to use season folders (default: true)",
+          },
+          tags: {
+            type: "array",
+            items: { type: "number" },
+            description: "Array of tag IDs from sonarr_get_tags (optional)",
+          },
+        },
+        required: ["tvdbId", "title", "qualityProfileId", "rootFolderPath"],
+      },
+    },
   );
 }
 
@@ -358,7 +482,7 @@ if (clients.radarr) {
   TOOLS.push(
     {
       name: "radarr_get_movies",
-      description: "Get all movies in Radarr library. Optional sortBy: 'dateAdded' or 'sizeOnDisk'. Optional sortDir: 'asc' or 'desc'. Optional limit: return only the first N movies.",
+      description: "Get movies from Radarr library with optional pagination, title filtering and sorting. Defaults to limit=25 to avoid very large responses. Use offset to fetch additional pages. Optional sortBy: 'dateAdded' or 'sizeOnDisk' (applied before pagination). Optional sortDir: 'asc' or 'desc'.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -374,7 +498,15 @@ if (clients.radarr) {
           },
           limit: {
             type: "number",
-            description: "Return only the first N movies (e.g. 100). Omit for all. Max 1000.",
+            description: "Maximum number of movies to return (default: 25, max: 100)",
+          },
+          offset: {
+            type: "number",
+            description: "Number of movies to skip before returning results (default: 0)",
+          },
+          search: {
+            type: "string",
+            description: "Optional case-insensitive title filter",
           },
         },
         required: [],
@@ -382,7 +514,7 @@ if (clients.radarr) {
     },
     {
       name: "radarr_search",
-      description: "Search for movies to add to Radarr",
+      description: "Search for movies by name. Returns results with tmdbId needed for radarr_add_movie.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -396,10 +528,19 @@ if (clients.radarr) {
     },
     {
       name: "radarr_get_queue",
-      description: "Get Radarr download queue",
+      description: "Get Radarr download queue. Supports pagination with limit and offset.",
       inputSchema: {
         type: "object" as const,
-        properties: {},
+        properties: {
+          limit: {
+            type: "number",
+            description: "Maximum number of queue items to return (default: 25, max: 100)",
+          },
+          offset: {
+            type: "number",
+            description: "Number of queue items to skip before returning results (default: 0)",
+          },
+        },
         required: [],
       },
     },
@@ -432,6 +573,133 @@ if (clients.radarr) {
       },
     },
     {
+      name: "radarr_refresh_movie",
+      description: "Trigger a metadata refresh for a specific movie in Radarr",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          movieId: {
+            type: "number",
+            description: "Movie ID to refresh",
+          },
+        },
+        required: ["movieId"],
+      },
+    },
+    {
+      name: "radarr_add_movie",
+      description: "Add a movie to Radarr. Use radarr_search first to find the tmdbId, and radarr_get_root_folders / radarr_get_quality_profiles to get valid values. Use radarr_get_tags to get valid tag IDs.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          tmdbId: {
+            type: "number",
+            description: "TMDB ID from radarr_search results",
+          },
+          title: {
+            type: "string",
+            description: "Movie title",
+          },
+          qualityProfileId: {
+            type: "number",
+            description: "Quality profile ID from radarr_get_quality_profiles",
+          },
+          rootFolderPath: {
+            type: "string",
+            description: "Root folder path from radarr_get_root_folders",
+          },
+          monitored: {
+            type: "boolean",
+            description: "Whether to monitor the movie (default: true)",
+          },
+          minimumAvailability: {
+            type: "string",
+            enum: ["announced", "inCinemas", "released", "tba"],
+            description: "When to consider the movie available (default: announced)",
+          },
+          tags: {
+            type: "array",
+            items: { type: "number" },
+            description: "Array of tag IDs from radarr_get_tags (optional)",
+          },
+        },
+        required: ["tmdbId", "title", "qualityProfileId", "rootFolderPath"],
+      },
+    },
+    {
+      name: "radarr_update_movie",
+      description: "Update a movie in Radarr. Can change qualityProfileId, monitored status, minimumAvailability, tags, and path. Fetches the full movie object, applies your changes, and PUTs it back.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          movieId: {
+            type: "number",
+            description: "Movie ID to update",
+          },
+          qualityProfileId: {
+            type: "number",
+            description: "New quality profile ID (from radarr_get_quality_profiles)",
+          },
+          monitored: {
+            type: "boolean",
+            description: "Whether to monitor the movie",
+          },
+          minimumAvailability: {
+            type: "string",
+            enum: ["announced", "inCinemas", "released", "tba"],
+            description: "When to consider the movie available",
+          },
+          tags: {
+            type: "array",
+            items: { type: "number" },
+            description: "Replace all tags with this list of tag IDs",
+          },
+          path: {
+            type: "string",
+            description: "New file path for the movie",
+          },
+        },
+        required: ["movieId"],
+      },
+    },
+    {
+      name: "radarr_delete_queue_item",
+      description: "Remove an item from the Radarr download queue. Use radarr_get_queue to find queue item IDs. Can optionally blocklist the release to prevent re-grabbing.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          queueId: {
+            type: "number",
+            description: "Queue item ID (from radarr_get_queue)",
+          },
+          removeFromClient: {
+            type: "boolean",
+            description: "Also remove from download client (default: true)",
+          },
+          blocklist: {
+            type: "boolean",
+            description: "Add release to blocklist to prevent re-grabbing (default: false)",
+          },
+        },
+        required: ["queueId"],
+      },
+    },
+    {
+      name: "radarr_search_movies",
+      description: "Trigger a search for multiple movies at once. Accepts an array of movie IDs. Use this for bulk upgrade requests instead of calling radarr_search_movie one at a time.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          movieIds: {
+            type: "array",
+            items: { type: "number" },
+            description: "Array of movie IDs to search for",
+          },
+        },
+        required: ["movieIds"],
+      },
+    },
+    {
       name: "radarr_delete_movie",
       description: "Delete a movie from Radarr (optionally delete files from disk)",
       inputSchema: {
@@ -443,7 +711,7 @@ if (clients.radarr) {
         },
         required: ["movieId"],
       },
-    }
+    },
   );
 }
 
@@ -461,7 +729,7 @@ if (clients.lidarr) {
     },
     {
       name: "lidarr_search",
-      description: "Search for artists to add to Lidarr",
+      description: "Search for artists by name. Returns results with foreignArtistId needed for lidarr_add_artist.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -475,10 +743,19 @@ if (clients.lidarr) {
     },
     {
       name: "lidarr_get_queue",
-      description: "Get Lidarr download queue",
+      description: "Get Lidarr download queue. Supports pagination with limit and offset.",
       inputSchema: {
         type: "object" as const,
-        properties: {},
+        properties: {
+          limit: {
+            type: "number",
+            description: "Maximum number of queue items to return (default: 25, max: 100)",
+          },
+          offset: {
+            type: "number",
+            description: "Number of queue items to skip before returning results (default: 0)",
+          },
+        },
         required: [],
       },
     },
@@ -537,99 +814,70 @@ if (clients.lidarr) {
         },
         required: [],
       },
-    }
-  );
-}
-
-// Readarr tools
-if (clients.readarr) {
-  TOOLS.push(
-    {
-      name: "readarr_get_authors",
-      description: "Get all authors in Readarr library",
-      inputSchema: {
-        type: "object" as const,
-        properties: {},
-        required: [],
-      },
     },
     {
-      name: "readarr_search",
-      description: "Search for authors to add to Readarr",
+      name: "lidarr_add_artist",
+      description: "Add an artist to Lidarr. Use lidarr_search first to find the foreignArtistId, and lidarr_get_root_folders / lidarr_get_quality_profiles / lidarr_get_metadata_profiles to get valid values. Use lidarr_get_tags to get valid tag IDs.",
       inputSchema: {
         type: "object" as const,
         properties: {
-          term: {
+          foreignArtistId: {
             type: "string",
-            description: "Search term (author name)",
+            description: "Foreign artist ID (MusicBrainz ID) from lidarr_search results",
           },
-        },
-        required: ["term"],
-      },
-    },
-    {
-      name: "readarr_get_queue",
-      description: "Get Readarr download queue",
-      inputSchema: {
-        type: "object" as const,
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: "readarr_get_books",
-      description: "Get books for an author in Readarr. Shows which books are available and which are missing.",
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          authorId: {
+          artistName: {
+            type: "string",
+            description: "Artist name",
+          },
+          qualityProfileId: {
             type: "number",
-            description: "Author ID to get books for",
+            description: "Quality profile ID from lidarr_get_quality_profiles",
           },
-        },
-        required: ["authorId"],
-      },
-    },
-    {
-      name: "readarr_search_book",
-      description: "Trigger a search for a specific book to download",
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          bookIds: {
+          metadataProfileId: {
+            type: "number",
+            description: "Metadata profile ID from lidarr_get_metadata_profiles",
+          },
+          rootFolderPath: {
+            type: "string",
+            description: "Root folder path from lidarr_get_root_folders",
+          },
+          monitored: {
+            type: "boolean",
+            description: "Whether to monitor the artist (default: true)",
+          },
+          tags: {
             type: "array",
             items: { type: "number" },
-            description: "Book ID(s) to search for",
+            description: "Array of tag IDs from lidarr_get_tags (optional)",
           },
         },
-        required: ["bookIds"],
+        required: ["foreignArtistId", "artistName", "qualityProfileId", "metadataProfileId", "rootFolderPath"],
       },
     },
     {
-      name: "readarr_search_missing",
-      description: "Trigger a search for all missing books for an author",
+      name: "lidarr_get_root_folders",
+      description: "Get available root folders for Lidarr. Use this to find valid rootFolderPath values when adding an artist.",
       inputSchema: {
         type: "object" as const,
-        properties: {
-          authorId: {
-            type: "number",
-            description: "Author ID to search missing books for",
-          },
-        },
-        required: ["authorId"],
+        properties: {},
+        required: [],
       },
     },
     {
-      name: "readarr_get_calendar",
-      description: "Get upcoming book releases from Readarr",
+      name: "lidarr_get_quality_profiles",
+      description: "Get available quality profiles for Lidarr. Use this to find valid qualityProfileId values when adding an artist.",
       inputSchema: {
         type: "object" as const,
-        properties: {
-          days: {
-            type: "number",
-            description: "Number of days to look ahead (default: 30)",
-          },
-        },
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: "lidarr_get_metadata_profiles",
+      description: "Get available metadata profiles for Lidarr. Use this to find valid metadataProfileId values when adding an artist.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {},
         required: [],
       },
     }
@@ -1167,19 +1415,262 @@ TOOLS.push(
   }
 );
 
-// Create server instance
-const server = new Server(
-  {
-    name: "mcp-arr",
-    version: "1.0.0",
-  },
-  {
-    capabilities: {
-      tools: {},
+// Build a fresh MCP server instance with all request handlers registered.
+// The HTTP transport builds a new instance per request (see startHttpServer)
+// so concurrent / long-lived transports never share a single server. A shared
+// server can only be connected to one transport at a time, which is why the
+// old code funnelled every request through a serialized queue — and that queue
+// deadlocked the moment a streamable client opened its long-lived GET (SSE)
+// stream, since that request never completes.
+function buildServer(): Server {
+  const server = new Server(
+    {
+      name: "mcp-arr",
+      version: SERVER_VERSION,
     },
-  }
-);
+    {
+      capabilities: {
+        tools: {},
+      },
+    }
+  );
+  registerHandlers(server);
+  return server;
+}
 
+// Module-level instance used by the stdio transport (single, long-lived session).
+const server = buildServer();
+
+type SearchEntry = {
+  id: string;
+  title: string;
+  url: string;
+  type: string;
+  service: string;
+  summary?: string;
+};
+
+function buildResourceUrl(path: string): string {
+  return `mcp-arr://${path}`;
+}
+
+function jsonText(data: unknown) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+  };
+}
+
+function textError(message: string) {
+  return {
+    content: [{ type: "text" as const, text: message }],
+    isError: true,
+  };
+}
+
+async function runUnifiedSearch(query: string): Promise<SearchEntry[]> {
+  const results: SearchEntry[] = [];
+  const trimmedQuery = query.trim();
+
+  if (trimmedQuery.length === 0) {
+    return results;
+  }
+
+  const lowerQuery = trimmedQuery.toLowerCase();
+
+  for (const service of ["radarr", "sonarr"] as const) {
+    const profiles = await trashClient.listProfiles(service);
+    results.push(
+      ...profiles
+        .filter((profile) =>
+          profile.name.toLowerCase().includes(lowerQuery) ||
+          profile.description?.toLowerCase().includes(lowerQuery)
+        )
+        .slice(0, 8)
+        .map((profile) => ({
+          id: `trash-profile:${service}:${profile.name}`,
+          title: `${profile.name} (${service})`,
+          url: buildResourceUrl(`trash/profile/${service}/${encodeURIComponent(profile.name)}`),
+          type: "trash_profile",
+          service,
+          summary: profile.description?.replace(/<br>/g, " "),
+        }))
+    );
+  }
+
+  if (clients.sonarr) {
+    const series = await clients.sonarr.searchSeries(trimmedQuery);
+    results.push(
+      ...series.slice(0, 5).map((item) => ({
+        id: `arr:sonarr:series:${item.tvdbId}`,
+        title: `${item.title}${item.year ? ` (${item.year})` : ""}`,
+        url: buildResourceUrl(`arr/sonarr/series/${item.tvdbId}`),
+        type: "series",
+        service: "sonarr",
+        summary: item.overview?.slice(0, 220),
+      }))
+    );
+  }
+
+  if (clients.radarr) {
+    const movies = await clients.radarr.searchMovies(trimmedQuery);
+    results.push(
+      ...movies.slice(0, 5).map((item) => ({
+        id: `arr:radarr:movie:${item.tmdbId}`,
+        title: `${item.title}${item.year ? ` (${item.year})` : ""}`,
+        url: buildResourceUrl(`arr/radarr/movie/${item.tmdbId}`),
+        type: "movie",
+        service: "radarr",
+        summary: item.overview?.slice(0, 220),
+      }))
+    );
+  }
+
+  if (clients.lidarr) {
+    const artists = await clients.lidarr.searchArtists(trimmedQuery);
+    results.push(
+      ...artists.slice(0, 5).map((item) => ({
+        id: `arr:lidarr:artist:${item.foreignArtistId}`,
+        title: item.artistName || item.title,
+        url: buildResourceUrl(`arr/lidarr/artist/${item.foreignArtistId}`),
+        type: "artist",
+        service: "lidarr",
+        summary: item.overview?.slice(0, 220),
+      }))
+    );
+  }
+
+  return results;
+}
+
+async function fetchSearchEntry(id: string): Promise<unknown> {
+  const [kind, service, subtype, rawId] = id.split(":");
+
+  if (kind === "trash-profile" && (service === "radarr" || service === "sonarr")) {
+    const profile = await trashClient.getProfile(service, rawId);
+    if (!profile) {
+      throw new Error(`TRaSH profile '${rawId}' not found for ${service}`);
+    }
+
+    return {
+      id,
+      title: `${profile.name} (${service})`,
+      url: buildResourceUrl(`trash/profile/${service}/${encodeURIComponent(profile.name)}`),
+      service,
+      type: "trash_profile",
+      data: {
+        name: profile.name,
+        description: profile.trash_description?.replace(/<br>/g, "\n"),
+        upgradeAllowed: profile.upgradeAllowed,
+        cutoff: profile.cutoff,
+        minFormatScore: profile.minFormatScore,
+        cutoffFormatScore: profile.cutoffFormatScore,
+        language: profile.language,
+        qualities: profile.items,
+        customFormats: Object.entries(profile.formatItems || {}).map(([name, trashId]) => ({
+          name,
+          trash_id: trashId,
+        })),
+      },
+    };
+  }
+
+  if (kind !== "arr") {
+    throw new Error(`Unsupported fetch id '${id}'`);
+  }
+
+  if (service === "sonarr" && subtype === "series" && clients.sonarr) {
+    const tvdbId = Number(rawId);
+    const matches = (await clients.sonarr.searchSeries(rawId)).filter((item) => item.tvdbId === tvdbId);
+    return {
+      id,
+      title: matches[0]?.title || rawId,
+      url: buildResourceUrl(`arr/sonarr/series/${rawId}`),
+      service,
+      type: subtype,
+      data: matches.slice(0, 10),
+    };
+  }
+
+  if (service === "radarr" && subtype === "movie" && clients.radarr) {
+    const tmdbId = Number(rawId);
+    const matches = (await clients.radarr.searchMovies(rawId)).filter((item) => item.tmdbId === tmdbId);
+    return {
+      id,
+      title: matches[0]?.title || rawId,
+      url: buildResourceUrl(`arr/radarr/movie/${rawId}`),
+      service,
+      type: subtype,
+      data: matches.slice(0, 10),
+    };
+  }
+
+  if (service === "lidarr" && subtype === "artist" && clients.lidarr) {
+    const matches = (await clients.lidarr.searchArtists(rawId)).filter((item) => item.foreignArtistId === rawId);
+    return {
+      id,
+      title: matches[0]?.artistName || matches[0]?.title || rawId,
+      url: buildResourceUrl(`arr/lidarr/artist/${rawId}`),
+      service,
+      type: subtype,
+      data: matches.slice(0, 10),
+    };
+  }
+
+  throw new Error(`Unsupported or unavailable fetch target '${id}'`);
+}
+
+type QueueCapableClient = SonarrClient | RadarrClient | LidarrClient;
+
+async function getPaginatedQueue(
+  client: QueueCapableClient,
+  args: { limit?: number; offset?: number } | undefined
+) {
+  const limit = Math.min(Math.max(Math.floor(args?.limit ?? 25), 1), 100);
+  const offset = Math.max(Math.floor(args?.offset ?? 0), 0);
+  const pageSize = 100;
+  const records = [];
+  let totalRecords = 0;
+  let page = 1;
+
+  while (true) {
+    const queuePage = await client.getQueue(page, pageSize);
+    totalRecords = queuePage.totalRecords;
+    records.push(...queuePage.records);
+
+    if (records.length >= totalRecords || queuePage.records.length === 0) {
+      break;
+    }
+
+    page += 1;
+  }
+
+  const items = records.slice(offset, offset + limit).map((q) => ({
+    id: q.id,
+    title: q.title,
+    status: q.status,
+    progress: q.size > 0 ? ((1 - q.sizeleft / q.size) * 100).toFixed(1) + "%" : "unknown",
+    timeLeft: q.timeleft,
+    downloadClient: q.downloadClient,
+    protocol: q.protocol,
+    trackedDownloadStatus: q.trackedDownloadStatus,
+    trackedDownloadState: q.trackedDownloadState,
+  }));
+
+  return {
+    total: totalRecords,
+    returned: items.length,
+    offset,
+    limit,
+    hasMore: offset + items.length < totalRecords,
+    nextOffset: offset + items.length < totalRecords ? offset + items.length : null,
+    items,
+  };
+}
+
+// Registers the MCP request handlers on a server instance. Called by
+// buildServer() for every server created (one per HTTP request, plus the
+// module-level stdio instance).
+function registerHandlers(server: Server): void {
 // Handle list tools request
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return { tools: TOOLS };
@@ -1191,6 +1682,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
+      case "search": {
+        const query = (args as { query: string }).query;
+        const results = await runUnifiedSearch(query);
+        return jsonText({ results });
+      }
+
+      case "fetch": {
+        const id = (args as { id: string }).id;
+        const result = await fetchSearchEntry(id);
+        return jsonText(result);
+      }
+
       case "arr_status": {
         const statuses: Record<string, unknown> = {};
         for (const service of configuredServices) {
@@ -1286,17 +1789,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         } else {
           statuses.bazarr = { configured: false };
         }
-        return {
-          content: [{ type: "text", text: JSON.stringify(statuses, null, 2) }],
-        };
+        return jsonText(statuses);
       }
 
       // Dynamic config tool handlers
       // Quality Profiles
       case "sonarr_get_quality_profiles":
       case "radarr_get_quality_profiles":
-      case "lidarr_get_quality_profiles":
-      case "readarr_get_quality_profiles": {
+      case "lidarr_get_quality_profiles": {
         const serviceName = name.split('_')[0] as keyof typeof clients;
         const client = clients[serviceName];
         if (!client) throw new Error(`${serviceName} not configured`);
@@ -1330,8 +1830,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Health checks
       case "sonarr_get_health":
       case "radarr_get_health":
-      case "lidarr_get_health":
-      case "readarr_get_health": {
+      case "lidarr_get_health": {
         const serviceName = name.split('_')[0] as keyof typeof clients;
         const client = clients[serviceName];
         if (!client) throw new Error(`${serviceName} not configured`);
@@ -1356,8 +1855,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Root folders
       case "sonarr_get_root_folders":
       case "radarr_get_root_folders":
-      case "lidarr_get_root_folders":
-      case "readarr_get_root_folders": {
+      case "lidarr_get_root_folders": {
         const serviceName = name.split('_')[0] as keyof typeof clients;
         const client = clients[serviceName];
         if (!client) throw new Error(`${serviceName} not configured`);
@@ -1399,8 +1897,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Download clients
       case "sonarr_get_download_clients":
       case "radarr_get_download_clients":
-      case "lidarr_get_download_clients":
-      case "readarr_get_download_clients": {
+      case "lidarr_get_download_clients": {
         const serviceName = name.split('_')[0] as keyof typeof clients;
         const client = clients[serviceName];
         if (!client) throw new Error(`${serviceName} not configured`);
@@ -1429,8 +1926,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Naming config
       case "sonarr_get_naming":
       case "radarr_get_naming":
-      case "lidarr_get_naming":
-      case "readarr_get_naming": {
+      case "lidarr_get_naming": {
         const serviceName = name.split('_')[0] as keyof typeof clients;
         const client = clients[serviceName];
         if (!client) throw new Error(`${serviceName} not configured`);
@@ -1446,8 +1942,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Tags
       case "sonarr_get_tags":
       case "radarr_get_tags":
-      case "lidarr_get_tags":
-      case "readarr_get_tags": {
+      case "lidarr_get_tags": {
         const serviceName = name.split('_')[0] as keyof typeof clients;
         const client = clients[serviceName];
         if (!client) throw new Error(`${serviceName} not configured`);
@@ -1466,8 +1961,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Comprehensive setup review
       case "sonarr_review_setup":
       case "radarr_review_setup":
-      case "lidarr_review_setup":
-      case "readarr_review_setup": {
+      case "lidarr_review_setup": {
         const serviceName = name.split('_')[0] as keyof typeof clients;
         const client = clients[serviceName];
         if (!client) throw new Error(`${serviceName} not configured`);
@@ -1486,12 +1980,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           client.getIndexers(),
         ]);
 
-        // For Lidarr/Readarr, also get metadata profiles
+        // For Lidarr, also get metadata profiles
         let metadataProfiles = null;
         if (serviceName === 'lidarr' && clients.lidarr) {
           metadataProfiles = await clients.lidarr.getMetadataProfiles();
-        } else if (serviceName === 'readarr' && clients.readarr) {
-          metadataProfiles = await clients.readarr.getMetadataProfiles();
         }
 
         const review = {
@@ -1573,38 +2065,56 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Sonarr handlers
       case "sonarr_get_series": {
         if (!clients.sonarr) throw new Error("Sonarr not configured");
-        const a = args as { sortBy?: string; sortDir?: string; limit?: number };
-        const raw = a.sortBy;
-        const sortBy = raw === 'dateAdded' || raw === 'sizeOnDisk' ? raw : undefined;
-        const sortDir = a.sortDir === 'asc' || a.sortDir === 'desc' ? a.sortDir : undefined;
-        const limitRaw = a.limit != null ? Number(a.limit) : NaN;
-        const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 1000) : undefined;
-        let series = await clients.sonarr.getSeries();
+        const { limit = 25, offset = 0, search, sortBy: sortByArg, sortDir: sortDirArg } = args as {
+          limit?: number;
+          offset?: number;
+          search?: string;
+          sortBy?: string;
+          sortDir?: string;
+        };
+        const sortBy = sortByArg === 'dateAdded' || sortByArg === 'sizeOnDisk' ? sortByArg : undefined;
+        const sortDir = sortDirArg === 'asc' || sortDirArg === 'desc' ? sortDirArg : undefined;
+        const normalizedLimit = Math.max(1, Math.min(limit, 100));
+        const normalizedOffset = Math.max(0, offset);
+        const filter = search?.trim().toLowerCase();
+
+        const allSeries = await clients.sonarr.getSeries();
+        const filteredSeries = filter
+          ? allSeries.filter(s => s.title.toLowerCase().includes(filter))
+          : allSeries;
+        // Sorting happens before pagination, so offset/limit page through the sorted order.
+        let sortedSeries = filteredSeries;
         if (sortBy === 'dateAdded') {
           const dir = sortDir ?? 'asc';
-          series = [...series].sort((a, b) => {
+          sortedSeries = [...filteredSeries].sort((a, b) => {
             const cmp = (a.added ?? '').localeCompare(b.added ?? '');
             return dir === 'desc' ? -cmp : cmp;
           });
         } else if (sortBy === 'sizeOnDisk') {
           const dir = sortDir ?? 'desc';
-          series = [...series].sort((a, b) => {
+          sortedSeries = [...filteredSeries].sort((a, b) => {
             const cmp = (b.statistics?.sizeOnDisk ?? 0) - (a.statistics?.sizeOnDisk ?? 0);
             return dir === 'asc' ? -cmp : cmp;
           });
         }
-        const totalCount = series.length;
-        if (limit != null) series = series.slice(0, limit);
+        const pagedSeries = sortedSeries.slice(normalizedOffset, normalizedOffset + normalizedLimit);
         return {
           content: [{
             type: "text",
             text: JSON.stringify({
-              totalCount,
-              ...(limit != null && { limitedTo: limit }),
-              count: series.length,
-              sortBy: sortBy ?? undefined,
-              sortDir: sortBy ? (sortDir ?? (sortBy === 'dateAdded' ? 'asc' : 'desc')) : undefined,
-              series: series.map(s => ({
+              total: allSeries.length,
+              filteredCount: filteredSeries.length,
+              returned: pagedSeries.length,
+              offset: normalizedOffset,
+              limit: normalizedLimit,
+              hasMore: normalizedOffset + normalizedLimit < filteredSeries.length,
+              nextOffset: normalizedOffset + normalizedLimit < filteredSeries.length
+                ? normalizedOffset + normalizedLimit
+                : null,
+              search: search ?? null,
+              sortBy: sortBy ?? null,
+              sortDir: sortBy ? (sortDir ?? (sortBy === 'dateAdded' ? 'asc' : 'desc')) : null,
+              series: pagedSeries.map(s => ({
                 id: s.id,
                 title: s.title,
                 year: s.year,
@@ -1647,22 +2157,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "sonarr_get_queue": {
         if (!clients.sonarr) throw new Error("Sonarr not configured");
-        const queue = await clients.sonarr.getQueue();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              totalRecords: queue.totalRecords,
-              items: queue.records.map(q => ({
-                title: q.title,
-                status: q.status,
-                progress: ((1 - q.sizeleft / q.size) * 100).toFixed(1) + '%',
-                timeLeft: q.timeleft,
-                downloadClient: q.downloadClient,
-              })),
-            }, null, 2),
-          }],
-        };
+        return jsonText(await getPaginatedQueue(clients.sonarr, args as { limit?: number; offset?: number }));
       }
 
       case "sonarr_get_calendar": {
@@ -1755,6 +2250,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case "sonarr_refresh_series": {
+        if (!clients.sonarr) throw new Error("Sonarr not configured");
+        const seriesId = (args as { seriesId: number }).seriesId;
+        const series = await clients.sonarr.getSeriesById(seriesId);
+        const result = await clients.sonarr.refreshSeries(seriesId);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Refresh triggered for series`,
+              series: {
+                id: series.id,
+                title: series.title,
+                year: series.year,
+              },
+              commandId: result.id,
+            }, null, 2),
+          }],
+        };
+      }
+
       case "sonarr_delete_season": {
         if (!clients.sonarr) throw new Error("Sonarr not configured");
         const { seriesId, seasonNumber } = args as { seriesId: number; seasonNumber: number };
@@ -1804,19 +2321,54 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case "sonarr_add_series": {
+        if (!clients.sonarr) throw new Error("Sonarr not configured");
+        const { tvdbId, title, qualityProfileId, rootFolderPath, monitored, seasonFolder, tags } = args as {
+          tvdbId: number; title: string; qualityProfileId: number; rootFolderPath: string;
+          monitored?: boolean; seasonFolder?: boolean; tags?: number[];
+        };
+        const added = await clients.sonarr.addSeries({
+          tvdbId, title, qualityProfileId, rootFolderPath, monitored, seasonFolder, tags: tags ?? [],
+        });
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Added "${added.title}" (${added.year}) to Sonarr`,
+              id: added.id,
+              path: added.path,
+              monitored: added.monitored,
+            }, null, 2),
+          }],
+        };
+      }
+
       // Radarr handlers
       case "radarr_get_movies": {
         if (!clients.radarr) throw new Error("Radarr not configured");
-        const a = args as { sortBy?: string; sortDir?: string; limit?: number };
-        const raw = a.sortBy;
-        const sortBy = raw === 'dateAdded' || raw === 'added' ? 'dateAdded' : raw === 'sizeOnDisk' ? 'sizeOnDisk' : undefined;
-        const sortDir = a.sortDir === 'asc' || a.sortDir === 'desc' ? a.sortDir : undefined;
-        const limitRaw = a.limit != null ? Number(a.limit) : NaN;
-        const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 1000) : undefined;
-        let movies = await clients.radarr.getMovies();
+        const { limit = 25, offset = 0, search, sortBy: sortByArg, sortDir: sortDirArg } = args as {
+          limit?: number;
+          offset?: number;
+          search?: string;
+          sortBy?: string;
+          sortDir?: string;
+        };
+        const sortBy = sortByArg === 'dateAdded' || sortByArg === 'added' ? 'dateAdded' : sortByArg === 'sizeOnDisk' ? 'sizeOnDisk' : undefined;
+        const sortDir = sortDirArg === 'asc' || sortDirArg === 'desc' ? sortDirArg : undefined;
+        const normalizedLimit = Math.max(1, Math.min(limit, 100));
+        const normalizedOffset = Math.max(0, offset);
+        const filter = search?.trim().toLowerCase();
+
+        const allMovies = await clients.radarr.getMovies();
+        const filteredMovies = filter
+          ? allMovies.filter(m => m.title.toLowerCase().includes(filter))
+          : allMovies;
+        // Sorting happens before pagination, so offset/limit page through the sorted order.
+        let sortedMovies = filteredMovies;
         if (sortBy === 'dateAdded') {
           const dir = sortDir ?? 'asc';
-          movies = [...movies].sort((a, b) => {
+          sortedMovies = [...filteredMovies].sort((a, b) => {
             const da = a.dateAdded ?? a.added ?? '';
             const db = b.dateAdded ?? b.added ?? '';
             const cmp = da.localeCompare(db);
@@ -1824,23 +2376,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           });
         } else if (sortBy === 'sizeOnDisk') {
           const dir = sortDir ?? 'desc';
-          movies = [...movies].sort((a, b) => {
+          sortedMovies = [...filteredMovies].sort((a, b) => {
             const cmp = (b.sizeOnDisk ?? 0) - (a.sizeOnDisk ?? 0);
             return dir === 'asc' ? -cmp : cmp;
           });
         }
-        const totalCount = movies.length;
-        if (limit != null) movies = movies.slice(0, limit);
+        const pagedMovies = sortedMovies.slice(normalizedOffset, normalizedOffset + normalizedLimit);
         return {
           content: [{
             type: "text",
             text: JSON.stringify({
-              totalCount,
-              ...(limit != null && { limitedTo: limit }),
-              count: movies.length,
-              sortBy: sortBy ?? undefined,
-              sortDir: sortBy ? (sortDir ?? (sortBy === 'dateAdded' ? 'asc' : 'desc')) : undefined,
-              movies: movies.map(m => ({
+              total: allMovies.length,
+              filteredCount: filteredMovies.length,
+              returned: pagedMovies.length,
+              offset: normalizedOffset,
+              limit: normalizedLimit,
+              hasMore: normalizedOffset + normalizedLimit < filteredMovies.length,
+              nextOffset: normalizedOffset + normalizedLimit < filteredMovies.length
+                ? normalizedOffset + normalizedLimit
+                : null,
+              search: search ?? null,
+              sortBy: sortBy ?? null,
+              sortDir: sortBy ? (sortDir ?? (sortBy === 'dateAdded' ? 'asc' : 'desc')) : null,
+              movies: pagedMovies.map(m => ({
                 id: m.id,
                 title: m.title,
                 year: m.year,
@@ -1851,9 +2409,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 studio: m.studio,
                 dateAdded: m.dateAdded ?? m.added,
                 imdbId: m.imdbId || undefined,
-                rating: m.ratings?.value != null ? Number(m.ratings.value.toFixed(1)) : undefined,
-                ratingVotes: m.ratings?.votes,
-                ratingSource: m.ratings ? 'tmdb' : undefined,
+                rating: m.ratings?.tmdb?.value != null ? Number(m.ratings.tmdb.value.toFixed(1)) : undefined,
+                ratingVotes: m.ratings?.tmdb?.votes,
+                ratingSource: m.ratings?.tmdb ? 'tmdb' : undefined,
+                qualityProfileId: m.qualityProfileId,
+                ...(m.movieFile ? {
+                  quality: m.movieFile.quality?.quality?.name ?? null,
+                  resolution: m.movieFile.mediaInfo?.resolution ?? null,
+                  videoCodec: m.movieFile.mediaInfo?.videoCodec ?? null,
+                  videoDynamicRange: m.movieFile.mediaInfo?.videoDynamicRange ?? null,
+                  audioCodec: m.movieFile.mediaInfo?.audioCodec ?? null,
+                  audioChannels: m.movieFile.mediaInfo?.audioChannels ?? null,
+                } : {}),
+                ratings: Object.fromEntries(
+                  Object.entries(m.ratings || {})
+                    .filter(([, v]) => v && v.value > 0)
+                    .map(([k, v]) => [k, v.value])
+                ),
               })),
             }, null, 2),
           }],
@@ -1886,22 +2458,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "radarr_get_queue": {
         if (!clients.radarr) throw new Error("Radarr not configured");
-        const queue = await clients.radarr.getQueue();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              totalRecords: queue.totalRecords,
-              items: queue.records.map(q => ({
-                title: q.title,
-                status: q.status,
-                progress: ((1 - q.sizeleft / q.size) * 100).toFixed(1) + '%',
-                timeLeft: q.timeleft,
-                downloadClient: q.downloadClient,
-              })),
-            }, null, 2),
-          }],
-        };
+        return jsonText(await getPaginatedQueue(clients.radarr, args as { limit?: number; offset?: number }));
       }
 
       case "radarr_get_calendar": {
@@ -1953,6 +2510,125 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case "radarr_refresh_movie": {
+        if (!clients.radarr) throw new Error("Radarr not configured");
+        const movieId = (args as { movieId: number }).movieId;
+        const movie = await clients.radarr.getMovieById(movieId);
+        const result = await clients.radarr.refreshMovie(movieId);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Refresh triggered for movie`,
+              movie: {
+                id: movie.id,
+                title: movie.title,
+                year: movie.year,
+              },
+              commandId: result.id,
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "radarr_add_movie": {
+        if (!clients.radarr) throw new Error("Radarr not configured");
+        const { tmdbId, title, qualityProfileId, rootFolderPath, monitored, minimumAvailability, tags } = args as {
+          tmdbId: number; title: string; qualityProfileId: number; rootFolderPath: string;
+          monitored?: boolean; minimumAvailability?: string; tags?: number[];
+        };
+        const added = await clients.radarr.addMovie({
+          tmdbId, title, qualityProfileId, rootFolderPath, monitored, minimumAvailability, tags: tags ?? [],
+        });
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Added "${added.title}" (${added.year}) to Radarr`,
+              id: added.id,
+              path: added.path,
+              monitored: added.monitored,
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "radarr_update_movie": {
+        if (!clients.radarr) throw new Error("Radarr not configured");
+        const { movieId, qualityProfileId, monitored, minimumAvailability, tags, path } = args as {
+          movieId: number; qualityProfileId?: number; monitored?: boolean;
+          minimumAvailability?: string; tags?: number[]; path?: string;
+        };
+        // Fetch the full movie object first
+        const movie = await clients.radarr.getMovieById(movieId);
+        // Apply updates
+        if (qualityProfileId !== undefined) movie.qualityProfileId = qualityProfileId;
+        if (monitored !== undefined) movie.monitored = monitored;
+        if (minimumAvailability !== undefined) movie.minimumAvailability = minimumAvailability;
+        if (tags !== undefined) movie.tags = tags;
+        if (path !== undefined) movie.path = path;
+        const updated = await clients.radarr.updateMovie(movie);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Updated "${updated.title}" (${updated.year})`,
+              movie: {
+                id: updated.id,
+                title: updated.title,
+                year: updated.year,
+                qualityProfileId: updated.qualityProfileId,
+                monitored: updated.monitored,
+                minimumAvailability: updated.minimumAvailability,
+                tags: updated.tags,
+                path: updated.path,
+              },
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "radarr_delete_queue_item": {
+        if (!clients.radarr) throw new Error("Radarr not configured");
+        const { queueId, removeFromClient = true, blocklist = false } = args as {
+          queueId: number; removeFromClient?: boolean; blocklist?: boolean;
+        };
+        await clients.radarr.deleteQueueItem(queueId, { removeFromClient, blocklist });
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Removed queue item ${queueId}${blocklist ? ' and added to blocklist' : ''}`,
+              queueId,
+              removedFromClient: removeFromClient,
+              blocklisted: blocklist,
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "radarr_search_movies": {
+        if (!clients.radarr) throw new Error("Radarr not configured");
+        const { movieIds } = args as { movieIds: number[] };
+        if (!movieIds || movieIds.length === 0) throw new Error("movieIds array is required and must not be empty");
+        const result = await clients.radarr.searchMoviesBulk(movieIds);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              message: `Search triggered for ${movieIds.length} movie(s)`,
+              commandId: result.id,
+              movieIds,
+            }, null, 2),
+          }],
+        };
+      }
+
       // Lidarr handlers
       case "lidarr_get_artists": {
         if (!clients.lidarr) throw new Error("Lidarr not configured");
@@ -1979,7 +2655,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "lidarr_search": {
         if (!clients.lidarr) throw new Error("Lidarr not configured");
-        const term = (args as { term: string }).term;
+        const a = args as { term?: string; query?: string; artist?: string; name?: string };
+        const term = a.term ?? a.query ?? a.artist ?? a.name;
+        if (!term) throw new Error("term required (artist name)");
         const results = await clients.lidarr.searchArtists(term);
         return {
           content: [{
@@ -1987,9 +2665,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             text: JSON.stringify({
               count: results.length,
               results: results.slice(0, 10).map(r => ({
-                title: r.title,
+                artistName: r.artistName ?? r.title,
+                disambiguation: r.disambiguation,
                 foreignArtistId: r.foreignArtistId,
-                overview: r.overview?.substring(0, 200) + (r.overview && r.overview.length > 200 ? '...' : ''),
+                overview: r.overview ? (r.overview.substring(0, 200) + (r.overview.length > 200 ? '...' : '')) : undefined,
               })),
             }, null, 2),
           }],
@@ -1998,22 +2677,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "lidarr_get_queue": {
         if (!clients.lidarr) throw new Error("Lidarr not configured");
-        const queue = await clients.lidarr.getQueue();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              totalRecords: queue.totalRecords,
-              items: queue.records.map(q => ({
-                title: q.title,
-                status: q.status,
-                progress: ((1 - q.sizeleft / q.size) * 100).toFixed(1) + '%',
-                timeLeft: q.timeleft,
-                downloadClient: q.downloadClient,
-              })),
-            }, null, 2),
-          }],
-        };
+        return jsonText(await getPaginatedQueue(clients.lidarr, args as { limit?: number; offset?: number }));
       }
 
       case "lidarr_get_albums": {
@@ -2098,144 +2762,58 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      // Readarr handlers
-      case "readarr_get_authors": {
-        if (!clients.readarr) throw new Error("Readarr not configured");
-        const authors = await clients.readarr.getAuthors();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: authors.length,
-              authors: authors.map(a => ({
-                id: a.id,
-                authorName: a.authorName,
-                status: a.status,
-                books: a.statistics?.bookFileCount + '/' + a.statistics?.totalBookCount,
-                sizeOnDisk: formatBytes(a.statistics?.sizeOnDisk || 0),
-                monitored: a.monitored,
-                dateAdded: a.added,
-              })),
-            }, null, 2),
-          }],
+      case "lidarr_add_artist": {
+        if (!clients.lidarr) throw new Error("Lidarr not configured");
+        const { foreignArtistId, artistName, qualityProfileId, metadataProfileId, rootFolderPath, monitored, tags } = args as {
+          foreignArtistId: string; artistName: string; qualityProfileId: number;
+          metadataProfileId: number; rootFolderPath: string; monitored?: boolean; tags?: number[];
         };
-      }
-
-      case "readarr_search": {
-        if (!clients.readarr) throw new Error("Readarr not configured");
-        const term = (args as { term: string }).term;
-        const results = await clients.readarr.searchAuthors(term);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: results.length,
-              results: results.slice(0, 10).map(r => ({
-                title: r.title,
-                foreignAuthorId: r.foreignAuthorId,
-                overview: r.overview?.substring(0, 200) + (r.overview && r.overview.length > 200 ? '...' : ''),
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "readarr_get_queue": {
-        if (!clients.readarr) throw new Error("Readarr not configured");
-        const queue = await clients.readarr.getQueue();
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              totalRecords: queue.totalRecords,
-              items: queue.records.map(q => ({
-                title: q.title,
-                status: q.status,
-                progress: ((1 - q.sizeleft / q.size) * 100).toFixed(1) + '%',
-                timeLeft: q.timeleft,
-                downloadClient: q.downloadClient,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "readarr_get_books": {
-        if (!clients.readarr) throw new Error("Readarr not configured");
-        const authorId = (args as { authorId: number }).authorId;
-        const books = await clients.readarr.getBooks(authorId);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              count: books.length,
-              books: books.map(b => ({
-                id: b.id,
-                title: b.title,
-                releaseDate: b.releaseDate,
-                pageCount: b.pageCount,
-                monitored: b.monitored,
-                hasFile: b.statistics ? b.statistics.bookFileCount > 0 : false,
-                sizeOnDisk: formatBytes(b.statistics?.sizeOnDisk || 0),
-                grabbed: b.grabbed,
-                dateAdded: (b as { added?: string }).added,
-              })),
-            }, null, 2),
-          }],
-        };
-      }
-
-      case "readarr_search_book": {
-        if (!clients.readarr) throw new Error("Readarr not configured");
-        const bookIds = (args as { bookIds: number[] }).bookIds;
-        const result = await clients.readarr.searchBook(bookIds);
+        const added = await clients.lidarr.addArtist({
+          foreignArtistId, artistName, qualityProfileId, metadataProfileId, rootFolderPath, monitored, tags: tags ?? [],
+        });
         return {
           content: [{
             type: "text",
             text: JSON.stringify({
               success: true,
-              message: `Search triggered for ${bookIds.length} book(s)`,
-              commandId: result.id,
+              message: `Added "${added.artistName}" to Lidarr`,
+              id: added.id,
+              path: added.path,
+              monitored: added.monitored,
             }, null, 2),
           }],
         };
       }
 
-      case "readarr_search_missing": {
-        if (!clients.readarr) throw new Error("Readarr not configured");
-        const authorId = (args as { authorId: number }).authorId;
-        const result = await clients.readarr.searchMissingBooks(authorId);
+      case "lidarr_get_root_folders": {
+        if (!clients.lidarr) throw new Error("Lidarr not configured");
+        const folders = await clients.lidarr.getRootFolders();
         return {
           content: [{
             type: "text",
-            text: JSON.stringify({
-              success: true,
-              message: `Search triggered for missing books`,
-              commandId: result.id,
-            }, null, 2),
+            text: JSON.stringify(folders, null, 2),
           }],
         };
       }
 
-      case "readarr_get_calendar": {
-        if (!clients.readarr) throw new Error("Readarr not configured");
-        const days = (args as { days?: number })?.days || 30;
-        const start = new Date().toISOString().split('T')[0];
-        const end = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-        const calendar = await clients.readarr.getCalendar(start, end);
+      case "lidarr_get_quality_profiles": {
+        if (!clients.lidarr) throw new Error("Lidarr not configured");
+        const profiles = await clients.lidarr.getQualityProfiles();
         return {
           content: [{
             type: "text",
-            text: JSON.stringify({
-              count: calendar.length,
-              books: calendar.map(b => ({
-                id: b.id,
-                title: b.title,
-                authorId: b.authorId,
-                releaseDate: b.releaseDate,
-                monitored: b.monitored,
-              })),
-            }, null, 2),
+            text: JSON.stringify(profiles.map(p => ({ id: p.id, name: p.name })), null, 2),
+          }],
+        };
+      }
+
+      case "lidarr_get_metadata_profiles": {
+        if (!clients.lidarr) throw new Error("Lidarr not configured");
+        const profiles = await clients.lidarr.getMetadataProfiles();
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(profiles.map(p => ({ id: p.id, name: p.name })), null, 2),
           }],
         };
       }
@@ -2631,15 +3209,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             results.lidarr = { count: lidarrResults.length, results: lidarrResults.slice(0, 5) };
           } catch (e) {
             results.lidarr = { error: e instanceof Error ? e.message : String(e) };
-          }
-        }
-
-        if (clients.readarr) {
-          try {
-            const readarrResults = await clients.readarr.searchAuthors(term);
-            results.readarr = { count: readarrResults.length, results: readarrResults.slice(0, 5) };
-          } catch (e) {
-            results.readarr = { error: e instanceof Error ? e.message : String(e) };
           }
         }
 
@@ -3229,6 +3798,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   }
 });
+}
 
 // Bazarr helpers
 function bazarrPaging(a: { start?: number; length?: number }): { start: number; length: number } {
@@ -3250,11 +3820,79 @@ function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+async function startHttpServer() {
+  const httpServer = createServer(async (req, res) => {
+    if (!req.url) {
+      res.statusCode = 400;
+      res.end("Missing URL");
+      return;
+    }
+
+    const requestUrl = new URL(req.url, `http://${req.headers.host || `${HTTP_HOST}:${HTTP_PORT}`}`);
+
+    if (requestUrl.pathname === "/health" && req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        status: "ok",
+        version: SERVER_VERSION,
+        transport: "http",
+        configuredServices: configuredServices.map((service) => service.name),
+      }));
+      return;
+    }
+
+    if (requestUrl.pathname !== HTTP_PATH) {
+      res.statusCode = 404;
+      res.end("Not found");
+      return;
+    }
+
+    // Stateless HTTP: a fresh server + transport per request, with no session
+    // id issued (sessionIdGenerator: undefined). This lets MCP clients that do
+    // not echo the Mcp-Session-Id header back — e.g. Claude Code — work. Using a
+    // new server per request means requests are no longer serialized through a
+    // single shared server, so a long-lived GET (SSE) stream can stay open
+    // without blocking other requests. The previous shared-server + serialized
+    // queue deadlocked the moment a streamable client (e.g. a gateway/proxy)
+    // opened its GET stream — that request never completes, so every later
+    // request hung behind it.
+    const requestServer = buildServer();
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+    });
+    res.on("close", () => {
+      void transport.close();
+      void requestServer.close();
+    });
+    try {
+      await requestServer.connect(transport);
+      await transport.handleRequest(req, res);
+    } catch (error) {
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.end(error instanceof Error ? error.message : String(error));
+      }
+    }
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once("error", reject);
+    httpServer.listen(HTTP_PORT, HTTP_HOST, () => resolve());
+  });
+
+  console.error(`*arr MCP server running over HTTP at http://${HTTP_HOST}:${HTTP_PORT}${HTTP_PATH}`);
+}
+
 // Start the server
 async function main() {
+  if (TRANSPORT_MODE === "http") {
+    await startHttpServer();
+    return;
+  }
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`*arr MCP server running - configured services: ${statusParts.join(', ')}`);
+  console.error(`*arr MCP server running over stdio - configured services: ${statusParts.join(', ') || 'none (TRaSH-only mode)'}`);
 }
 
 main().catch((error) => {
