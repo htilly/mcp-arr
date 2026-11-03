@@ -22,7 +22,6 @@ import { GeneralName, GeneralSubtree, GeneralSubtrees, NameConstraints, id_ce_na
 import { X509Certificate, createPrivateKey, randomBytes, webcrypto } from 'node:crypto';
 import { existsSync, readFileSync, unwatchFile, watchFile } from 'node:fs';
 import { isIP } from 'node:net';
-import type { Server } from 'node:http';
 import { ConfigStore, StoredKeyPair, StoredTls } from './config-store.js';
 import {
   AcmeClient,
@@ -33,8 +32,8 @@ import {
   PendingCname,
   createDnsSolver,
   errMsg,
+  acquireChallengeServer,
   generateKeyPem,
-  startChallengeServer,
 } from './acme.js';
 
 type CryptoKey = webcrypto.CryptoKey;
@@ -98,6 +97,12 @@ export interface TlsManagerOptions {
   leafDays?: number;
   /** TLS_MODE=acme settings (see acmeSettingsFromEnv). */
   acme?: AcmeSettings;
+  /**
+   * TLS_MODE=acme: certificate to keep serving until the first ACME certificate is issued, instead
+   * of a temporary self-signed one. Used when switching modes in the web UI: browsers that saw
+   * HSTS would refuse a self-signed certificate.
+   */
+  initialMaterial?: TlsMaterial;
 }
 
 const ALG = { name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256' } as const;
@@ -120,8 +125,9 @@ export class TlsManager {
   private readonly acme?: AcmeSettings;
   private acmeClient?: AcmeClient;
   private dnsSolver?: DnsSolver;
-  private challengeServer?: Server;
-  private readonly httpTokens = new Map<string, string>();
+  private releaseChallenge?: () => void;
+  private readonly initialMaterial?: TlsMaterial;
+  private readonly fileListener = () => this.reloadFiles();
   private acmeStatus: AcmeInfo['status'] = 'pending';
   private pendingCnames?: PendingCname[];
   private acmeTimer?: NodeJS.Timeout;
@@ -139,6 +145,7 @@ export class TlsManager {
     this.certFile = opts.certFile;
     this.keyFile = opts.keyFile;
     this.acme = opts.acme;
+    this.initialMaterial = opts.initialMaterial;
     if (this.mode === 'acme' && !this.acme) throw new Error('TLS_MODE=acme needs ACME settings');
   }
 
@@ -215,7 +222,7 @@ export class TlsManager {
     if (this.mode === 'file') {
       if (!this.certFile || !this.keyFile) throw new Error('TLS_MODE=file requires TLS_CERT_FILE and TLS_KEY_FILE');
       this.material = loadFiles(this.certFile, this.keyFile);
-      for (const f of [this.certFile, this.keyFile]) watchFile(f, { interval: 5000 }, () => this.reloadFiles());
+      for (const f of [this.certFile, this.keyFile]) watchFile(f, { interval: 5000 }, this.fileListener);
       return;
     }
     if (this.mode === 'acme') {
@@ -238,9 +245,13 @@ export class TlsManager {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     if (this.acmeTimer) clearTimeout(this.acmeTimer);
-    this.challengeServer?.close();
-    if (this.certFile) unwatchFile(this.certFile);
-    if (this.keyFile) unwatchFile(this.keyFile);
+    this.releaseChallenge?.();
+    this.releaseChallenge = undefined;
+    this.listeners = [];
+    if (this.mode === 'file') {
+      if (this.certFile) unwatchFile(this.certFile, this.fileListener);
+      if (this.keyFile) unwatchFile(this.keyFile, this.fileListener);
+    }
   }
 
   private emit(): void {
@@ -276,7 +287,13 @@ export class TlsManager {
     }
     const saveState = (st: AcmeState) => this.saveAcme(st);
     const log = (m: string) => console.error(`ACME: ${m}`);
-    this.acmeClient = new AcmeClient({ settings: a, state: state as AcmeState, saveState, log, httpTokens: this.httpTokens });
+    let httpTokens = new Map<string, string>();
+    if (a.challenge === 'http-01') {
+      const ch = await acquireChallengeServer(a);
+      httpTokens = ch.tokens;
+      this.releaseChallenge = ch.release;
+    }
+    this.acmeClient = new AcmeClient({ settings: a, state: state as AcmeState, saveState, log, httpTokens });
     this.dnsSolver = createDnsSolver(a, state as AcmeState, saveState, log);
 
     const cert = state.cert;
@@ -284,11 +301,11 @@ export class TlsManager {
       this.material = { cert: cert.certPem, key: cert.keyPem };
       this.acmeStatus = 'valid';
     } else {
-      // Serve a temporary self-signed certificate until the CA has issued the real one
-      this.material = await createSelfSigned(a.domains);
+      // Keep the current certificate (mode switch) or serve a temporary self-signed one until
+      // the CA has issued the real one
+      this.material = this.initialMaterial ?? await createSelfSigned(a.domains);
       this.acmeStatus = 'pending';
     }
-    if (a.challenge === 'http-01') this.challengeServer = await startChallengeServer(a, this.httpTokens);
     this.scheduleAcme(0);
   }
 
@@ -338,6 +355,7 @@ export class TlsManager {
       this.acmeStatus = 'issuing';
       console.error(`ACME: requesting a certificate for ${this.acme!.domains.join(', ')} from ${new URL(this.acme!.directoryUrl).host} (${this.acme!.challenge}${this.acme!.dnsProvider ? ` via ${this.acme!.dnsProvider}` : ''})`);
       const issued = await this.acmeClient!.issue(this.dnsSolver);
+      if (this.stopped) return; // replaced in the meantime (settings changed)
       const acme = this.store.getTls().acme!;
       this.saveAcme({ ...acme, cert: { ...issued, sans: this.acme!.domains, directoryUrl: this.acme!.directoryUrl } });
       this.material = { cert: issued.certPem, key: issued.keyPem };
@@ -348,6 +366,7 @@ export class TlsManager {
       this.emit();
       this.scheduleAcme(12 * 3600_000);
     } catch (err) {
+      if (this.stopped) return;
       this.failures++;
       // Let's Encrypt allows 5 failed validations per name per hour - back off: 15m, 30m, 1h, 2h ... 12h
       const delay = Math.min(12 * 3600_000, 15 * 60_000 * 2 ** (this.failures - 1));
@@ -399,6 +418,14 @@ export class TlsManager {
       this.emit();
     }
   }
+}
+
+/** For the settings test: would TLS_MODE=internal with these names generate a new CA? */
+export function internalCaWouldChange(store: ConfigStore, names: string[], caPermitted?: string[]): boolean {
+  const n = unique(names.map(x => x.toLowerCase()));
+  const permitted = unique((caPermitted?.length ? caPermitted : n).map(x => x.toLowerCase()));
+  const ca = store.getTls().ca;
+  return !ca || !sameSet(ca.permitted, permitted) || !n.every(x => permittedBy(x, ca.permitted));
 }
 
 // ---------- helpers ----------

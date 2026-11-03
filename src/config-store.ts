@@ -159,6 +159,8 @@ interface ConfigData {
   tls: StoredTls;
   oauthClients: StoredOAuthClient[];
   oauthRefresh: StoredRefreshToken[];
+  /** Server settings changed in the web UI, keyed by environment variable name (see settings.ts). */
+  settings: Record<string, string>;
 }
 
 interface EncryptedEnvelope {
@@ -202,7 +204,7 @@ export function validatePassword(password: string): void {
 }
 
 function emptyData(): ConfigData {
-  return { services: {}, users: [], invites: [], tokens: [], tls: {}, oauthClients: [], oauthRefresh: [] };
+  return { services: {}, users: [], invites: [], tokens: [], tls: {}, oauthClients: [], oauthRefresh: [], settings: {} };
 }
 
 export function sha256(value: string): string {
@@ -785,6 +787,20 @@ export class ConfigStore {
     const live = new Set(this.data.oauthRefresh.map(r => r.tokenId));
     // expired access tokens without a live refresh token are dead weight
     this.data.tokens = this.data.tokens.filter(t => !t.expiresAt || Date.parse(t.expiresAt) > now || live.has(t.id));
+  }
+
+  // ---------- server settings (web UI) ----------
+
+  getSettings(): Record<string, string> {
+    return { ...(this.data.settings ?? {}) };
+  }
+
+  /** Replace the saved settings ('' or missing = not set). */
+  setSettings(settings: Record<string, string>): void {
+    const clean: Record<string, string> = {};
+    for (const [k, v] of Object.entries(settings)) if (v !== '') clean[k] = v;
+    this.data.settings = clean;
+    this.save();
   }
 
   // ---------- TLS material ----------

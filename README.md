@@ -232,6 +232,16 @@ Clients that can't send headers can use `https://…/mcp?token=<token>`. On an o
 
 The *Services* tab shows a live **status board**: calls per connection, success rate, response times, a 24-hour chart and a live feed. Each MCP tool call animates on the service sketch as it happens. Counts are stored in `stats.json` next to the config file (no tool arguments or results). Every user also gets a *My activity* tab with their own calls, apps (access tokens) and recent sign-ins (browser and OS only, no IP addresses). The *Brand* tab documents the UI's look - logo, colours, type, illustrations, components and motion - with a logo download and copyable CSS tokens.
 
+#### Settings tab (no restart)
+
+Admins can change the certificate mode and every certificate, Let's Encrypt, DNS-provider, OAuth and proxy setting in the web UI (*Settings* tab), instead of in the compose file:
+
+- **Test these settings** checks the form without applying anything and shows a live log. For Let's Encrypt it requests a real certificate from **Let's Encrypt staging** (no rate-limit risk, nothing trusted is issued) using the chosen validation - HTTP or DNS via Cloudflare/acme-dns - and throws it away. For acme-dns it shows the CNAME record to create. For own files it checks that certificate and key match, and it says whether a new built-in CA would be generated and whether OAuth would switch on.
+- **Save & apply** stores the values in the encrypted config file and switches immediately: new certificate manager, OAuth on/off, proxy trust. Switching between HTTPS and plain HTTP (`off`) re-opens the listener on the same port and the page reloads. When switching to Let's Encrypt, the current certificate keeps being served until the new one is issued (browsers that remember HSTS would refuse a temporary certificate).
+- Secrets (API tokens, HMAC keys) are never sent back to the browser - leave the field empty to keep the saved value.
+- **Environment variables always win**: a setting set in the environment is shown read-only with the variable's name. Remove it from your compose file to manage it in the UI. If a setting ever locks you out (e.g. `off` without a proxy), set `TLS_MODE` in the environment and restart.
+- Only in the environment: `PUBLIC_URL` (passkeys are bound to its host), `PORT`, `HOST`, `MCP_PATH`, the encryption key settings, and `ACME_DNS_HOOK` (a web UI admin must not be able to run programs on the server).
+
 #### Certificates (`TLS_MODE`)
 
 | Mode | Use when |
@@ -307,6 +317,8 @@ Resolved in this order:
 Switching from the key file to a passphrase is automatic (the file is re-encrypted on start). To change passphrases, start once with the old one in `CONFIG_ENCRYPTION_KEY_PREVIOUS`. Without the right key the server refuses to start — **back up your key**; there is no way to recover the data without it.
 
 #### HTTP mode settings
+
+All `TLS_*`, `ACME_*`, DNS-provider and `OAUTH*` variables and `TRUST_PROXY` can also be set in the *Settings* tab (see above); environment variables take precedence.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

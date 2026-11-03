@@ -34,6 +34,8 @@ services:
       # TLS_SANS: 192.168.1.10,mcp-arr
       # Allow any name under a domain without regenerating the CA:
       # TLS_CA_NAME_CONSTRAINTS: home.lan,192.168.1.10
+      # All TLS / Let's Encrypt / OAuth settings below can also be set in the web UI (Settings tab,
+      # applied without restart). Values set here win and are read-only in the UI.
       # Publicly trusted certificate from Let's Encrypt, obtained + renewed automatically (no root
       # certificate to install on your devices). Needs a domain you own. Pick ONE validation method:
       # TLS_MODE: acme
