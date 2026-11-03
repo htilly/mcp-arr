@@ -14,7 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - The server starts in TRaSH-only mode when nothing is configured, instead of exiting.
   - Readarr support is gone (removed upstream in 1.6.1); the Readarr tools no longer exist.
 
+### Added
+- Web UI: simple **name + password** sign-in as an alternative to passkeys. Available in setup, recovery and invite flows, and under "My sign-in" for existing users (set / change / remove). Passwords are scrypt-hashed, minimum 8 characters, rate-limited like other sign-in attempts. User names are now unique (case-insensitive). The UI works on pages where passkeys are unavailable (untrusted certificate).
+
 ### Fixed
+- Passkey errors in the web UI now show the browser's error name/message and a hint about the usual cause (untrusted root certificate, wrong host name) instead of only "cancelled or timed out".
 - `@modelcontextprotocol/sdk` is a runtime dependency again (as upstream). It sat in `devDependencies`, so a production install (`npm ci --omit=dev`, as the Dockerfile does) left it out and the container crashed on start with `ERR_MODULE_NOT_FOUND`.
 - `radarr_get_movies` reads `rating` / `ratingVotes` from the TMDB entry of Radarr's per-source `ratings` map. It read `ratings.value`, which does not exist on a Radarr movie, so the rating was never populated. The per-source `ratings` map from upstream is returned alongside.
 

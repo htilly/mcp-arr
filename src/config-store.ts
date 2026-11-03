@@ -89,6 +89,7 @@ export interface StoredUser {
   role: Role;
   createdAt: string;
   credentials: StoredCredential[];
+  passwordHash?: string; // "scrypt$<salt b64>$<hash b64>" - optional name/password sign-in
 }
 
 export interface StoredInvite {
@@ -142,6 +143,31 @@ export type KeySource = 'env' | 'env-file' | 'key-file';
 
 const AAD = Buffer.from('mcp-arr-config-v2');
 const SCRYPT_PARAMS = { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+
+const PASSWORD_MIN_LENGTH = 8;
+const PASSWORD_MAX_LENGTH = 256;
+const PASSWORD_SCRYPT = { N: 1 << 14, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+
+export function hashPassword(password: string): string {
+  const salt = randomBytes(16);
+  const hash = scryptSync(password, salt, 32, PASSWORD_SCRYPT);
+  return `scrypt$${salt.toString('base64')}$${hash.toString('base64')}`;
+}
+
+export function checkPassword(password: string, stored: string | undefined): boolean {
+  const [kind, saltB64, hashB64] = (stored ?? '').split('$');
+  if (kind !== 'scrypt' || !saltB64 || !hashB64) return false;
+  const expected = Buffer.from(hashB64, 'base64');
+  const actual = scryptSync(password, Buffer.from(saltB64, 'base64'), expected.length, PASSWORD_SCRYPT);
+  return timingSafeEqual(actual, expected);
+}
+
+const DUMMY_PASSWORD_HASH = hashPassword(randomBytes(16).toString('hex'));
+
+export function validatePassword(password: string): void {
+  if (password.length < PASSWORD_MIN_LENGTH) throw new Error(`Password must be at least ${PASSWORD_MIN_LENGTH} characters`);
+  if (password.length > PASSWORD_MAX_LENGTH) throw new Error('Password is too long');
+}
 
 function emptyData(): ConfigData {
   return { services: {}, users: [], invites: [], tokens: [], tls: {} };
@@ -428,18 +454,63 @@ export class ConfigStore {
     return this.data.users.filter(u => u.role === 'admin').length;
   }
 
-  createUser(name: string, role: Role, credential: Omit<StoredCredential, 'createdAt'>, handle: string): StoredUser {
+  isNameTaken(name: string): boolean {
+    const lower = cleanName(name, 'User').toLowerCase();
+    return this.data.users.some(u => u.name.toLowerCase() === lower);
+  }
+
+  private assertNameFree(name: string, exceptId?: string): void {
+    const lower = name.toLowerCase();
+    if (this.data.users.some(u => u.id !== exceptId && u.name.toLowerCase() === lower)) {
+      throw new Error('That name is already taken');
+    }
+  }
+
+  /** Create a user with a passkey credential and/or a password (at least one). */
+  createUser(
+    name: string,
+    role: Role,
+    credential: Omit<StoredCredential, 'createdAt'> | undefined,
+    handle: string,
+    password?: string
+  ): StoredUser {
+    if (!credential && password === undefined) throw new Error('A passkey or password is required');
+    const cleaned = cleanName(name, 'User');
+    this.assertNameFree(cleaned);
+    if (password !== undefined) validatePassword(password);
     const user: StoredUser = {
       id: randomUUID(),
       handle,
-      name: cleanName(name, 'User'),
+      name: cleaned,
       role,
       createdAt: new Date().toISOString(),
-      credentials: [{ ...credential, createdAt: new Date().toISOString() }],
+      credentials: credential ? [{ ...credential, createdAt: new Date().toISOString() }] : [],
+      ...(password !== undefined ? { passwordHash: hashPassword(password) } : {}),
     };
     this.data.users.push(user);
     this.save();
     return user;
+  }
+
+  setPassword(userId: string, password: string): void {
+    validatePassword(password);
+    this.requireUser(userId).passwordHash = hashPassword(password);
+    this.save();
+  }
+
+  clearPassword(userId: string): void {
+    const user = this.requireUser(userId);
+    if (user.credentials.length === 0) throw new Error('Add a passkey before removing your password');
+    user.passwordHash = undefined;
+    this.save();
+  }
+
+  /** Check name + password. Always spends the same hashing work so unknown names are not detectable by timing. */
+  verifyPassword(name: string, password: string): StoredUser | undefined {
+    const lower = name.trim().toLowerCase();
+    const user = this.data.users.find(u => u.passwordHash && u.name.toLowerCase() === lower);
+    const ok = checkPassword(password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
+    return user && ok ? user : undefined;
   }
 
   addCredential(userId: string, credential: Omit<StoredCredential, 'createdAt'>): void {
@@ -466,7 +537,7 @@ export class ConfigStore {
   removeCredential(userId: string, credentialId: string): void {
     const user = this.requireUser(userId);
     if (!user.credentials.some(c => c.id === credentialId)) throw new Error('Passkey not found');
-    if (user.credentials.length <= 1) throw new Error('You cannot remove your last passkey');
+    if (user.credentials.length <= 1 && !user.passwordHash) throw new Error('You cannot remove your last passkey (set a password first)');
     user.credentials = user.credentials.filter(c => c.id !== credentialId);
     this.save();
   }
@@ -479,7 +550,9 @@ export class ConfigStore {
   }
 
   renameUser(userId: string, name: string): void {
-    this.requireUser(userId).name = cleanName(name, 'User');
+    const cleaned = cleanName(name, 'User');
+    this.assertNameFree(cleaned, userId);
+    this.requireUser(userId).name = cleaned;
     this.save();
   }
 
