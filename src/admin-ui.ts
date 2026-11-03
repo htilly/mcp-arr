@@ -580,7 +580,7 @@ svg .thick { stroke-width: 10; }
       }, function (e) { showMsg(msg, 'err', e.message); });
     } }, [el('label', { text: 'New token name' }), nameInput, el('div', { class: 'row' }, [el('button', { class: 'primary', type: 'submit', text: 'Create token' })]), msg]);
     newToken.id = 'new-token';
-    return el('section', null, [el('h2', { text: isAdmin ? 'Access tokens (all users)' : 'My access tokens' }), el('div', { class: 'panel' }, [
+    return el('section', null, [el('h2', { text: isAdmin ? 'Access tokens' : 'My access tokens' }), el('div', { class: 'panel' }, [
       el('p', { class: 'muted', text: 'Tokens let MCP clients act as you. Each client should get its own token.' }),
       rows.length ? el('div', { class: 'table-wrap' }, [el('table', null, [
         el('thead', null, [el('tr', null, [el('th', { text: 'Name' }), isAdmin ? el('th', { text: 'Owner' }) : null, el('th', { text: 'Token' }), el('th', { text: 'Created' }), el('th', { text: 'Last used' }), el('th')])]),
