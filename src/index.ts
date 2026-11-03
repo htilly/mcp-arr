@@ -3883,10 +3883,11 @@ async function main() {
   store.load();
   applyConfig(store.getEffective());
 
-  const [{ startHttpServer }, { Auth }, { TlsManager }] = await Promise.all([
+  const [{ startHttpServer }, { Auth }, { TlsManager }, { OAuthProvider, resolveOAuthMode, DEFAULT_REDIRECT_HOSTS }] = await Promise.all([
     import("./http-server.js"),
     import("./auth.js"),
     import("./tls.js"),
+    import("./oauth.js"),
   ]);
 
   const splitList = (v?: string) => (v ?? '').split(',').map(x => x.trim()).filter(Boolean);
@@ -3908,7 +3909,26 @@ async function main() {
     recoveryEnabled: env.ADMIN_RECOVERY === 'true',
   });
 
+  // OAuth sign-in for Claude / OpenAI connectors - only when they can reach us with a real certificate
+  const mcpPath = env.MCP_PATH || '/mcp';
+  const oauthDecision = resolveOAuthMode({
+    setting: env.OAUTH,
+    publicUrl,
+    tlsMode,
+    certProblem: tls.publicTrustProblem(hostname),
+  });
+  const oauth = oauthDecision.enabled
+    ? new OAuthProvider({
+        store,
+        issuer: publicUrl.origin,
+        mcpPath,
+        allowedRedirectHosts: [...DEFAULT_REDIRECT_HOSTS, ...splitList(env.OAUTH_ALLOWED_REDIRECT_HOSTS).map(h => h.toLowerCase())],
+      })
+    : undefined;
+
   await startHttpServer({
+    oauth,
+    oauthReason: oauthDecision.reason,
     store,
     auth,
     tls,
@@ -3917,7 +3937,7 @@ async function main() {
     host: env.HOST || '0.0.0.0',
     trustProxy: env.TRUST_PROXY === 'true',
     createServer: buildServer,
-    mcpPath: env.MCP_PATH || '/mcp',
+    mcpPath,
     serverVersion: SERVER_VERSION,
     onConfigChanged: () => applyConfig(store.getEffective()),
     getConfiguredSummary: () => statusParts,

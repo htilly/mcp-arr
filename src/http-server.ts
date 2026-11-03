@@ -4,6 +4,8 @@
  * - Served over HTTPS (see tls.ts) - designed for LAN use without internet access.
  * - Web UI: per-user login with passkeys (see auth.ts), roles admin/user.
  * - /mcp: per-user access tokens (Authorization: Bearer <token>, or ?token=<token>).
+ *   With a publicly trusted certificate, Claude and OpenAI connectors can instead sign in via
+ *   OAuth 2.1 (see oauth.ts); the tokens they obtain are checked the same way.
  *   Stateless Streamable HTTP: a fresh MCP server + transport per request and no
  *   Mcp-Session-Id, so clients that don't echo the session header (e.g. Claude Code)
  *   work and long-lived GET streams can't block other requests. The token is checked
@@ -23,6 +25,7 @@ import { BazarrClient } from './bazarr-client.js';
 import { renderAdminPage } from './admin-ui.js';
 import { Auth, AuthError } from './auth.js';
 import { TlsManager } from './tls.js';
+import { OAuthProvider, OAuthError } from './oauth.js';
 
 export interface HttpServerOptions {
   store: ConfigStore;
@@ -37,6 +40,9 @@ export interface HttpServerOptions {
   createServer: () => Server;
   onConfigChanged: () => void;
   getConfiguredSummary: () => string[];
+  /** Present when OAuth sign-in for Claude/OpenAI connectors is active (see oauth.ts). */
+  oauth?: OAuthProvider;
+  oauthReason?: string;
 }
 
 class HttpError extends Error {
@@ -50,6 +56,9 @@ const RATE_WINDOW_MS = 15 * 60 * 1000;
 const RATE_MAX_FAILURES = 10;
 const TEST_TIMEOUT_MS = 10_000;
 const SESSION_COOKIE = '__Host-marr_session';
+const REGISTER_MAX = 20;
+
+const CORS = { 'Access-Control-Allow-Origin': '*' };
 
 // ---------- helpers ----------
 
@@ -190,6 +199,8 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     const now = Date.now();
     for (const [ip, f] of failures) if (now - f.first > RATE_WINDOW_MS) failures.delete(ip);
     auth.cleanup();
+    opts.oauth?.sweep();
+    for (const [ip, r] of registrations) if (now - r.first > RATE_WINDOW_MS) registrations.delete(ip);
   }, 5 * 60 * 1000);
   cleanup.unref();
 
@@ -208,7 +219,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
         jsonrpc: '2.0',
         error: { code: -32001, message: 'Unauthorized: missing or invalid access token. Create one in the web UI (/admin).' },
         id: null,
-      }, { 'WWW-Authenticate': 'Bearer' });
+      }, { 'WWW-Authenticate': opts.oauth ? `Bearer resource_metadata="${opts.oauth.resourceMetadataUrl}"` : 'Bearer' });
       return;
     }
 
@@ -225,6 +236,125 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     });
     await server.connect(transport);
     await transport.handleRequest(req, res, body);
+  }
+
+  // ----- OAuth (Claude / OpenAI connectors) -----
+
+  const registrations = new Map<string, { count: number; first: number }>();
+
+  function oauthJsonError(res: ServerResponse, error: OAuthError): void {
+    sendJson(res, error.status, { error: error.code, error_description: error.message }, {
+      ...CORS,
+      ...(error.status === 401 ? { 'WWW-Authenticate': 'Basic realm="oauth"' } : {}),
+    });
+  }
+
+  async function readForm(req: IncomingMessage): Promise<URLSearchParams> {
+    const text = await readBody(req);
+    if ((req.headers['content-type'] ?? '').includes('application/json')) {
+      let parsed: Record<string, unknown> = {};
+      try { parsed = text ? JSON.parse(text) : {}; } catch { throw new OAuthError(400, 'invalid_request', 'Invalid JSON body'); }
+      const form = new URLSearchParams();
+      for (const [k, v] of Object.entries(parsed)) if (typeof v === 'string') form.set(k, v);
+      return form;
+    }
+    return new URLSearchParams(text);
+  }
+
+  function errorPage(res: ServerResponse, status: number, message: string): void {
+    const esc = message.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+    res.writeHead(status, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'",
+    });
+    res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign-in failed</title>` +
+      `<body style="font:16px system-ui;max-width:32rem;margin:15vh auto;padding:0 1rem"><h1>Sign-in failed</h1><p>${esc}</p></body>`);
+  }
+
+  /** Returns true if the request was an OAuth route and has been handled. */
+  async function handleOAuth(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
+    const path = url.pathname;
+    const mcp = opts.mcpPath;
+    const isMeta = path === '/.well-known/oauth-protected-resource' || path === `/.well-known/oauth-protected-resource${mcp}` ||
+      path === '/.well-known/oauth-authorization-server';
+    const isApi = path === '/oauth/register' || path === '/oauth/token' || path === '/oauth/revoke';
+    const isAuthorize = path === '/oauth/authorize';
+    if (!isMeta && !isApi && !isAuthorize) return false;
+
+    const oauth = opts.oauth;
+    if (!oauth) {
+      sendJson(res, 404, { error: 'OAuth is not enabled on this server' });
+      return true;
+    }
+    if (req.method === 'OPTIONS' && (isMeta || isApi)) {
+      res.writeHead(204, { ...CORS, 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, MCP-Protocol-Version', 'Access-Control-Max-Age': '600' });
+      res.end();
+      return true;
+    }
+
+    try {
+      if (isMeta && req.method === 'GET') {
+        sendJson(res, 200, path.endsWith('authorization-server') ? oauth.authorizationServerMetadata() : oauth.protectedResourceMetadata(), { ...CORS, 'Cache-Control': 'public, max-age=300' });
+        return true;
+      }
+
+      if (path === '/oauth/register' && req.method === 'POST') {
+        const ip = clientIp(req);
+        const r = registrations.get(ip);
+        if (!r || Date.now() - r.first > RATE_WINDOW_MS) registrations.set(ip, { count: 1, first: Date.now() });
+        else if (++r.count > REGISTER_MAX) throw new OAuthError(429, 'temporarily_unavailable', 'Too many registrations - try again later');
+        const body = await readJson(req);
+        sendJson(res, 201, oauth.register(body), CORS);
+        return true;
+      }
+
+      if ((path === '/oauth/token' || path === '/oauth/revoke') && req.method === 'POST') {
+        if (rateLimited(req)) throw new OAuthError(429, 'temporarily_unavailable', 'Too many failed attempts - try again later');
+        const form = await readForm(req);
+        try {
+          if (path === '/oauth/token') {
+            sendJson(res, 200, oauth.token(req.headers.authorization, form), CORS);
+          } else {
+            oauth.revoke(req.headers.authorization, form);
+            sendJson(res, 200, {}, CORS);
+          }
+        } catch (error) {
+          if (error instanceof OAuthError && (error.code === 'invalid_client' || error.code === 'invalid_grant')) recordFailure(req);
+          throw error;
+        }
+        return true;
+      }
+
+      if (isAuthorize && req.method === 'GET') {
+        let id: string;
+        try {
+          id = oauth.beginAuthorization(url.searchParams);
+        } catch (error) {
+          if (error instanceof OAuthError) {
+            errorPage(res, error.status, error.message);
+            return true;
+          }
+          throw error;
+        }
+        // The session cookie is SameSite=Strict, so the sign-in/consent step runs inside the web UI.
+        res.writeHead(302, { Location: `/admin#oauth=${id}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+        res.end();
+        return true;
+      }
+    } catch (error) {
+      if (error instanceof OAuthError) {
+        oauthJsonError(res, error);
+        return true;
+      }
+      if (error instanceof HttpError) {
+        sendJson(res, error.status, { error: 'invalid_request', error_description: error.message }, CORS);
+        return true;
+      }
+      throw error;
+    }
+    sendJson(res, 405, { error: 'Method not allowed' }, CORS);
+    return true;
   }
 
   // ----- admin helpers -----
@@ -299,6 +429,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       configuredSummary: opts.getConfiguredSummary(),
       tokens: tokensView(user),
       tls: tls.info(),
+      oauth: { enabled: Boolean(opts.oauth), reason: opts.oauthReason ?? '', issuer: publicOrigin, mcpUrl: `${publicOrigin}${opts.mcpPath}` },
       ...(isAdmin ? {
         users: store.listUsers().map(publicUser),
         invites: store.listInvites().map(i => ({ id: i.id, role: i.role, createdAt: i.createdAt, expiresAt: i.expiresAt })),
@@ -327,6 +458,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
         recoveryAvailable: auth.recoveryAvailable,
         user: user ? publicUser(user) : null,
         rpID: auth.rpID,
+        oauth: Boolean(opts.oauth),
       });
       return;
     }
@@ -423,6 +555,26 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     if (path === '/overview' && method === 'GET') {
       sendJson(res, 200, overview(user));
       return;
+    }
+
+    const oauthMatch = path.match(/^\/oauth\/request\/([A-Za-z0-9_-]+)(?:\/(approve|deny))?$/);
+    if (oauthMatch) {
+      if (!opts.oauth) throw new HttpError(404, 'OAuth is not enabled');
+      if (!oauthMatch[2] && method === 'GET') {
+        const info = opts.oauth.describeRequest(oauthMatch[1]);
+        if (!info) throw new HttpError(404, 'This sign-in request has expired - start again from the connector');
+        sendJson(res, 200, { ...info, user: user.name });
+        return;
+      }
+      if (oauthMatch[2] && method === 'POST') {
+        try {
+          sendJson(res, 200, { redirect: opts.oauth.complete(oauthMatch[1], oauthMatch[2] === 'approve' ? user.id : undefined) });
+        } catch (error) {
+          if (error instanceof OAuthError) throw new HttpError(error.status, error.message);
+          throw error;
+        }
+        return;
+      }
     }
 
     const passkeyMatch = path.match(/^\/me\/passkeys\/([A-Za-z0-9_-]+)$/);
@@ -579,6 +731,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       if (tls.mode !== 'off') {
         res.setHeader('Strict-Transport-Security', 'max-age=31536000');
       }
+      if (await handleOAuth(req, res, url)) return;
       if (path === opts.mcpPath || path === `${opts.mcpPath}/`) {
         await handleMcp(req, res, url);
         return;
@@ -662,6 +815,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
   } else {
     console.error('  TLS:         off - make sure a reverse proxy terminates HTTPS');
   }
+  console.error(`  OAuth:       ${opts.oauth ? 'enabled for Claude/OpenAI connectors' : 'off'} (${opts.oauthReason ?? ''})`);
   console.error(`  Services:    ${summary.length ? summary.join(', ') : '(none yet - add them in the web UI)'}`);
   const code = auth.pendingSetupCode ?? auth.pendingRecoveryCode;
   if (code) {

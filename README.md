@@ -236,6 +236,16 @@ Clients that can't send headers can use `https://…/mcp?token=<token>`. On an o
 | `file` | You already run a LAN CA, e.g. [step-ca](https://smallstep.com/docs/step-ca/) (which also offers ACME for automatic renewal on an offline network), Caddy's internal CA, your router/NAS, or a certificate obtained elsewhere via DNS-01. Set `TLS_CERT_FILE` / `TLS_KEY_FILE`; files are reloaded automatically when they change. |
 | `off` | A reverse proxy in front terminates HTTPS. Set `TRUST_PROXY=true` so rate limiting uses `X-Forwarded-For`. `PUBLIC_URL` must still be the proxy's `https://` address. |
 
+#### Sign-in for Claude and ChatGPT connectors (OAuth)
+
+Claude "custom connectors" and OpenAI/ChatGPT connectors are called from the vendors' clouds, so they need an address reachable from the internet **and a publicly trusted certificate** (`TLS_MODE=file` with e.g. a Let's Encrypt certificate, or a reverse proxy with `TLS_MODE=off`). When that is the case the server automatically offers OAuth 2.1 sign-in, so nobody has to paste an access token:
+
+1. In Claude (Settings → Connectors → Add custom connector) or ChatGPT (developer mode → add connector) enter `https://<PUBLIC_URL>/mcp`. Leave the OAuth client fields empty - the connector registers itself (RFC 7591).
+2. You are sent to the web UI, sign in with your usual passkey or password, and approve the connection.
+3. The connector gets a 1-hour access token and a rotating refresh token. They show up under "Access tokens" as `OAuth: <connector>` and can be revoked there; deleting the user revokes them too.
+
+OAuth is **off** with `TLS_MODE=internal` (the built-in CA is not trusted by Claude/OpenAI), with an `http://` `PUBLIC_URL`, or when a `TLS_MODE=file` certificate is self-signed, expired or does not cover the host name. The startup log and the "Connect" tab say why. Redirect URIs are limited to `claude.ai`, `claude.com`, `chatgpt.com`, `openai.com` (and subdomains) plus loopback addresses; add more hosts with `OAUTH_ALLOWED_REDIRECT_HOSTS`. Endpoints: `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, `/oauth/register`, `/oauth/authorize`, `/oauth/token`, `/oauth/revoke`. Manually created access tokens keep working alongside OAuth.
+
 #### Encryption key
 
 Resolved in this order:
@@ -262,6 +272,8 @@ Switching from the key file to a passphrase is automatic (the file is re-encrypt
 | `KEY_FILE_PATH` | `/secrets/master.key` (Docker) | Fallback auto-generated key file |
 | `ADMIN_RECOVERY` | `false` | `true` prints a one-time recovery code to register a new admin passkey |
 | `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` (only behind your own reverse proxy) |
+| `OAUTH` | `auto` | OAuth sign-in for Claude/OpenAI connectors: `auto` (only with a publicly trusted certificate setup, see above), `on` (force; you vouch for the certificate), `off` |
+| `OAUTH_ALLOWED_REDIRECT_HOSTS` | – | Extra redirect hosts connectors may use, comma-separated (defaults: claude.ai, claude.com, chatgpt.com, openai.com) |
 
 Service variables (`SONARR_URL`, `SONARR_API_KEY`, …) still work and take precedence over the web UI, where they show as read-only.
 
