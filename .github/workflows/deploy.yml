@@ -143,10 +143,27 @@ jobs:
             || { echo "::error::cannot reach the socket proxy at $DOCKER_HOST"; exit 1; }
 
           # The compose file must actually point the service at the tag we deploy.
-          if ! grep -qE "^\s+image:\s+${IMAGE}:main\s*$" "$COMPOSE_FILE_PATH"; then
-            echo "::error::$COMPOSE_FILE_PATH does not point $SERVICE at ${IMAGE}:main"
+          # Ask compose itself which image the service resolves to, instead of
+          # grepping the file: that handles quoting, trailing comments, CRLF,
+          # ${VAR} interpolation, anchors/extends, and only looks at $SERVICE.
+          # The image name is not secret, so it is printed on a mismatch.
+          if ! RESOLVED=$(docker compose \
+                -p "$COMPOSE_PROJECT" \
+                --project-directory "$COMPOSE_DIR" \
+                --env-file "$COMPOSE_ENV_FILE" \
+                -f "$COMPOSE_FILE_PATH" \
+                config --images "$SERVICE" 2>/dev/null); then
+            echo "::error::docker compose could not parse $COMPOSE_FILE_PATH (run 'docker compose -f $COMPOSE_FILE_PATH config' on tillyse to see why)"
             exit 1
           fi
+          RESOLVED=$(printf '%s' "$RESOLVED" | tr -d '\r' | head -n 1)
+          case "$RESOLVED" in
+            "${IMAGE}:main") echo "ok: $SERVICE uses $RESOLVED" ;;
+            *)
+              echo "::error::$COMPOSE_FILE_PATH resolves $SERVICE to '${RESOLVED:-<none>}', expected '${IMAGE}:main'. Set 'image: ${IMAGE}:main' on the $SERVICE service (and drop any 'build:') on tillyse."
+              exit 1
+              ;;
+          esac
 
           FULL_SHA="${{ github.event.workflow_run.head_sha }}"
           SHORT_SHA="${FULL_SHA:0:7}"
