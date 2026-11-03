@@ -267,6 +267,41 @@ Service variables (`SONARR_URL`, `SONARR_API_KEY`, …) still work and take prec
 
 **Offline notes:** everything works without internet except the TRaSH Guides tools, which fetch guide data from GitHub and return an error when offline. To install on an air-gapped host, build the image elsewhere and move it with `docker save` / `docker load`.
 
+#### Self-hosted deploy (the "Deploy to tillyse" workflow)
+
+The repo's `deploy.yml` pulls the image built from `main` and recreates the `mcp-arr` service on a self-hosted runner, then checks that the server answers. Because the server now enforces authentication, that check accepts `401` with a `WWW-Authenticate: Bearer` challenge as "up", and optionally runs a full authenticated `initialize`.
+
+1. **The compose service on the host** must run the HTTPS mode, or the new image refuses to start (and the deploy rolls back automatically). Example for the service in `/config/docker-compose.yml` — the `image:` line must stay exactly as shown, the workflow's preflight greps for it:
+
+   ```yaml
+     mcp-arr:
+       image: ghcr.io/htilly/mcp-arr:main
+       environment:
+         MCP_TRANSPORT: http
+         HOST: 0.0.0.0
+         PORT: 3000
+         PUBLIC_URL: https://mcp-arr.home.lan:3000      # the name you open in the browser
+         TLS_SANS: mcp-arr                              # + any other name/IP the runner or clients use
+         CONFIG_ENCRYPTION_KEY_FILE: /run/secrets/mcp_arr_key
+       volumes:
+         - /config/mcp-arr/data:/config                 # encrypted config; keep it across deploys
+       secrets: [mcp_arr_key]
+       healthcheck:
+         test: ["CMD", "wget", "-q", "--no-check-certificate", "-O-", "https://127.0.0.1:3000/health"]
+   secrets:
+     mcp_arr_key:
+       file: /config/secrets/mcp-arr-key.txt           # openssl rand -base64 32 > mcp-arr-key.txt
+   ```
+
+2. **The runner's environment** (`/config/secrets/mcp-arr-runner.env`): set `APP_URL` to an address that is in the server certificate (`PUBLIC_URL` host or `TLS_SANS`), e.g. `APP_URL=https://mcp-arr:3000`. Two optional variables make the check stricter:
+
+   | Variable | Effect |
+   |----------|--------|
+   | `MCP_ARR_CA_FILE` | Path to a copy of the server's root certificate (`/ca.crt`). Without it, a certificate the runner doesn't trust is checked with verification **off** (liveness only, with a warning) and no token is ever sent. |
+   | `MCP_CHECK_TOKEN` | An access token (create a "deploy" user in the web UI and a token for it). With it, the deploy also runs an authenticated `initialize`, so a broken auth setup fails the deploy instead of passing on the `401`. Only sent over verified HTTPS, never printed. |
+
+The first deploy of the HTTPS version can still fail and roll back to an older image that speaks plain HTTP. When `APP_URL` is `https://`, the rollback step also accepts the same host:port over plain HTTP (liveness only, with a warning, never with the token), so the rollback is not reported as failed just because the old image has no TLS.
+
 ### Using the local build (Cursor / Claude)
 
 If you develop from source and run `npm run build`, the **published npm package** used by `npx mcp-arr-server` is an older version. To use your local build and latest code (e.g. Tautulli history with pagination):
