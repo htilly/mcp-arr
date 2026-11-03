@@ -297,7 +297,7 @@ jobs:
               verified=0
               tls=()
               SUFFIX=" [answered over plain http: an older image after a rollback; the token was not sent]"
-              echo "::warning::$APP_URL does not speak TLS but the same host:port answers over http (older image after a rollback?): checking liveness over http, token not sent"
+              echo "::warning::APP_URL is https but the server does not speak TLS; the same host:port answers over http (older image after a rollback?): checking liveness over http, token not sent"
               post_init "$TMP/r"
             fi
             if [ "$CURL_RC" -eq 77 ]; then
@@ -342,8 +342,18 @@ jobs:
             sleep "$PAUSE"
           done
 
-          echo "::error::/mcp did not answer as expected (last http=$CODE)"
-          summary "FAILED: /mcp did not answer (last http=$CODE)"
+          echo "::error::/mcp did not answer as expected (last http=$CODE, curl exit $CURL_RC)"
+          case "$CURL_RC" in
+            6)        HINT="the host name in APP_URL does not resolve from the runner" ;;
+            7)        HINT="connection refused: nothing listens on that host:port as seen from the runner (check APP_URL, the published port, the runner's network)" ;;
+            28)       HINT="timed out: the runner cannot reach that host:port (check APP_URL, firewall, network)" ;;
+            35|52|56) HINT="TLS/protocol mismatch: APP_URL is http:// but the server speaks https, or the reverse - check the scheme in APP_URL" ;;
+            60|51|83) HINT="the server certificate is not trusted by the runner (set MCP_ARR_CA_FILE to the server's root certificate)" ;;
+            0)        HINT="the server answered http=$CODE, which is neither 200 with serverInfo nor a 401 from mcp-arr - is APP_URL pointing at another service or a proxy error page?" ;;
+            *)        HINT="" ;;
+          esac
+          [ -z "$HINT" ] || echo "::error::hint: $HINT"
+          summary "FAILED: /mcp did not answer (last http=$CODE, curl exit $CURL_RC)${HINT:+ - $HINT}"
           exit 1
           LIVENESS
           chmod 700 "$DIR/liveness.sh"
