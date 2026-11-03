@@ -26,6 +26,7 @@ import { renderAdminPage } from './admin-ui.js';
 import { Auth, AuthError } from './auth.js';
 import { TlsManager } from './tls.js';
 import { OAuthProvider, OAuthError } from './oauth.js';
+import { stats, CallEvent } from './stats.js';
 
 export interface HttpServerOptions {
   store: ConfigStore;
@@ -37,7 +38,8 @@ export interface HttpServerOptions {
   trustProxy: boolean;
   mcpPath: string;
   serverVersion: string;
-  createServer: () => Server;
+  /** Builds a fresh MCP server; `caller` (the token owner's name) is used for the usage statistics. */
+  createServer: (caller?: string) => Server;
   onConfigChanged: () => void;
   getConfiguredSummary: () => string[];
   /** Present when OAuth sign-in for Claude/OpenAI connectors is active (see oauth.ts). */
@@ -228,7 +230,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       return;
     }
     const body = req.method === 'POST' ? await readJson(req) : undefined;
-    const server = opts.createServer();
+    const server = opts.createServer(user.name);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       void transport.close();
@@ -444,6 +446,42 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     };
   }
 
+  // ----- live activity (Server-Sent Events for the status board) -----
+
+  const ACTIVITY_MAX_STREAMS = 50;
+  let activityStreams = 0;
+
+  function streamActivity(req: IncomingMessage, res: ServerResponse, user: StoredUser): void {
+    if (activityStreams >= ACTIVITY_MAX_STREAMS) throw new HttpError(503, 'Too many live views open');
+    activityStreams++;
+    const sessionId = parseCookies(req)[SESSION_COOKIE];
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write('retry: 5000\n\n');
+    const viewer = { name: user.name, admin: user.role === 'admin' };
+    const onCall = (e: CallEvent) => {
+      res.write(`event: call\ndata: ${JSON.stringify(stats.forViewer(e, viewer))}\n\n`);
+    };
+    // Heartbeat; also ends the stream once the session is gone (sign-out, user deleted, expired).
+    const beat = setInterval(() => {
+      if (!auth.sessionUser(sessionId)) { res.end(); return; }
+      res.write(': ping\n\n');
+    }, 25_000);
+    stats.on('call', onCall);
+    let closed = false;
+    res.on('close', () => {
+      if (closed) return;
+      closed = true;
+      activityStreams--;
+      clearInterval(beat);
+      stats.off('call', onCall);
+    });
+  }
+
   // ----- admin API -----
 
   async function handleAdminApi(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
@@ -551,6 +589,16 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
 
     // --- any logged-in user ---
     const user = requireUser(req);
+
+    if (path === '/stats' && method === 'GET') {
+      sendJson(res, 200, stats.snapshot({ name: user.name, admin: user.role === 'admin' }));
+      return;
+    }
+
+    if (path === '/activity' && method === 'GET') {
+      streamActivity(req, res, user);
+      return;
+    }
 
     if (path === '/overview' && method === 'GET') {
       sendJson(res, 200, overview(user));
