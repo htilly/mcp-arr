@@ -182,7 +182,7 @@ Run mcp-arr **once** on your server (e.g. next to Sonarr/Radarr) and point all M
 
 - **HTTPS without Let's Encrypt** – a built-in certificate authority issues and renews the server certificate offline. You install its root certificate once per device. The CA is *name-constrained* to your server's names, so it cannot be abused to impersonate other websites. You can also bring your own certificate (step-ca, Caddy, your router, …).
 - **Encrypted at rest** – the whole config file (API keys, users, passkeys, token hashes, CA private keys) is AES-256-GCM encrypted.
-- **Per-user login with passkeys** – no passwords. Roles: *admin* (services, users, invites, certificates) and *user* (own passkeys and access tokens).
+- **Per-user login with passkeys or name + password** – roles: *admin* (services, users, invites, certificates) and *user* (own sign-in methods and access tokens). Passwords are scrypt-hashed inside the encrypted config; a user can have a password, passkeys, or both.
 - **Per-user MCP access tokens** – every client gets its own token, revocable at any time.
 
 > **Claude custom connectors** (claude.ai, mobile, Desktop "Connectors") are called from Anthropic's cloud and need a public internet address with OAuth, so they can't reach an offline server. Use **Claude Code** or **Claude Desktop via `mcp-remote`** – both connect from your own machine.
@@ -596,6 +596,7 @@ Install the root certificate from `/ca.crt` on the device, and for Node.js clien
 
 ### HTTP mode: passkey prompt fails or "Passkeys unavailable"
 Passkeys only work over trusted HTTPS on the exact host name in `PUBLIC_URL` (not an IP address, not a different alias). Install the root certificate and open the configured URL.
+The error message now includes the browser's error name. Until that is fixed you can sign in with a name and password (set one under "My sign-in", or choose a password during setup).
 
 ### HTTP mode: lost all admin passkeys
 Start the server once with `ADMIN_RECOVERY=true`. The log shows a one-time recovery code; on the sign-in page choose "Lost your passkey?" to register a new admin. Remove the variable afterwards.

@@ -15,7 +15,7 @@ import { createServer as createHttpsServer } from 'node:https';
 import { randomBytes } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { ConfigStore, Role, SERVICE_DEFS, ServiceId, StoredUser, isServiceId } from './config-store.js';
+import { ConfigStore, Role, checkPassword, SERVICE_DEFS, ServiceId, StoredUser, isServiceId } from './config-store.js';
 import { SonarrClient, RadarrClient, LidarrClient, ProwlarrClient } from './arr-client.js';
 import { TautulliClient } from './tautulli-client.js';
 import { OverseerrClient } from './overseerr-client.js';
@@ -144,7 +144,7 @@ export async function testServiceConnection(
 }
 
 function publicUser(u: StoredUser) {
-  return { id: u.id, name: u.name, role: u.role, createdAt: u.createdAt, passkeys: u.credentials.length };
+  return { id: u.id, name: u.name, role: u.role, createdAt: u.createdAt, passkeys: u.credentials.length, hasPassword: Boolean(u.passwordHash) };
 }
 
 // ---------- server ----------
@@ -364,6 +364,31 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       return;
     }
 
+    if (path === '/register/password' && method === 'POST') {
+      const body = await readJson(req);
+      const kind = str(body.kind);
+      if (kind !== 'setup' && kind !== 'invite' && kind !== 'recovery') throw new HttpError(400, 'Invalid kind');
+      const user = await guarded(req, async () => auth.registerWithPassword({
+        kind,
+        name: str(body.name),
+        password: typeof body.password === 'string' ? body.password : '',
+        code: str(body.code),
+        inviteToken: str(body.inviteToken),
+      }));
+      sendJson(res, 200, { ok: true, user: publicUser(user) }, { 'Set-Cookie': sessionCookie(auth.createSession(user.id)) });
+      return;
+    }
+
+    if (path === '/login/password' && method === 'POST') {
+      const body = await readJson(req);
+      const user = await guarded(req, async () => auth.loginWithPassword(
+        str(body.name) ?? '',
+        typeof body.password === 'string' ? body.password : ''
+      ));
+      sendJson(res, 200, { ok: true, user: publicUser(user) }, { 'Set-Cookie': sessionCookie(auth.createSession(user.id)) });
+      return;
+    }
+
     if (path === '/invite/check' && method === 'POST') {
       const body = await readJson(req);
       if (rateLimited(req)) throw new HttpError(429, 'Too many failed attempts - try again later');
@@ -409,6 +434,28 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
         else throw new HttpError(405, 'Method not allowed');
       } catch (error) {
         if (error instanceof HttpError) throw error;
+        throw new HttpError(400, error instanceof Error ? error.message : String(error));
+      }
+      sendJson(res, 200, overview(store.getUser(user.id)!));
+      return;
+    }
+
+    if (path === '/me/password' && (method === 'PUT' || method === 'DELETE')) {
+      const body = method === 'PUT' ? await readJson(req) : {};
+      try {
+        if (method === 'PUT') {
+          if (user.passwordHash) {
+            const current = typeof body.currentPassword === 'string' ? body.currentPassword : '';
+            await guarded(req, async () => {
+              if (!checkPassword(current, user.passwordHash)) throw new AuthError(401, 'Current password is wrong');
+            });
+          }
+          store.setPassword(user.id, typeof body.password === 'string' ? body.password : '');
+        } else {
+          store.clearPassword(user.id);
+        }
+      } catch (error) {
+        if (error instanceof HttpError || error instanceof AuthError) throw error;
         throw new HttpError(400, error instanceof Error ? error.message : String(error));
       }
       sendJson(res, 200, overview(store.getUser(user.id)!));

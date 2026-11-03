@@ -158,7 +158,7 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
     return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   }
   function passkeysSupported() {
-    return window.isSecureContext && window.PublicKeyCredential && navigator.credentials;
+    return Boolean(window.isSecureContext && window.PublicKeyCredential && navigator.credentials);
   }
   function createPasskey(o) {
     var pk = Object.assign({}, o, {
@@ -200,10 +200,20 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
       };
     });
   }
+  function errorDetail(e) {
+    if (!e || !e.name || e.status) return '';
+    return ' [' + e.name + (e.message ? ': ' + e.message : '') + ']';
+  }
   function friendlyError(e) {
-    if (e && e.name === 'NotAllowedError') return 'The passkey request was cancelled or timed out.';
-    if (e && e.name === 'InvalidStateError') return 'This passkey is already registered for this account.';
-    if (e && e.name === 'SecurityError') return 'Passkeys are not allowed on this address. Open the web UI via its configured host name (PUBLIC_URL).';
+    if (e && e.name === 'NotAllowedError') {
+      return 'The passkey request was cancelled or timed out.' + errorDetail(e) +
+        ' If you did not cancel it, the browser probably rejected the page: make sure the mcp-arr root certificate is installed and trusted' +
+        ' (the address bar must not say "Not secure") and that you opened the configured host name. Then try again, or use a password instead.' +
+        (window.isSecureContext ? '' : ' This page is NOT a secure context.');
+    }
+    if (e && e.name === 'InvalidStateError') return 'This passkey is already registered for this account.' + errorDetail(e);
+    if (e && e.name === 'SecurityError') return 'Passkeys are not allowed on this address. Open the web UI via its configured host name (PUBLIC_URL).' + errorDetail(e);
+    if (e && e.name === 'NotSupportedError') return 'This browser or device cannot create this kind of passkey.' + errorDetail(e);
     return (e && e.message) || String(e);
   }
   function deviceName() {
@@ -233,46 +243,54 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
     app.replaceChildren(el('div', { class: 'center panel' }, [el('h2', { text: title }), intro ? el('p', { class: 'muted', text: intro }) : null].concat(body)));
   }
 
-  function renderUnsupported() {
-    centered('Passkeys unavailable', null, [
-      el('div', { class: 'msg err', text: window.isSecureContext
-        ? 'This browser does not support passkeys (WebAuthn).'
-        : 'This page is not loaded over trusted HTTPS, so passkeys cannot be used. Install the mcp-arr root certificate (download below) and open the configured host name.' }),
-      el('div', { class: 'row' }, [el('a', { class: 'button', href: '/ca.crt', text: 'Download root certificate' })])
-    ]);
-  }
-
   function nameForm(opts) {
     var fields = [];
     var code = opts.code ? el('input', { type: 'text', autocomplete: 'off', placeholder: 'XXXXX-XXXXX' }) : null;
-    var name = el('input', { type: 'text', autocomplete: 'name', placeholder: 'e.g. Henrik' });
+    var name = el('input', { type: 'text', autocomplete: 'username', placeholder: 'e.g. Henrik' });
+    var password = el('input', { type: 'password', autocomplete: 'new-password', placeholder: 'At least 8 characters' });
+    var password2 = el('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Repeat password' });
     var keyName = el('input', { type: 'text', value: deviceName() });
     var msg = el('div', { class: 'msg' });
+    var pk = passkeysSupported();
     if (code) fields.push(el('label', { text: opts.codeLabel }), code);
-    fields.push(el('label', { text: 'Your name' }), name, el('label', { text: 'Name for this passkey' }), keyName);
-    var btn = el('button', { class: 'primary big', type: 'submit', text: opts.button });
-    var form = el('form', { onsubmit: function (ev) {
-      ev.preventDefault();
-      btn.disabled = true;
+    fields.push(el('label', { text: 'Your name (also your sign-in name)' }), name);
+    var buttons = [];
+    function done() { if (opts.after) opts.after(); load(); }
+    function lock(disabled) { buttons.forEach(function (b) { b.disabled = disabled; }); }
+    function baseBody() { return Object.assign({ name: name.value, code: code ? code.value : undefined }, opts.extra || {}); }
+    function createWithPasskey() {
+      lock(true);
       showMsg(msg, 'warn', 'Follow the prompt from your browser or device…');
-      var body = Object.assign({ name: name.value, code: code ? code.value : undefined }, opts.extra || {});
-      registerPasskey(body, keyName.value).then(function () {
-        if (opts.after) opts.after();
-        load();
-      }, function (e) { btn.disabled = false; showMsg(msg, 'err', friendlyError(e)); });
-    } }, fields.concat([el('div', { class: 'row' }, [btn]), msg]));
+      registerPasskey(baseBody(), keyName.value).then(done, function (e) { lock(false); showMsg(msg, 'err', friendlyError(e)); });
+    }
+    function createWithPassword() {
+      if (password.value !== password2.value) { showMsg(msg, 'err', 'The passwords do not match.'); return; }
+      lock(true);
+      showMsg(msg, 'warn', 'Creating account…');
+      api('POST', '/register/password', Object.assign(baseBody(), { password: password.value })).then(done, function (e) { lock(false); showMsg(msg, 'err', e.message); });
+    }
+    var pkBtn = el('button', { class: 'primary big', type: 'button', text: opts.button, onclick: createWithPasskey });
+    var pwBtn = el('button', { class: pk ? 'big' : 'primary big', type: 'button', text: 'Create account with password', onclick: createWithPassword });
+    buttons.push(pkBtn, pwBtn);
+    if (pk) {
+      fields.push(el('h3', { text: 'Passkey (recommended)' }), el('label', { text: 'Name for this passkey' }), keyName, el('div', { class: 'row' }, [pkBtn]));
+    } else {
+      fields.push(el('div', { class: 'msg warn', text: 'Passkeys are not available on this page (it needs trusted HTTPS on the configured host name). You can use a password for now.' }));
+    }
+    fields.push(el('h3', { text: pk ? 'Or use a password' : 'Password' }), el('label', { text: 'Password' }), password, el('label', { text: 'Repeat password' }), password2, el('div', { class: 'row' }, [pwBtn]), msg);
+    var form = el('form', { onsubmit: function (ev) { ev.preventDefault(); if (pk) createWithPasskey(); else createWithPassword(); } }, fields);
     setTimeout(function () { (code || name).focus(); }, 0);
     return form;
   }
 
   function renderSetup() {
-    centered('Welcome - create the first admin', 'Enter the setup code from the server log (docker compose logs mcp-arr) and register a passkey. You will use it to sign in.', [
+    centered('Welcome - create the first admin', 'Enter the setup code from the server log (docker compose logs mcp-arr) and register a passkey or choose a password. You will use it to sign in.', [
       nameForm({ code: true, codeLabel: 'Setup code', button: 'Create passkey', extra: { kind: 'setup' } })
     ]);
   }
 
   function renderRecovery() {
-    centered('Admin recovery', 'Enter the recovery code from the server log to register a passkey for a new admin account. Remove ADMIN_RECOVERY afterwards.', [
+    centered('Admin recovery', 'Enter the recovery code from the server log to create a new admin account (passkey or password). Remove ADMIN_RECOVERY afterwards.', [
       nameForm({ code: true, codeLabel: 'Recovery code', button: 'Create admin passkey', extra: { kind: 'recovery' } }),
       el('div', { class: 'row' }, [el('button', { class: 'link', text: 'Back to sign in', onclick: function () { renderLogin(lastState); } })])
     ]);
@@ -287,7 +305,7 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
         ]);
         return;
       }
-      centered('You have been invited', 'Create a passkey to join as ' + (r.role === 'admin' ? 'an admin' : 'a user') + '. The invite expires ' + fmtDate(r.expiresAt) + '.', [
+      centered('You have been invited', 'Create a passkey or password to join as ' + (r.role === 'admin' ? 'an admin' : 'a user') + '. The invite expires ' + fmtDate(r.expiresAt) + '.', [
         nameForm({ button: 'Create passkey', extra: { kind: 'invite', inviteToken: token }, after: function () { history.replaceState(null, '', '/admin'); } })
       ]);
     }, function (e) { centered('Error', null, [el('div', { class: 'msg err', text: e.message })]); });
@@ -296,13 +314,29 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
   var lastState = null;
   function renderLogin(state) {
     var msg = el('div', { class: 'msg' });
-    var btn = el('button', { class: 'primary big', text: 'Sign in with passkey', onclick: function () {
-      btn.disabled = true;
+    var pk = passkeysSupported();
+    var pkBtn = pk ? el('button', { class: 'primary big', type: 'button', text: 'Sign in with passkey', onclick: function () {
+      pkBtn.disabled = true;
       showMsg(msg, 'warn', 'Follow the prompt from your browser or device…');
-      signIn().then(load, function (e) { btn.disabled = false; showMsg(msg, 'err', friendlyError(e)); });
-    } });
+      signIn().then(load, function (e) { pkBtn.disabled = false; showMsg(msg, 'err', friendlyError(e)); });
+    } }) : null;
+    var name = el('input', { type: 'text', autocomplete: 'username' });
+    var password = el('input', { type: 'password', autocomplete: 'current-password' });
+    var pwBtn = el('button', { class: pk ? 'big' : 'primary big', type: 'submit', text: 'Sign in with password' });
+    var pwForm = el('form', { onsubmit: function (ev) {
+      ev.preventDefault();
+      pwBtn.disabled = true;
+      api('POST', '/login/password', { name: name.value, password: password.value }).then(load, function (e) {
+        pwBtn.disabled = false; showMsg(msg, 'err', e.message);
+      });
+    } }, [el('label', { text: 'Name' }), name, el('label', { text: 'Password' }), password, el('div', { class: 'row' }, [pwBtn])]);
     centered('Sign in', null, [
-      btn, msg,
+      pkBtn,
+      pk ? el('p', { class: 'note', text: 'or sign in with your name and password:' }) : el('div', { class: 'msg warn', text: window.isSecureContext
+        ? 'This browser does not support passkeys (WebAuthn).'
+        : 'Passkeys are not available on this page: it is not loaded over trusted HTTPS. Install the mcp-arr root certificate and open the configured host name.' }),
+      pwForm, msg,
+      pk ? null : el('div', { class: 'row' }, [el('a', { class: 'button', href: '/ca.crt', text: 'Download root certificate' })]),
       el('p', { class: 'note', text: 'New here? Ask an admin for an invite link.' }),
       state && state.recoveryAvailable ? el('div', { class: 'row' }, [el('button', { class: 'link', text: 'Lost your passkey? Use the recovery code', onclick: renderRecovery })]) : null
     ]);
@@ -444,7 +478,7 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
             if (!n) return;
             api('PATCH', '/me/passkeys/' + c.id, { name: n }).then(function (r) { Object.assign(d, r); redraw(); }, function (e) { showMsg(msg, 'err', e.message); });
           } }), ' ',
-          d.me.credentials.length > 1 ? el('button', { class: 'danger', text: 'Remove', onclick: function () {
+          (d.me.credentials.length > 1 || d.me.hasPassword) ? el('button', { class: 'danger', text: 'Remove', onclick: function () {
             if (!confirm('Remove passkey "' + c.name + '"?')) return;
             api('DELETE', '/me/passkeys/' + c.id).then(function (r) { Object.assign(d, r); redraw(); }, function (e) { showMsg(msg, 'err', e.message); });
           } }) : null
@@ -459,14 +493,38 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
         return api('GET', '/overview').then(function (r) { Object.assign(d, r); redraw(); });
       }, function (e) { add.disabled = false; showMsg(msg, 'err', friendlyError(e)); });
     } });
-    return el('section', null, [el('h2', { text: 'My passkeys' }), el('div', { class: 'panel' }, [
+    var pkSupported = passkeysSupported();
+    var pwMsg = el('div', { class: 'msg' });
+    var curPw = el('input', { type: 'password', autocomplete: 'current-password' });
+    var newPw = el('input', { type: 'password', autocomplete: 'new-password', placeholder: 'At least 8 characters' });
+    var newPw2 = el('input', { type: 'password', autocomplete: 'new-password', placeholder: 'Repeat password' });
+    var savePw = el('button', { class: 'primary', text: d.me.hasPassword ? 'Change password' : 'Set password', onclick: function () {
+      if (newPw.value !== newPw2.value) { showMsg(pwMsg, 'err', 'The passwords do not match.'); return; }
+      savePw.disabled = true;
+      api('PUT', '/me/password', { password: newPw.value, currentPassword: d.me.hasPassword ? curPw.value : undefined }).then(function (r) {
+        Object.assign(d, r); redraw();
+      }, function (e) { savePw.disabled = false; showMsg(pwMsg, 'err', e.message); });
+    } });
+    var dropPw = (d.me.hasPassword && d.me.credentials.length > 0) ? el('button', { class: 'danger', text: 'Remove password', onclick: function () {
+      if (!confirm('Remove your password? You will only be able to sign in with a passkey.')) return;
+      api('DELETE', '/me/password').then(function (r) { Object.assign(d, r); redraw(); }, function (e) { showMsg(pwMsg, 'err', e.message); });
+    } }) : null;
+    return el('section', null, [el('h2', { text: 'My sign-in' }), el('div', { class: 'panel' }, [
+      el('h3', { text: 'Passkeys' }),
       el('p', { class: 'muted', text: 'Register more than one passkey (e.g. phone and laptop) so you do not get locked out.' }),
-      el('div', { class: 'table-wrap' }, [el('table', null, [
+      rows.length ? el('div', { class: 'table-wrap' }, [el('table', null, [
         el('thead', null, [el('tr', null, [el('th', { text: 'Name' }), el('th', { text: 'Created' }), el('th', { text: 'Last used' }), el('th')])]),
         el('tbody', null, rows)
-      ])]),
-      el('label', { text: 'Name for the new passkey' }), keyName,
-      el('div', { class: 'row' }, [add]), msg
+      ])]) : el('p', { class: 'note', text: 'No passkeys yet.' }),
+      pkSupported ? el('label', { text: 'Name for the new passkey' }) : null, pkSupported ? keyName : null,
+      pkSupported ? el('div', { class: 'row' }, [add]) : el('div', { class: 'msg warn', text: 'Passkeys need trusted HTTPS on the configured host name.' }),
+      msg
+    ]), el('div', { class: 'panel' }, [
+      el('h3', { text: 'Password' }),
+      el('p', { class: 'muted', text: d.me.hasPassword ? 'You can sign in with your name (' + d.me.name + ') and password.' : 'Optional: sign in with your name (' + d.me.name + ') and a password instead of a passkey.' }),
+      d.me.hasPassword ? el('label', { text: 'Current password' }) : null, d.me.hasPassword ? curPw : null,
+      el('label', { text: 'New password' }), newPw, el('label', { text: 'Repeat new password' }), newPw2,
+      el('div', { class: 'row' }, [savePw, dropPw]), pwMsg
     ])]);
   }
 
@@ -482,7 +540,7 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
       return el('tr', null, [
         el('td', { text: u.name + (me ? ' (you)' : '') }),
         el('td', null, [roleSel]),
-        el('td', { text: String(u.passkeys) }),
+        el('td', { text: String(u.passkeys) + (u.hasPassword ? ' + password' : '') }),
         el('td', { text: fmtDate(u.createdAt) }),
         el('td', null, [me ? null : el('button', { class: 'danger', text: 'Delete', onclick: function () {
           if (!confirm('Delete user "' + u.name + '"? Their passkeys and access tokens stop working immediately.')) return;
@@ -503,7 +561,7 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
       el('h2', { text: 'Users' }),
       el('div', { class: 'panel' }, [
         el('div', { class: 'table-wrap' }, [el('table', null, [
-          el('thead', null, [el('tr', null, [el('th', { text: 'Name' }), el('th', { text: 'Role' }), el('th', { text: 'Passkeys' }), el('th', { text: 'Created' }), el('th')])]),
+          el('thead', null, [el('tr', null, [el('th', { text: 'Name' }), el('th', { text: 'Role' }), el('th', { text: 'Sign-in' }), el('th', { text: 'Created' }), el('th')])]),
           el('tbody', null, rows)
         ])]),
         el('p', { class: 'note', text: 'Admins manage services, users and certificates. Users can only manage their own passkeys and access tokens.' }),
@@ -581,7 +639,7 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
     who.classList.remove('hidden');
     whoName.textContent = d.me.name + ' · ' + d.me.role;
     var isAdmin = d.me.role === 'admin';
-    var tabs = [['services', 'Services'], ['connect', 'Connect'], ['tokens', 'Access tokens'], ['passkeys', 'My passkeys']];
+    var tabs = [['services', 'Services'], ['connect', 'Connect'], ['tokens', 'Access tokens'], ['passkeys', 'My sign-in']];
     if (isAdmin) tabs.push(['users', 'Users'], ['certificates', 'Certificates'], ['security', 'Security']);
     else tabs.push(['certificates', 'Certificates']);
     if (!tabs.some(function (t) { return t[0] === currentTab; })) currentTab = 'services';
@@ -609,7 +667,6 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
 
   function load() {
     var m = /invite=([A-Za-z0-9_-]+)/.exec(location.hash);
-    if (!passkeysSupported()) return renderUnsupported();
     return api('GET', '/state').then(function (s) {
       lastState = s;
       if (m && !s.user) return renderInvite(m[1]);
