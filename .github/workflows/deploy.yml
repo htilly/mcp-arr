@@ -1,0 +1,470 @@
+name: Deploy to tillyse
+
+# Runs on the self-hosted runner (mcp-arr-runner) on tillyse after "Build and
+# Push Docker Image" has pushed a new image for a push to main.
+#
+# The runner talks to Docker through kraftmon-docker-proxy, which has BUILD=0
+# and EXEC=0: this job CANNOT build anything on tillyse and cannot exec into any
+# container. It can only pull an already published image from ghcr.io and
+# recreate the single service `mcp-arr` - it never touches the other containers
+# on the machine.
+#
+# This repo is PUBLIC, so the gates below are what keep fork code off the
+# machine: the job requires a successful build of a push to main in this very
+# repo, AND that the accounts behind the build are listed in ALLOWED_ACTORS in
+# the gate job.
+#
+# All compose calls pass --env-file "$COMPOSE_ENV_FILE": the runner does not see
+# /config/.env, so without it ${TZ} etc. would be empty when compose reads the
+# file.
+#
+# Nothing host-specific lives in this file. DOCKER_HOST, NTFY_URL, NTFY_TOKEN,
+# COMPOSE_FILE_PATH, COMPOSE_ENV_FILE and APP_URL (where the MCP server is
+# reached) come from the runner's container environment (see
+# /config/docker-compose.yml and /config/secrets/mcp-arr-runner.env on tillyse).
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Docker Image"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-mcp-arr-tillyse
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Gate. Runs on GitHub's own runner, i.e. BEFORE anything is allowed to land
+  # on tillyse. If it does not let the run through, the self-hosted runner never
+  # starts.
+  gate:
+    name: Check who triggered this
+    runs-on: ubuntu-latest
+
+    # Only a successful build, of a push (not a PR), to main, in this repo
+    # (not a fork).
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+
+    outputs:
+      allowed: ${{ steps.check.outputs.allowed }}
+
+    env:
+      # =====================================================================
+      # WHICH ACCOUNTS MAY DEPLOY TO TILLYSE
+      # Space-separated GitHub usernames. Add more here.
+      # Empty list = no deploy ever happens.
+      ALLOWED_ACTORS: "htilly"
+      # =====================================================================
+
+      # actor = whoever started the build. triggering_actor = whoever started
+      # this particular attempt, which differs on a re-run. Both must be in the
+      # list, otherwise someone else could re-run your build and deploy.
+      # (Deliberately not github.actor, which is the workflow_run's own actor.)
+      RUN_ACTOR: ${{ github.event.workflow_run.actor.login }}
+      RERUN_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
+
+    steps:
+      - name: Match actor against the allowlist
+        id: check
+        run: |
+          set -euo pipefail
+
+          allowed=true
+          for who in "$RUN_ACTOR" "$RERUN_ACTOR"; do
+            if [ -z "$who" ]; then
+              echo "::warning::empty username - no deploy"
+              allowed=false
+              continue
+            fi
+            case " $ALLOWED_ACTORS " in
+              *" $who "*) echo "ok: $who is in ALLOWED_ACTORS" ;;
+              *) echo "::warning::$who is NOT in ALLOWED_ACTORS - no deploy"; allowed=false ;;
+            esac
+          done
+
+          echo "allowed=$allowed" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Gate"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| started the build | \`$RUN_ACTOR\` |"
+            echo "| started this run | \`$RERUN_ACTOR\` |"
+            echo "| allowed accounts | \`$ALLOWED_ACTORS\` |"
+            echo "| deploy | \`$allowed\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy mcp-arr to tillyse
+    needs: gate
+    if: >-
+      needs.gate.outputs.allowed == 'true' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: [self-hosted, mcp-arr]
+
+    # Second gate, on GitHub's side and independent of the YAML expressions
+    # above: the tillyse environment only lets runs from main through.
+    environment: tillyse
+
+    env:
+      IMAGE: ghcr.io/htilly/mcp-arr
+      SERVICE: mcp-arr
+      CONTAINER: mcp-arr
+      COMPOSE_PROJECT: config
+      COMPOSE_DIR: /config
+
+    steps:
+      # -----------------------------------------------------------------------
+      - name: Preflight
+        id: pre
+        run: |
+          set -euo pipefail
+
+          fail=0
+          for v in DOCKER_HOST NTFY_URL NTFY_TOKEN COMPOSE_FILE_PATH COMPOSE_ENV_FILE APP_URL; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error::$v is not set in the runner environment"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] || exit 1
+
+          test -r "$COMPOSE_FILE_PATH" || { echo "::error::cannot read $COMPOSE_FILE_PATH"; exit 1; }
+          docker version --format '{{.Server.Version}}' > /dev/null \
+            || { echo "::error::cannot reach the socket proxy at $DOCKER_HOST"; exit 1; }
+
+          # The compose file must actually point the service at the tag we deploy.
+          if ! grep -qE "^\s+image:\s+${IMAGE}:main\s*$" "$COMPOSE_FILE_PATH"; then
+            echo "::error::$COMPOSE_FILE_PATH does not point $SERVICE at ${IMAGE}:main"
+            exit 1
+          fi
+
+          FULL_SHA="${{ github.event.workflow_run.head_sha }}"
+          SHORT_SHA="${FULL_SHA:0:7}"
+          STAMP="$(date +%Y%m%d-%H%M%S)"
+
+          echo "full_sha=$FULL_SHA"           >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA"         >> "$GITHUB_OUTPUT"
+          echo "rollback_tag=rollback-$STAMP" >> "$GITHUB_OUTPUT"
+          echo "started_epoch=$(date +%s)"    >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Deploy mcp-arr to tillyse"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| commit | \`$FULL_SHA\` |"
+            echo "| image | \`${IMAGE}:main-$SHORT_SHA\` |"
+            echo "| rollback tag | \`rollback-$STAMP\` |"
+            echo "| build | [#${{ github.event.workflow_run.run_number }}](${{ github.event.workflow_run.html_url }}) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # -----------------------------------------------------------------------
+      # Tag the image the container is running RIGHT NOW, not :main. They are the
+      # same on every deploy after the first, but on the first one the container
+      # was built locally and :main is not what is running.
+      - name: Capture current state for rollback
+        id: rollback_tag
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.pre.outputs.rollback_tag }}"
+
+          CURRENT=$(docker inspect -f '{{.Image}}' "$CONTAINER" 2>/dev/null || true)
+          if [ -n "$CURRENT" ] && docker image inspect "$CURRENT" > /dev/null 2>&1; then
+            docker tag "$CURRENT" "$IMAGE:$TAG"
+            echo "tagged the running image ($CURRENT) -> $IMAGE:$TAG"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::$CONTAINER is not running or its image is gone, nothing to roll back to"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # -----------------------------------------------------------------------
+      # Pull the exact sha-pinned tag the build pushed and move :main there.
+      # That is what makes the deploy provably equal to the triggering commit.
+      - name: Pull the image built from this commit
+        id: pull
+        run: |
+          set -euo pipefail
+          SHORT="${{ steps.pre.outputs.short_sha }}"
+
+          echo "::group::pull $IMAGE:main-$SHORT"
+          docker pull "$IMAGE:main-$SHORT"
+          docker tag  "$IMAGE:main-$SHORT" "$IMAGE:main"
+          TARGET=$(docker image inspect -f '{{.Id}}' "$IMAGE:main")
+          echo "target image id: $TARGET"
+          echo "target_id=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
+
+      # -----------------------------------------------------------------------
+      - name: Recreate mcp-arr
+        id: recreate
+        run: |
+          set -euo pipefail
+          # The window the log summary below reads. A few seconds back so that
+          # nothing is missed between the timestamp and the start.
+          SINCE=$(date -u --date='-5 seconds' +%Y-%m-%dT%H:%M:%SZ)
+          echo "since=$SINCE" >> "$GITHUB_OUTPUT"
+
+          # --no-deps plus naming the service explicitly keeps compose away from
+          # every other container on the machine. Never --remove-orphans and
+          # never --profile games.
+          docker compose \
+            -p "$COMPOSE_PROJECT" \
+            --project-directory "$COMPOSE_DIR" \
+            --env-file "$COMPOSE_ENV_FILE" \
+            -f "$COMPOSE_FILE_PATH" \
+            up -d --no-deps --force-recreate \
+            "$SERVICE"
+
+      # -----------------------------------------------------------------------
+      - name: Wait for mcp-arr to become healthy
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 300 ))
+
+          echo "::group::$CONTAINER"
+          while :; do
+            STATE=$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo missing)
+            HEALTH=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CONTAINER" 2>/dev/null || echo none)
+            echo "$CONTAINER: state=$STATE health=$HEALTH"
+
+            if [ "$STATE" = "running" ] && { [ "$HEALTH" = "healthy" ] || [ "$HEALTH" = "none" ]; }; then
+              break
+            fi
+            if [ "$STATE" = "exited" ] || [ "$STATE" = "dead" ] || [ "$HEALTH" = "unhealthy" ]; then
+              echo "::error::$CONTAINER is $STATE/$HEALTH"
+              # Deliberately NO `docker logs` here: the Actions log of this repo
+              # is public. The redacted summary further down is used instead.
+              exit 1
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::timed out waiting for $CONTAINER (state=$STATE health=$HEALTH)"
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "::endgroup::"
+
+      # -----------------------------------------------------------------------
+      - name: Verify the running container is the image built from this commit
+        run: |
+          set -euo pipefail
+          EXPECTED="${{ steps.pull.outputs.target_id }}"
+          RUNNING=$(docker inspect -f '{{.Image}}' "$CONTAINER")
+          echo "expected image id: $EXPECTED"
+          echo "running image id:  $RUNNING"
+          if [ "$RUNNING" != "$EXPECTED" ]; then
+            echo "::error::$CONTAINER runs $RUNNING, not the image built from ${{ steps.pre.outputs.full_sha }}"
+            exit 1
+          fi
+          echo "the container is provably the build of ${{ steps.pre.outputs.short_sha }}"
+
+      # -----------------------------------------------------------------------
+      # "The container is up" is not enough: ask the MCP server itself. An
+      # initialize POST must come back 200 and carry serverInfo. The reply can be
+      # plain JSON or an SSE stream depending on the transport, so it is matched
+      # as text.
+      #
+      # Redaction: the Actions log is PUBLIC, so only the status code and
+      # whether serverInfo was present are printed - never the body.
+      - name: Verify the MCP server answers initialize
+        run: |
+          set -euo pipefail
+          BODY=$(mktemp)
+          trap 'rm -f "$BODY"' EXIT
+
+          CODE=000
+          for attempt in $(seq 1 24); do
+            CODE=$(curl -sS -o "$BODY" -w '%{http_code}' --max-time 10 \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              -X POST "$APP_URL/mcp" \
+              --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"deploy-check","version":"1"}}}' \
+              2>/dev/null) || CODE=000
+            [ "$CODE" = "200" ] && break
+            echo "attempt $attempt: /mcp initialize http=$CODE"
+            sleep 5
+          done
+
+          echo "/mcp initialize http=$CODE"
+          [ "$CODE" = "200" ] || { echo "::error::/mcp initialize gave $CODE, expected 200"; exit 1; }
+
+          if grep -q '"serverInfo"' "$BODY"; then
+            echo "serverInfo present in the reply"
+          else
+            echo "::error::200 from /mcp but no serverInfo in the reply"
+            exit 1
+          fi
+
+      # -----------------------------------------------------------------------
+      # Failure summary - REDACTED. Runs always, even when a gate above failed,
+      # so that a failed deploy says something about why.
+      #
+      # No log line leaves the machine. Only counts are written: lines in the
+      # window, and lines that look like errors. The content is read on tillyse.
+      - name: Summarise startup errors (redacted)
+        if: always()
+        run: |
+          set -uo pipefail
+          SINCE="${{ steps.recreate.outputs.since }}"
+          [ -n "$SINCE" ] || SINCE="15m"
+
+          LOG=$(mktemp)
+          trap 'rm -f "$LOG"' EXIT
+          docker logs --since "$SINCE" "$CONTAINER" > "$LOG" 2>&1 || true
+
+          TOTAL=$(wc -l < "$LOG" | tr -d ' ')
+          ERRORS=$(grep -Eic 'error|fatal|exception|ECONN|EADDRINUSE|Cannot find module' "$LOG" || true)
+          ERRORS=${ERRORS:-0}
+
+          echo "log lines in the window: $TOTAL"
+          echo "lines that look like errors: $ERRORS"
+
+          {
+            echo ""
+            echo "#### Startup log"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| log lines in the window | $TOTAL |"
+            echo "| lines that look like errors | $ERRORS |"
+            echo ""
+            if [ "$ERRORS" -gt 0 ]; then
+              echo "The lines are NOT shown here - the log of this repo is public. Read them on tillyse with:"
+              echo ""
+              echo '```bash'
+              echo "docker logs --since $SINCE mcp-arr"
+              echo '```'
+            else
+              echo "No error-looking lines in the startup window."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # -----------------------------------------------------------------------
+      - name: Roll back on failure
+        if: failure() && steps.rollback_tag.outputs.available == 'true'
+        run: |
+          set -uo pipefail
+          TAG="${{ steps.pre.outputs.rollback_tag }}"
+          echo "::warning::rolling $IMAGE:main back to $IMAGE:$TAG"
+
+          docker tag "$IMAGE:$TAG" "$IMAGE:main" || { echo "::error::retag failed"; exit 1; }
+          docker compose \
+            -p "$COMPOSE_PROJECT" \
+            --project-directory "$COMPOSE_DIR" \
+            --env-file "$COMPOSE_ENV_FILE" \
+            -f "$COMPOSE_FILE_PATH" \
+            up -d --no-deps --force-recreate \
+            "$SERVICE" || { echo "::error::rollback recreate failed - mcp-arr may be down"; exit 1; }
+
+          for attempt in $(seq 1 24); do
+            CODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              -X POST "$APP_URL/mcp" \
+              --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"deploy-check","version":"1"}}}' \
+              2>/dev/null) || CODE=000
+            if [ "$CODE" = "200" ]; then
+              echo "rolled back, /mcp initialize now answers http=200"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::rolled back but mcp-arr does not answer on /mcp"
+          exit 1
+
+      # -----------------------------------------------------------------------
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo ""
+            echo "The deploy succeeded. All checks passed."
+            echo ""
+            echo "Roll back manually, on tillyse:"
+            echo '```bash'
+            echo "docker tag $IMAGE:${{ steps.pre.outputs.rollback_tag }} $IMAGE:main"
+            echo "cd /config && docker compose -p config --env-file /config/mcp-arr-runner/compose.env \\"
+            echo "  -f /config/docker-compose.yml up -d --no-deps --force-recreate mcp-arr"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # -----------------------------------------------------------------------
+      - name: Notify ntfy on success
+        if: success()
+        env:
+          # The commit message is text someone else controls. It goes through the
+          # environment and is only referenced as "$COMMIT_MESSAGE", so it cannot
+          # be interpolated into the script and executed.
+          COMMIT_MESSAGE: ${{ github.event.workflow_run.head_commit.message }}
+        run: |
+          set -uo pipefail
+
+          SHORT="${{ steps.pre.outputs.short_sha }}"
+          STARTED="${{ steps.pre.outputs.started_epoch }}"
+
+          SUBJECT=$(printf '%s' "$COMMIT_MESSAGE" | head -n 1 | cut -c1-120)
+          [ -n "$SUBJECT" ] || SUBJECT="(no commit message)"
+
+          if [ -n "$STARTED" ]; then
+            D=$(( $(date +%s) - STARTED ))
+            if [ "$D" -ge 60 ]; then DUR="$(( D / 60 ))m $(( D % 60 ))s"; else DUR="${D}s"; fi
+          else
+            DUR="unknown"
+          fi
+
+          BODY=$(printf '%s\n' \
+            "$SUBJECT" \
+            "Restarted: mcp-arr" \
+            "Time: $DUR")
+
+          if [ -z "${NTFY_TOKEN:-}" ]; then
+            echo "::error::NTFY_TOKEN is missing - could not send the notification"
+            exit 1
+          fi
+
+          curl -s -H "Authorization: Bearer $NTFY_TOKEN" \
+               -H "Title: mcp-arr deployed: $SHORT" \
+               -H "Priority: default" \
+               -H "Tags: white_check_mark" \
+               -d "$BODY" \
+               "$NTFY_URL" > /dev/null \
+            && echo "ntfy notification sent" \
+            || echo "::warning::could not send the ntfy notification"
+
+      # -----------------------------------------------------------------------
+      - name: Notify ntfy on failure
+        if: failure()
+        run: |
+          set -uo pipefail
+          TAG="${{ steps.pre.outputs.rollback_tag }}"
+          SHORT="${{ steps.pre.outputs.short_sha }}"
+          ROLLED="${{ steps.rollback_tag.outputs.available == 'true' && 'yes (automatic)' || 'no - no rollback image existed' }}"
+
+          BODY=$(printf '%s\n' \
+            "The mcp-arr deploy to tillyse failed ($(date '+%Y-%m-%d %H:%M'))." \
+            "Commit: ${SHORT:-unknown}" \
+            "Rollback tag: ${TAG:-none created}" \
+            "Restored: $ROLLED" \
+            "Log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}")
+
+          [ -n "${NTFY_TOKEN:-}" ] || { echo "::error::NTFY_TOKEN is missing"; exit 0; }
+
+          curl -s -H "Authorization: Bearer $NTFY_TOKEN" \
+               -H "Title: mcp-arr deploy FAILED" \
+               -H "Priority: high" \
+               -H "Tags: warning" \
+               -d "$BODY" \
+               "$NTFY_URL" > /dev/null \
+            && echo "ntfy failure notification sent" \
+            || echo "::warning::could not send the ntfy failure notification"

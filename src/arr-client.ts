@@ -1,11 +1,11 @@
 /**
  * *arr Suite API Client
  *
- * All *arr applications (Sonarr, Radarr, Lidarr, Readarr, Prowlarr) use
+ * All *arr applications (Sonarr, Radarr, Lidarr, Prowlarr) use
  * the same REST API pattern with X-Api-Key header authentication.
  */
 
-export type ArrService = 'sonarr' | 'radarr' | 'lidarr' | 'readarr' | 'prowlarr';
+export type ArrService = 'sonarr' | 'radarr' | 'lidarr' | 'prowlarr';
 
 export interface ArrConfig {
   url: string;
@@ -109,36 +109,6 @@ export interface Episode {
   };
 }
 
-export interface Book {
-  id: number;
-  title: string;
-  authorId: number;
-  foreignBookId: string;
-  titleSlug: string;
-  overview: string;
-  releaseDate: string;
-  pageCount: number;
-  monitored: boolean;
-  grabbed: boolean;
-  ratings: { votes: number; value: number };
-  editions: Array<{
-    id: number;
-    bookId: number;
-    foreignEditionId: string;
-    title: string;
-    pageCount: number;
-    isEbook: boolean;
-    monitored: boolean;
-  }>;
-  statistics?: {
-    bookFileCount: number;
-    bookCount: number;
-    totalBookCount: number;
-    sizeOnDisk: number;
-    percentOfBooks: number;
-  };
-}
-
 export interface Movie {
   id: number;
   title: string;
@@ -171,14 +141,31 @@ export interface Movie {
   added: string;
   /** Radarr API returns dateAdded (camelCase); added may be absent. */
   dateAdded?: string;
-  ratings: { votes: number; value: number };
+  ratings: Record<string, { votes: number; value: number; type: string }>;
   movieFile?: {
     id: number;
     relativePath: string;
     path: string;
     size: number;
     dateAdded: string;
-    quality: { quality: { id: number; name: string } };
+    quality: { quality: { id: number; name: string; source?: string; resolution?: number } };
+    mediaInfo?: {
+      audioBitrate: number;
+      audioChannels: number;
+      audioCodec: string;
+      audioLanguages: string;
+      audioStreamCount: number;
+      videoBitDepth: number;
+      videoBitrate: number;
+      videoCodec: string;
+      videoDynamicRange: string;
+      videoDynamicRangeType: string;
+      videoFps: number;
+      resolution: string;
+      runTime: string;
+      scanType: string;
+      subtitles: string;
+    };
   };
 }
 
@@ -246,34 +233,6 @@ export interface Artist {
     totalTrackCount: number;
     sizeOnDisk: number;
     percentOfTracks: number;
-  };
-}
-
-export interface Author {
-  id: number;
-  authorName: string;
-  sortName: string;
-  status: string;
-  overview: string;
-  links: Array<{ url: string; name: string }>;
-  images: Array<{ coverType: string; url: string }>;
-  path: string;
-  qualityProfileId: number;
-  metadataProfileId: number;
-  monitored: boolean;
-  monitorNewItems: string;
-  genres: string[];
-  cleanName: string;
-  foreignAuthorId: string;
-  tags: number[];
-  added: string;
-  ratings: { votes: number; value: number; popularity: number };
-  statistics: {
-    bookFileCount: number;
-    bookCount: number;
-    totalBookCount: number;
-    sizeOnDisk: number;
-    percentOfBooks: number;
   };
 }
 
@@ -363,11 +322,6 @@ export interface NamingConfig {
   artistFolderFormat?: string;
   albumFolderFormat?: string;
   trackFormat?: string;
-  // Readarr
-  renameBooks?: boolean;
-  authorFolderFormat?: string;
-  bookFolderFormat?: string;
-  standardBookFormat?: string;
 }
 
 export interface MediaManagementConfig {
@@ -443,8 +397,8 @@ export interface SearchResult {
   imdbId?: string;
   // Lidarr specific
   foreignArtistId?: string;
-  // Readarr specific
-  foreignAuthorId?: string;
+  artistName?: string;
+  disambiguation?: string;
 }
 
 export class ArrClient {
@@ -496,8 +450,14 @@ export class ArrClient {
   /**
    * Get download queue
    */
-  async getQueue(): Promise<{ records: QueueItem[]; totalRecords: number }> {
-    return this.request<{ records: QueueItem[]; totalRecords: number }>('/queue?includeUnknownSeriesItems=true&includeUnknownMovieItems=true');
+  async getQueue(page = 1, pageSize = 100): Promise<{ records: QueueItem[]; totalRecords: number }> {
+    const params = new URLSearchParams({
+      includeUnknownSeriesItems: "true",
+      includeUnknownMovieItems: "true",
+      page: String(page),
+      pageSize: String(pageSize),
+    });
+    return this.request<{ records: QueueItem[]; totalRecords: number }>(`/queue?${params.toString()}`);
   }
 
   /**
@@ -713,6 +673,19 @@ export class SonarrClient extends ArrClient {
       body: JSON.stringify({ episodeFileIds }),
     });
   }
+
+  /**
+   * Trigger a refresh for a specific series
+   */
+  async refreshSeries(seriesId: number): Promise<{ id: number }> {
+    return this['request']<{ id: number }>('/command', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'RefreshSeries',
+        seriesId,
+      }),
+    });
+  }
 }
 
 export class RadarrClient extends ArrClient {
@@ -780,6 +753,55 @@ export class RadarrClient extends ArrClient {
       addImportExclusion: String(addImportExclusion),
     });
     await this['request']<void>(`/movie/${id}?${params.toString()}`, { method: 'DELETE' });
+  }
+
+  /**
+   * Trigger a search for multiple movies at once
+   */
+  async searchMoviesBulk(movieIds: number[]): Promise<{ id: number }> {
+    return this['request']<{ id: number }>('/command', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'MoviesSearch',
+        movieIds,
+      }),
+    });
+  }
+
+  /**
+   * Update a movie (PUT). Used to change qualityProfileId, monitored, tags, etc.
+   */
+  async updateMovie(movie: Movie): Promise<Movie> {
+    return this['request']<Movie>(`/movie/${movie.id}`, {
+      method: 'PUT',
+      body: JSON.stringify(movie),
+    });
+  }
+
+  /**
+   * Delete an item from the download queue
+   */
+  async deleteQueueItem(queueId: number, options: { removeFromClient?: boolean; blocklist?: boolean } = {}): Promise<void> {
+    const params = new URLSearchParams();
+    if (options.removeFromClient) params.append('removeFromClient', 'true');
+    if (options.blocklist) params.append('blocklist', 'true');
+    const query = params.toString() ? `?${params.toString()}` : '';
+    await this['request']<void>(`/queue/${queueId}${query}`, {
+      method: 'DELETE',
+    });
+  }
+
+  /**
+   * Trigger a refresh for a specific movie
+   */
+  async refreshMovie(movieId: number): Promise<{ id: number }> {
+    return this['request']<{ id: number }>('/command', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'RefreshMovie',
+        movieIds: [movieId],
+      }),
+    });
   }
 }
 
@@ -876,109 +898,6 @@ export class LidarrClient extends ArrClient {
     if (end) params.append('end', end);
     const query = params.toString() ? `?${params.toString()}` : '';
     return this['request']<Album[]>(`/calendar${query}`);
-  }
-
-  /**
-   * Get metadata profiles
-   */
-  async getMetadataProfiles(): Promise<MetadataProfile[]> {
-    return this['request']<MetadataProfile[]>('/metadataprofile');
-  }
-}
-
-export class ReadarrClient extends ArrClient {
-  constructor(config: ArrConfig) {
-    super('readarr', config);
-    this.apiVersion = 'v1';
-  }
-
-  /**
-   * Get all authors
-   */
-  async getAuthors(): Promise<Author[]> {
-    return this['request']<Author[]>('/author');
-  }
-
-  /**
-   * Get a specific author
-   */
-  async getAuthorById(id: number): Promise<Author> {
-    return this['request']<Author>(`/author/${id}`);
-  }
-
-  /**
-   * Search for authors
-   */
-  async searchAuthors(term: string): Promise<SearchResult[]> {
-    return this['request']<SearchResult[]>(`/author/lookup?term=${encodeURIComponent(term)}`);
-  }
-
-  /**
-   * Add an author
-   */
-  async addAuthor(author: Partial<Author> & { foreignAuthorId: string; rootFolderPath: string; qualityProfileId: number; metadataProfileId: number }): Promise<Author> {
-    return this['request']<Author>('/author', {
-      method: 'POST',
-      body: JSON.stringify({
-        ...author,
-        monitored: author.monitored ?? true,
-        addOptions: {
-          searchForMissingBooks: true,
-        },
-      }),
-    });
-  }
-
-  /**
-   * Get books for an author
-   */
-  async getBooks(authorId?: number): Promise<Book[]> {
-    const url = authorId ? `/book?authorId=${authorId}` : '/book';
-    return this['request']<Book[]>(url);
-  }
-
-  /**
-   * Get a specific book
-   */
-  async getBookById(id: number): Promise<Book> {
-    return this['request']<Book>(`/book/${id}`);
-  }
-
-  /**
-   * Search for missing books for an author
-   */
-  async searchMissingBooks(authorId: number): Promise<{ id: number }> {
-    return this['request']<{ id: number }>('/command', {
-      method: 'POST',
-      body: JSON.stringify({
-        name: 'AuthorSearch',
-        authorId,
-      }),
-    });
-  }
-
-  /**
-   * Search for a specific book
-   */
-  async searchBook(bookIds: number[]): Promise<{ id: number }> {
-    return this['request']<{ id: number }>('/command', {
-      method: 'POST',
-      body: JSON.stringify({
-        name: 'BookSearch',
-        bookIds,
-      }),
-    });
-  }
-
-  /**
-   * Get calendar (upcoming book releases)
-   */
-  async getCalendar(start?: string, end?: string): Promise<Book[]> {
-    const params = new URLSearchParams();
-    if (start) params.append('start', start);
-    if (end) params.append('end', end);
-    const query = params.toString() ? `?${params.toString()}` : '';
-    return this['request']<Book[]>(`/calendar${query}`);
   }
 
   /**

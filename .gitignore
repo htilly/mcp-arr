@@ -10,6 +10,18 @@ test-config.txt
 # Claude Code local config (CLAUDE.md stays tracked)
 .claude/
 
+# Local planning / session handoff notes
+NEXT-SESSION.md
+SESSION-*.md
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# npm pack artifacts
+*.tgz
+
 # Local config volume (docker-compose)
 config/
 secrets/

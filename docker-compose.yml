@@ -9,11 +9,13 @@
 #   5. Open https://mcp-arr.home.lan:3000/admin, download + install the root certificate
 #      (Certificates tab, or /ca.crt), enter the setup code and register your passkey.
 #
-# Air-gapped host: build/pull the image elsewhere, then `docker save mcp-arr | ...` and `docker load`.
+# Air-gapped host: build/pull the image elsewhere, then `docker save ghcr.io/htilly/mcp-arr:main | ...` and `docker load`.
+# Not exposed to the internet: HTTPS + passkey login + per-user tokens are always on, but keep it
+# on your LAN / VPN anyway. Claude custom connectors can't reach it - use Claude Code or mcp-remote.
+
 services:
   mcp-arr:
-    build: .
-    image: mcp-arr
+    image: ghcr.io/htilly/mcp-arr:main   # or replace with `build: .` to build locally
     container_name: mcp-arr
     restart: unless-stopped
     ports:
@@ -24,6 +26,8 @@ services:
       - mcp_arr_key
     environment:
       MCP_TRANSPORT: http
+      HOST: 0.0.0.0
+      PORT: 3000
       PUBLIC_URL: https://mcp-arr.home.lan:3000      # the address you open in the browser
       CONFIG_ENCRYPTION_KEY_FILE: /run/secrets/mcp_arr_key
       # Extra names/IPs for the certificate (e.g. to reach it by IP from MCP clients):
@@ -43,7 +47,7 @@ services:
       # SONARR_URL: http://sonarr:8989
       # SONARR_API_KEY: your-sonarr-api-key
     healthcheck:
-      test: ["CMD", "wget", "-q", "--no-check-certificate", "-O-", "https://127.0.0.1:3000/healthz"]
+      test: ["CMD", "wget", "-q", "--no-check-certificate", "-O-", "https://127.0.0.1:3000/health"]
       interval: 30s
       timeout: 5s
       retries: 3

@@ -4,16 +4,19 @@
  * - Served over HTTPS (see tls.ts) - designed for LAN use without internet access.
  * - Web UI: per-user login with passkeys (see auth.ts), roles admin/user.
  * - /mcp: per-user access tokens (Authorization: Bearer <token>, or ?token=<token>).
+ *   Stateless Streamable HTTP: a fresh MCP server + transport per request and no
+ *   Mcp-Session-Id, so clients that don't echo the session header (e.g. Claude Code)
+ *   work and long-lived GET streams can't block other requests. The token is checked
+ *   on every request, so revoking it or deleting its user takes effect immediately.
  */
 
 import { createServer as createHttpServer, IncomingMessage, ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { ConfigStore, Role, SERVICE_DEFS, ServiceId, StoredUser, isServiceId } from './config-store.js';
-import { SonarrClient, RadarrClient, LidarrClient, ReadarrClient, ProwlarrClient } from './arr-client.js';
+import { SonarrClient, RadarrClient, LidarrClient, ProwlarrClient } from './arr-client.js';
 import { TautulliClient } from './tautulli-client.js';
 import { OverseerrClient } from './overseerr-client.js';
 import { BazarrClient } from './bazarr-client.js';
@@ -29,16 +32,11 @@ export interface HttpServerOptions {
   port: number;
   host: string;
   trustProxy: boolean;
+  mcpPath: string;
+  serverVersion: string;
   createServer: () => Server;
   onConfigChanged: () => void;
   getConfiguredSummary: () => string[];
-}
-
-interface McpSession {
-  transport: StreamableHTTPServerTransport;
-  server: Server;
-  userId: string;
-  lastSeen: number;
 }
 
 class HttpError extends Error {
@@ -48,7 +46,6 @@ class HttpError extends Error {
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
-const MCP_SESSION_IDLE_MS = 2 * 60 * 60 * 1000;
 const RATE_WINDOW_MS = 15 * 60 * 1000;
 const RATE_MAX_FAILURES = 10;
 const TEST_TIMEOUT_MS = 10_000;
@@ -128,7 +125,6 @@ export async function testServiceConnection(
         case 'sonarr': return (await new SonarrClient(cfg).getStatus()).version;
         case 'radarr': return (await new RadarrClient(cfg).getStatus()).version;
         case 'lidarr': return (await new LidarrClient(cfg).getStatus()).version;
-        case 'readarr': return (await new ReadarrClient(cfg).getStatus()).version;
         case 'prowlarr': return (await new ProwlarrClient(cfg).getStatus()).version;
         case 'tautulli': {
           const info = await new TautulliClient(cfg).request<{ tautulli_version?: string }>('get_tautulli_info');
@@ -157,7 +153,6 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
   const { store, auth, tls } = opts;
   const publicOrigin = opts.publicUrl.origin;
 
-  const mcpSessions = new Map<string, McpSession>();
   const failures = new Map<string, { count: number; first: number }>();
 
   function clientIp(req: IncomingMessage): string {
@@ -191,31 +186,8 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     }
   }
 
-  function configChanged(): void {
-    opts.onConfigChanged();
-    for (const s of mcpSessions.values()) {
-      s.server.sendToolListChanged().catch(() => { /* client may not support it */ });
-    }
-  }
-
-  /** Close MCP sessions belonging to a user (after deletion). */
-  function closeUserMcpSessions(userId: string): void {
-    for (const [id, s] of mcpSessions) {
-      if (s.userId === userId) {
-        mcpSessions.delete(id);
-        s.transport.close().catch(() => {});
-      }
-    }
-  }
-
   const cleanup = setInterval(() => {
     const now = Date.now();
-    for (const [id, s] of mcpSessions) {
-      if (now - s.lastSeen > MCP_SESSION_IDLE_MS) {
-        mcpSessions.delete(id);
-        s.transport.close().catch(() => {});
-      }
-    }
     for (const [ip, f] of failures) if (now - f.first > RATE_WINDOW_MS) failures.delete(ip);
     auth.cleanup();
   }, 5 * 60 * 1000);
@@ -240,57 +212,19 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       return;
     }
 
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-    const existing = sessionId ? mcpSessions.get(sessionId) : undefined;
-    if (existing && existing.userId !== user.id) {
-      sendJson(res, 403, { jsonrpc: '2.0', error: { code: -32001, message: 'Session belongs to another user' }, id: null });
+    if (req.method !== 'POST' && req.method !== 'GET' && req.method !== 'DELETE') {
+      sendJson(res, 405, { error: 'Method not allowed' }, { Allow: 'GET, POST, DELETE' });
       return;
     }
-
-    if (req.method === 'POST') {
-      const body = await readJson(req);
-      if (existing) {
-        existing.lastSeen = Date.now();
-        await existing.transport.handleRequest(req, res, body);
-        return;
-      }
-      if (sessionId) {
-        sendJson(res, 404, { jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null });
-        return;
-      }
-      if (!isInitializeRequest(body)) {
-        sendJson(res, 400, { jsonrpc: '2.0', error: { code: -32000, message: 'Bad Request: no valid session ID provided' }, id: null });
-        return;
-      }
-      const server = opts.createServer();
-      const session: McpSession = {
-        server,
-        userId: user.id,
-        lastSeen: Date.now(),
-        transport: new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: id => { mcpSessions.set(id, session); },
-        }),
-      };
-      session.transport.onclose = () => {
-        if (session.transport.sessionId) mcpSessions.delete(session.transport.sessionId);
-      };
-      await server.connect(session.transport);
-      await session.transport.handleRequest(req, res, body);
-      return;
-    }
-
-    if (req.method === 'GET' || req.method === 'DELETE') {
-      if (!existing) {
-        sendJson(res, sessionId ? 404 : 400, { jsonrpc: '2.0', error: { code: -32000, message: sessionId ? 'Session not found' : 'Missing mcp-session-id header' }, id: null });
-        return;
-      }
-      existing.lastSeen = Date.now();
-      await existing.transport.handleRequest(req, res);
-      return;
-    }
-
-    sendJson(res, 405, { error: 'Method not allowed' }, { Allow: 'GET, POST, DELETE' });
+    const body = req.method === 'POST' ? await readJson(req) : undefined;
+    const server = opts.createServer();
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    res.on('close', () => {
+      void transport.close();
+      void server.close();
+    });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, body);
   }
 
   // ----- admin helpers -----
@@ -375,7 +309,6 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
           configPath: store.path,
           trustProxy: opts.trustProxy,
         },
-        activeMcpSessions: mcpSessions.size,
       } : {}),
     };
   }
@@ -537,7 +470,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
         } catch (error) {
           throw new HttpError(400, error instanceof Error ? error.message : String(error));
         }
-        configChanged();
+        opts.onConfigChanged();
         sendJson(res, 200, { ok: true, services: servicesView(true), configuredSummary: opts.getConfiguredSummary() });
         return;
       }
@@ -556,7 +489,6 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
           if (targetId === admin.id) throw new HttpError(400, 'You cannot delete yourself');
           store.deleteUser(targetId);
           auth.destroyUserSessions(targetId);
-          closeUserMcpSessions(targetId);
         } else {
           throw new HttpError(405, 'Method not allowed');
         }
@@ -600,12 +532,12 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       if (tls.mode !== 'off') {
         res.setHeader('Strict-Transport-Security', 'max-age=31536000');
       }
-      if (path === '/mcp' || path === '/mcp/') {
+      if (path === opts.mcpPath || path === `${opts.mcpPath}/`) {
         await handleMcp(req, res, url);
         return;
       }
-      if (path === '/healthz') {
-        sendJson(res, 200, { ok: true });
+      if (path === '/health' || path === '/healthz') {
+        sendJson(res, 200, { status: 'ok', ok: true, version: opts.serverVersion, transport: 'http' });
         return;
       }
       if (path === '/ca.crt' && req.method === 'GET') {
@@ -672,7 +604,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
   const summary = opts.getConfiguredSummary();
   const info = tls.info();
   console.error(`*arr MCP server running (${material ? 'https' : 'http'}) on ${opts.host}:${opts.port}`);
-  console.error(`  Public URL:  ${publicOrigin}   MCP endpoint: ${publicOrigin}/mcp   Web UI: ${publicOrigin}/admin`);
+  console.error(`  Public URL:  ${publicOrigin}   MCP endpoint: ${publicOrigin}${opts.mcpPath}   Web UI: ${publicOrigin}/admin`);
   console.error(`  Config:      ${store.path} (encrypted, key from ${store.keySource})`);
   for (const w of store.warnings) console.error(`  WARNING: ${w}`);
   if (info.mode === 'internal' && info.ca) {
@@ -697,7 +629,6 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
 
   const shutdown = () => {
     tls.stop();
-    for (const s of mcpSessions.values()) s.transport.close().catch(() => {});
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000).unref();
   };

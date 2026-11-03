@@ -573,7 +573,7 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
       el('p', null, ['All settings, API keys, users and certificate keys are encrypted at rest (AES-256-GCM) in ', el('code', { text: s.configPath }), '.']),
       el('p', null, ['Encryption key: ', el('strong', { text: src })]),
       s.warnings.map(function (w) { return el('div', { class: 'msg warn', text: w }); }),
-      el('p', { class: 'note', text: 'Active MCP sessions: ' + d.activeMcpSessions + (s.trustProxy ? ' · TRUST_PROXY is on (client IPs from X-Forwarded-For)' : '') })
+      s.trustProxy ? el('p', { class: 'note', text: 'TRUST_PROXY is on (client IPs from X-Forwarded-For)' }) : null
     ].reduce(function (a, b) { return a.concat(b); }, []))]);
   }
 

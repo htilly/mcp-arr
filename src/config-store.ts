@@ -33,7 +33,6 @@ export type ServiceId =
   | 'sonarr'
   | 'radarr'
   | 'lidarr'
-  | 'readarr'
   | 'prowlarr'
   | 'tautulli'
   | 'overseerr'
@@ -50,7 +49,6 @@ export const SERVICE_DEFS: ServiceDef[] = [
   { id: 'sonarr', displayName: 'Sonarr (TV)', envPrefix: 'SONARR', exampleUrl: 'http://localhost:8989' },
   { id: 'radarr', displayName: 'Radarr (Movies)', envPrefix: 'RADARR', exampleUrl: 'http://localhost:7878' },
   { id: 'lidarr', displayName: 'Lidarr (Music)', envPrefix: 'LIDARR', exampleUrl: 'http://localhost:8686' },
-  { id: 'readarr', displayName: 'Readarr (Books)', envPrefix: 'READARR', exampleUrl: 'http://localhost:8787' },
   { id: 'prowlarr', displayName: 'Prowlarr (Indexers)', envPrefix: 'PROWLARR', exampleUrl: 'http://localhost:9696' },
   { id: 'tautulli', displayName: 'Tautulli (Plex)', envPrefix: 'TAUTULLI', exampleUrl: 'http://localhost:8181' },
   { id: 'overseerr', displayName: 'Overseerr (Requests)', envPrefix: 'OVERSEERR', exampleUrl: 'http://localhost:5055' },
