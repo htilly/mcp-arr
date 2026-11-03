@@ -1,6 +1,6 @@
 # CLAUDE.md - mcp-arr
 
-MCP server for the *arr media management suite (Sonarr, Radarr, Lidarr, Readarr, Prowlarr).
+MCP server for the *arr media management suite (Sonarr, Radarr, Lidarr, Readarr, Prowlarr), plus Tautulli, Overseerr and Bazarr.
 
 ## Tech Stack
 
@@ -50,6 +50,8 @@ node dist/index.js
 | READARR_API_KEY | For Readarr | API key |
 | PROWLARR_URL | For Prowlarr | Base URL |
 | PROWLARR_API_KEY | For Prowlarr | API key |
+| BAZARR_URL | For Bazarr | Base URL (e.g., http://localhost:6767) |
+| BAZARR_API_KEY | For Bazarr | API key from Bazarr settings |
 
 ## Constraints
 

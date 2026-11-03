@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Bazarr (subtitles) integration** – optional, enabled with `BAZARR_URL` + `BAZARR_API_KEY`; server can run with only Bazarr configured:
+  - `bazarr_status`, `bazarr_get_health`, `bazarr_get_badges` – System status, health, missing-subtitle counts
+  - `bazarr_get_series`, `bazarr_get_episodes`, `bazarr_get_movies` – Subtitle status per series/episode/movie
+  - `bazarr_get_wanted_episodes`, `bazarr_get_wanted_movies` – Items missing subtitles
+  - `bazarr_get_history` – Subtitle history (episodes or movies)
+  - `bazarr_search_series`, `bazarr_search_movie` – Search missing subtitles
+  - `bazarr_download_episode_subtitle`, `bazarr_download_movie_subtitle` – Download a subtitle in a specific language
+  - `bazarr_get_providers`, `bazarr_reset_providers` – Provider status and reset throttling
+  - `bazarr_get_languages` – Enabled languages and language profiles
+  - `arr_status` now reports Bazarr connection status
 - **Ratings and IMDB IDs in tool responses** (from connected *arr services):
   - `radarr_get_movies` and `radarr_search` now include `imdbId`, `rating` (TMDB), `ratingVotes`, and `ratingSource: 'tmdb'`
   - `sonarr_get_series` now includes `imdbId`, `rating` (TVDB), `ratingVotes`, and `ratingSource: 'tvdb'`

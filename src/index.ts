@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /**
- * MCP Server for *arr Media Management Suite + Tautulli + Overseerr
+ * MCP Server for *arr Media Management Suite + Tautulli + Overseerr + Bazarr
  *
  * Environment variables:
  * - SONARR_URL, SONARR_API_KEY, RADARR_URL, RADARR_API_KEY, etc.
  * - TAUTULLI_URL, TAUTULLI_API_KEY
  * - OVERSEERR_URL, OVERSEERR_API_KEY
+ * - BAZARR_URL, BAZARR_API_KEY
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -26,6 +27,7 @@ import {
 import { trashClient, TrashService } from "./trash-client.js";
 import { TautulliClient } from "./tautulli-client.js";
 import { OverseerrClient } from "./overseerr-client.js";
+import { BazarrClient, BazarrSubtitle } from "./bazarr-client.js";
 
 // Configuration from environment
 interface ServiceConfig {
@@ -50,9 +52,12 @@ const tautulliConfigured = Boolean(tautulliUrl && tautulliApiKey);
 const overseerrUrl = process.env.OVERSEERR_URL;
 const overseerrApiKey = process.env.OVERSEERR_API_KEY;
 const overseerrConfigured = Boolean(overseerrUrl && overseerrApiKey);
+const bazarrUrl = process.env.BAZARR_URL;
+const bazarrApiKey = process.env.BAZARR_API_KEY;
+const bazarrConfigured = Boolean(bazarrUrl && bazarrApiKey);
 
-if (configuredServices.length === 0 && !tautulliConfigured && !overseerrConfigured) {
-  console.error("Error: No services configured. Set at least one of: *arr (SONARR_URL+API_KEY, etc.), Tautulli (TAUTULLI_URL+TAUTULLI_API_KEY), or Overseerr (OVERSEERR_URL+OVERSEERR_API_KEY)");
+if (configuredServices.length === 0 && !tautulliConfigured && !overseerrConfigured && !bazarrConfigured) {
+  console.error("Error: No services configured. Set at least one of: *arr (SONARR_URL+API_KEY, etc.), Tautulli (TAUTULLI_URL+TAUTULLI_API_KEY), Overseerr (OVERSEERR_URL+OVERSEERR_API_KEY), or Bazarr (BAZARR_URL+BAZARR_API_KEY)");
   process.exit(1);
 }
 
@@ -72,6 +77,11 @@ if (tautulliConfigured) {
 let overseerrClient: OverseerrClient | undefined;
 if (overseerrConfigured) {
   overseerrClient = new OverseerrClient({ url: overseerrUrl!, apiKey: overseerrApiKey! });
+}
+
+let bazarrClient: BazarrClient | undefined;
+if (bazarrConfigured) {
+  bazarrClient = new BazarrClient({ url: bazarrUrl!, apiKey: bazarrApiKey! });
 }
 
 for (const service of configuredServices) {
@@ -98,6 +108,7 @@ for (const service of configuredServices) {
 const statusParts = configuredServices.map(s => s.displayName);
 if (tautulliConfigured) statusParts.push('Tautulli (Plex)');
 if (overseerrConfigured) statusParts.push('Overseerr (Requests)');
+if (bazarrConfigured) statusParts.push('Bazarr (Subtitles)');
 const TOOLS: Tool[] = [
   {
     name: "arr_status",
@@ -855,6 +866,152 @@ if (overseerrClient) {
   );
 }
 
+// Bazarr tools (subtitle management)
+if (bazarrClient) {
+  const pagingProps = {
+    start: { type: "number", description: "Offset for pagination (default: 0)" },
+    length: { type: "number", description: "Number of items to return (default: 50, max: 200)" },
+  };
+  const subtitleProps = {
+    language: { type: "string", description: "Language code (ISO 639-1, e.g. 'en', 'sv'). Must be enabled in Bazarr (see bazarr_get_languages)" },
+    forced: { type: "boolean", description: "Download a forced subtitle (default: false)" },
+    hi: { type: "boolean", description: "Download a hearing-impaired subtitle (default: false)" },
+  };
+  TOOLS.push(
+    {
+      name: "bazarr_status",
+      description: "Get Bazarr system status (Bazarr, Sonarr and Radarr versions, OS, etc.)",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    },
+    {
+      name: "bazarr_get_health",
+      description: "Get Bazarr health check issues",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    },
+    {
+      name: "bazarr_get_badges",
+      description: "Get Bazarr summary counts: episodes and movies with missing subtitles, provider issues, health issues, Sonarr/Radarr connection state",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    },
+    {
+      name: "bazarr_get_series",
+      description: "Get TV series known to Bazarr with subtitle language profile and missing-subtitle episode counts. Use the returned sonarrSeriesId with other bazarr_* tools.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          ...pagingProps,
+          seriesIds: { type: "array", items: { type: "number" }, description: "Only return these Sonarr series IDs" },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "bazarr_get_episodes",
+      description: "Get episodes of a series with existing and missing subtitles",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          seriesId: { type: "number", description: "Sonarr series ID" },
+          season: { type: "number", description: "Only return this season" },
+        },
+        required: ["seriesId"],
+      },
+    },
+    {
+      name: "bazarr_get_movies",
+      description: "Get movies known to Bazarr with existing and missing subtitles. Use the returned radarrId with other bazarr_* tools.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          ...pagingProps,
+          radarrIds: { type: "array", items: { type: "number" }, description: "Only return these Radarr movie IDs" },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "bazarr_get_wanted_episodes",
+      description: "Get episodes that are missing subtitles",
+      inputSchema: { type: "object" as const, properties: { ...pagingProps }, required: [] },
+    },
+    {
+      name: "bazarr_get_wanted_movies",
+      description: "Get movies that are missing subtitles",
+      inputSchema: { type: "object" as const, properties: { ...pagingProps }, required: [] },
+    },
+    {
+      name: "bazarr_get_history",
+      description: "Get Bazarr subtitle history (downloads, upgrades, manual actions)",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          type: { type: "string", enum: ["episodes", "movies"], description: "History type (default: episodes)" },
+          ...pagingProps,
+        },
+        required: [],
+      },
+    },
+    {
+      name: "bazarr_search_series",
+      description: "Trigger Bazarr to search for all missing subtitles of a series",
+      inputSchema: {
+        type: "object" as const,
+        properties: { seriesId: { type: "number", description: "Sonarr series ID" } },
+        required: ["seriesId"],
+      },
+    },
+    {
+      name: "bazarr_search_movie",
+      description: "Trigger Bazarr to search for all missing subtitles of a movie",
+      inputSchema: {
+        type: "object" as const,
+        properties: { radarrId: { type: "number", description: "Radarr movie ID" } },
+        required: ["radarrId"],
+      },
+    },
+    {
+      name: "bazarr_download_episode_subtitle",
+      description: "Search and download a subtitle in a specific language for one episode",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          seriesId: { type: "number", description: "Sonarr series ID" },
+          episodeId: { type: "number", description: "Sonarr episode ID" },
+          ...subtitleProps,
+        },
+        required: ["seriesId", "episodeId", "language"],
+      },
+    },
+    {
+      name: "bazarr_download_movie_subtitle",
+      description: "Search and download a subtitle in a specific language for one movie",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          radarrId: { type: "number", description: "Radarr movie ID" },
+          ...subtitleProps,
+        },
+        required: ["radarrId", "language"],
+      },
+    },
+    {
+      name: "bazarr_get_providers",
+      description: "Get subtitle provider status (throttled providers and when they will be retried)",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    },
+    {
+      name: "bazarr_reset_providers",
+      description: "Reset throttled subtitle providers so Bazarr retries them immediately",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    },
+    {
+      name: "bazarr_get_languages",
+      description: "Get enabled subtitle languages and language profiles configured in Bazarr",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    }
+  );
+}
+
 // Cross-service search tool
 TOOLS.push({
   name: "arr_search_all",
@@ -1106,6 +1263,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         } else {
           statuses.overseerr = { configured: false };
+        }
+        if (bazarrConfigured) {
+          try {
+            if (bazarrClient) {
+              const status = await bazarrClient.getStatus();
+              statuses.bazarr = {
+                configured: true,
+                connected: true,
+                version: status.bazarr_version,
+              };
+            } else {
+              statuses.bazarr = { configured: true, connected: false };
+            }
+          } catch (error) {
+            statuses.bazarr = {
+              configured: true,
+              connected: false,
+              error: error instanceof Error ? error.message : String(error),
+            };
+          }
+        } else {
+          statuses.bazarr = { configured: false };
         }
         return {
           content: [{ type: "text", text: JSON.stringify(statuses, null, 2) }],
@@ -2810,6 +2989,235 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      // Bazarr handlers
+      case "bazarr_status": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        const data = await bazarrClient.getStatus();
+        return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+      }
+      case "bazarr_get_health": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        const issues = await bazarrClient.getHealth();
+        return { content: [{ type: "text", text: JSON.stringify({ count: issues.length, issues }, null, 2) }] };
+      }
+      case "bazarr_get_badges": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        const b = await bazarrClient.getBadges();
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              episodesMissingSubtitles: b.episodes,
+              moviesMissingSubtitles: b.movies,
+              providerIssues: b.providers,
+              healthIssues: b.status,
+              sonarrSignalR: b.sonarr_signalr,
+              radarrSignalR: b.radarr_signalr,
+            }, null, 2),
+          }],
+        };
+      }
+      case "bazarr_get_series": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        const a = args as { start?: number; length?: number; seriesIds?: number[] };
+        const paging = bazarrPaging(a);
+        const res = await bazarrClient.getSeries({ ...paging, seriesIds: a.seriesIds });
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              total: res.total ?? res.data.length,
+              returned: res.data.length,
+              series: res.data.map(s => ({
+                sonarrSeriesId: s.sonarrSeriesId,
+                title: s.title,
+                year: s.year,
+                monitored: s.monitored,
+                profileId: s.profileId,
+                episodeFileCount: s.episodeFileCount,
+                episodesMissingSubtitles: s.episodeMissingCount,
+              })),
+            }, null, 2),
+          }],
+        };
+      }
+      case "bazarr_get_episodes": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        const { seriesId, season } = args as { seriesId: number; season?: number };
+        const res = await bazarrClient.getEpisodes({ seriesIds: [seriesId] });
+        const episodes = res.data
+          .filter(e => season === undefined || e.season === season)
+          .sort((x, y) => x.season - y.season || x.episode - y.episode);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              count: episodes.length,
+              episodes: episodes.map(e => ({
+                sonarrEpisodeId: e.sonarrEpisodeId,
+                season: e.season,
+                episode: e.episode,
+                title: e.title,
+                monitored: e.monitored,
+                subtitles: formatBazarrSubs(e.subtitles),
+                missingSubtitles: formatBazarrSubs(e.missing_subtitles),
+              })),
+            }, null, 2),
+          }],
+        };
+      }
+      case "bazarr_get_movies": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        const a = args as { start?: number; length?: number; radarrIds?: number[] };
+        const paging = bazarrPaging(a);
+        const res = await bazarrClient.getMovies({ ...paging, radarrIds: a.radarrIds });
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              total: res.total ?? res.data.length,
+              returned: res.data.length,
+              movies: res.data.map(m => ({
+                radarrId: m.radarrId,
+                title: m.title,
+                year: m.year,
+                monitored: m.monitored,
+                profileId: m.profileId,
+                subtitles: formatBazarrSubs(m.subtitles),
+                missingSubtitles: formatBazarrSubs(m.missing_subtitles),
+              })),
+            }, null, 2),
+          }],
+        };
+      }
+      case "bazarr_get_wanted_episodes": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        const res = await bazarrClient.getWantedEpisodes(bazarrPaging(args as { start?: number; length?: number }));
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              total: res.total ?? res.data.length,
+              returned: res.data.length,
+              episodes: res.data.map(e => ({
+                seriesTitle: e.seriesTitle,
+                episode: e.episode_number,
+                episodeTitle: e.episodeTitle,
+                sonarrSeriesId: e.sonarrSeriesId,
+                sonarrEpisodeId: e.sonarrEpisodeId,
+                missingSubtitles: formatBazarrSubs(e.missing_subtitles),
+              })),
+            }, null, 2),
+          }],
+        };
+      }
+      case "bazarr_get_wanted_movies": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        const res = await bazarrClient.getWantedMovies(bazarrPaging(args as { start?: number; length?: number }));
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              total: res.total ?? res.data.length,
+              returned: res.data.length,
+              movies: res.data.map(m => ({
+                title: m.title,
+                radarrId: m.radarrId,
+                missingSubtitles: formatBazarrSubs(m.missing_subtitles),
+              })),
+            }, null, 2),
+          }],
+        };
+      }
+      case "bazarr_get_history": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        const a = args as { type?: 'episodes' | 'movies'; start?: number; length?: number };
+        const paging = bazarrPaging(a);
+        const isMovies = a.type === 'movies';
+        const res = isMovies
+          ? await bazarrClient.getMovieHistory(paging)
+          : await bazarrClient.getEpisodeHistory(paging);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              type: isMovies ? 'movies' : 'episodes',
+              total: res.total ?? res.data.length,
+              returned: res.data.length,
+              history: res.data.map(h => ({
+                ...(isMovies
+                  ? { title: h.title, radarrId: h.radarrId }
+                  : { seriesTitle: h.seriesTitle, episode: h.episode_number, episodeTitle: h.episodeTitle, sonarrSeriesId: h.sonarrSeriesId, sonarrEpisodeId: h.sonarrEpisodeId }),
+                timestamp: h.parsed_timestamp ?? h.timestamp,
+                description: h.description,
+                language: h.language ? BazarrClient.formatSubtitle(h.language) : undefined,
+                provider: h.provider,
+                score: h.score,
+              })),
+            }, null, 2),
+          }],
+        };
+      }
+      case "bazarr_search_series": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        const { seriesId } = args as { seriesId: number };
+        await bazarrClient.searchSeries(seriesId);
+        return { content: [{ type: "text", text: JSON.stringify({ success: true, message: `Search for missing subtitles started for series ${seriesId}` }, null, 2) }] };
+      }
+      case "bazarr_search_movie": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        const { radarrId } = args as { radarrId: number };
+        await bazarrClient.searchMovie(radarrId);
+        return { content: [{ type: "text", text: JSON.stringify({ success: true, message: `Search for missing subtitles started for movie ${radarrId}` }, null, 2) }] };
+      }
+      case "bazarr_download_episode_subtitle": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        const a = args as { seriesId: number; episodeId: number; language: string; forced?: boolean; hi?: boolean };
+        await bazarrClient.downloadEpisodeSubtitle(a);
+        return { content: [{ type: "text", text: JSON.stringify({ success: true, message: `Subtitle search/download for '${a.language}' completed for episode ${a.episodeId}. Check bazarr_get_episodes or bazarr_get_history for the result.` }, null, 2) }] };
+      }
+      case "bazarr_download_movie_subtitle": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        const a = args as { radarrId: number; language: string; forced?: boolean; hi?: boolean };
+        await bazarrClient.downloadMovieSubtitle(a);
+        return { content: [{ type: "text", text: JSON.stringify({ success: true, message: `Subtitle search/download for '${a.language}' completed for movie ${a.radarrId}. Check bazarr_get_movies or bazarr_get_history for the result.` }, null, 2) }] };
+      }
+      case "bazarr_get_providers": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        const providers = await bazarrClient.getProviders();
+        return { content: [{ type: "text", text: JSON.stringify({ count: providers.length, providers }, null, 2) }] };
+      }
+      case "bazarr_reset_providers": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        await bazarrClient.resetProviders();
+        return { content: [{ type: "text", text: JSON.stringify({ success: true, message: "Throttled providers reset" }, null, 2) }] };
+      }
+      case "bazarr_get_languages": {
+        if (!bazarrClient) throw new Error("Bazarr not configured");
+        const [languages, profiles] = await Promise.all([
+          bazarrClient.getLanguages(),
+          bazarrClient.getLanguageProfiles(),
+        ]);
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              enabledLanguages: languages.filter(l => l.enabled).map(l => ({ code2: l.code2, name: l.name })),
+              profiles: profiles.map(p => ({
+                profileId: p.profileId,
+                name: p.name,
+                cutoff: p.cutoff,
+                languages: (p.items ?? []).map(i => ({
+                  language: i.language,
+                  forced: i.forced === 'True',
+                  hi: i.hi === 'True',
+                })),
+              })),
+            }, null, 2),
+          }],
+        };
+      }
+
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
@@ -2821,6 +3229,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   }
 });
+
+// Bazarr helpers
+function bazarrPaging(a: { start?: number; length?: number }): { start: number; length: number } {
+  const start = Math.max(0, a.start ?? 0);
+  const length = Math.min(Math.max(1, a.length ?? 50), 200);
+  return { start, length };
+}
+
+function formatBazarrSubs(subs?: BazarrSubtitle[]): string[] {
+  return (subs ?? []).map(BazarrClient.formatSubtitle);
+}
 
 // Helper function to format bytes
 function formatBytes(bytes: number): string {
@@ -2835,7 +3254,7 @@ function formatBytes(bytes: number): string {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`*arr MCP server running - configured services: ${configuredServices.map(s => s.name).join(', ')}`);
+  console.error(`*arr MCP server running - configured services: ${statusParts.join(', ')}`);
 }
 
 main().catch((error) => {
