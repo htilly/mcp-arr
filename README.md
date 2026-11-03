@@ -230,7 +230,7 @@ Clients that can't send headers can use `https://…/mcp?token=<token>`. On an o
 
 #### Status board and brand guide
 
-The *Services* tab shows a live **status board**: calls per connection, success rate, response times, a 24-hour chart and a live feed. Each MCP tool call animates on the service sketch as it happens. Counts are stored in `stats.json` next to the config file (no tool arguments or results). The *Brand* tab documents the UI's look - logo, colours, type, illustrations, components and motion - with a logo download and copyable CSS tokens.
+The *Services* tab shows a live **status board**: calls per connection, success rate, response times, a 24-hour chart and a live feed. Each MCP tool call animates on the service sketch as it happens. Counts are stored in `stats.json` next to the config file (no tool arguments or results). Every user also gets a *My activity* tab with their own calls, apps (access tokens) and recent sign-ins (browser and OS only, no IP addresses). The *Brand* tab documents the UI's look - logo, colours, type, illustrations, components and motion - with a logo download and copyable CSS tokens.
 
 #### Certificates (`TLS_MODE`)
 

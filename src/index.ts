@@ -43,7 +43,7 @@ import { BazarrClient, BazarrSubtitle } from "./bazarr-client.js";
 import { ConfigStore, EffectiveConfig, SERVICE_DEFS } from "./config-store.js";
 import { resolve as resolvePath, dirname, join as joinPath } from "node:path";
 import { isIP } from "node:net";
-import { stats } from "./stats.js";
+import { stats, CallContext } from "./stats.js";
 
 // Read from package.json rather than hardcoding, so the version reported to
 // clients can never drift from the released version. package.json sits at the
@@ -1434,7 +1434,7 @@ TOOLS.push(
 // old code funnelled every request through a serialized queue — and that queue
 // deadlocked the moment a streamable client opened its long-lived GET (SSE)
 // stream, since that request never completes.
-function buildServer(caller?: string): Server {
+function buildServer(caller?: CallContext): Server {
   const server = new Server(
     {
       name: "mcp-arr",
@@ -1680,7 +1680,7 @@ async function getPaginatedQueue(
 // Registers the MCP request handlers on a server instance. Called by
 // buildServer() for every server created (one per HTTP request, plus one for
 // stdio).
-function registerHandlers(server: Server, caller?: string): void {
+function registerHandlers(server: Server, caller?: CallContext): void {
 // Handle list tools request
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return { tools: TOOLS };
@@ -3943,7 +3943,7 @@ async function main() {
     port: Number(env.PORT || 3000),
     host: env.HOST || '0.0.0.0',
     trustProxy: env.TRUST_PROXY === 'true',
-    createServer: (caller?: string) => buildServer(caller),
+    createServer: (caller?: CallContext) => buildServer(caller),
     mcpPath,
     serverVersion: SERVER_VERSION,
     onConfigChanged: () => applyConfig(store.getEffective()),

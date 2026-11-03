@@ -188,6 +188,10 @@ svg .thick { stroke-width: 10; }
 .toplist li::before { content: counter(top); font: 700 16px var(--hand); color: var(--accent-deep); grid-row: span 2; }
 .toplist code { word-break: break-all; }
 .toplist .track { grid-column: 2 / 4; }
+.toplist.apps li { grid-template-columns: 26px 1fr auto; }
+.app-name { display: flex; flex-direction: column; min-width: 0; }
+.app-name strong { font: 700 15px var(--hand); overflow-wrap: anywhere; }
+.board-grid .pills { margin-bottom: 8px; }
 .empty { text-align: center; color: var(--muted); padding: 18px 8px; }
 .empty svg { width: 90px; height: 64px; display: block; margin: 0 auto 6px; }
 
@@ -992,7 +996,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
 
   // ---------- live activity + status board ----------
   var reduceMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)').matches : false;
-  var live = { es: null, snap: null, connected: false, boardEl: null, pillEls: [], flows: {}, starts: {}, lastNewId: 0, prevTiles: {}, services: [] };
+  var live = { es: null, snap: null, mySnap: null, meId: null, meEl: null, connected: false, boardEl: null, pillEls: [], flows: {}, starts: {}, lastNewId: 0, prevTiles: {}, services: [] };
   var SERVICE_NAMES = { core: 'Claude tools' };
   var HOUR_MS = 3600000;
 
@@ -1023,9 +1027,10 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
   }
   function stopLive() {
     if (live.es) live.es.close();
-    live.es = null; live.connected = false; live.snap = null;
+    live.es = null; live.connected = false; live.snap = null; live.mySnap = null;
   }
   function refreshStats() {
+    if (live.meEl && document.body.contains(live.meEl)) refreshMine();
     return api('GET', '/stats').then(function (r) { live.snap = r; updateBoard(); }, function () {});
   }
 
@@ -1089,35 +1094,64 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
 
   function onLiveCall(e) {
     animateHub(e);
-    if (e.phase !== 'end' || !live.snap) return;
-    var s = live.snap;
-    rollHours(s);
-    function bump(c) {
-      c.calls++;
-      if (!e.ok) c.errors++;
-      c.avgMs = Math.round(((c.avgMs || 0) * (c.calls - 1) + (e.ms || 0)) / c.calls);
-      c.lastAt = e.at;
-      return c;
+    if (e.phase !== 'end') return;
+    live.lastNewId = e.id;
+    if (live.snap) {
+      applyCall(live.snap, e);
+      if (live.isAdmin && e.caller && e.callerId) {
+        var c = live.snap.callers.filter(function (x) { return x.id === e.callerId; })[0];
+        if (!c) { c = { id: e.callerId, name: e.caller, calls: 0, errors: 0, avgMs: 0 }; live.snap.callers.push(c); }
+        bumpCounter(c, e);
+        live.snap.callers.sort(function (a, b) { return b.calls - a.calls; });
+      }
+      updateBoard();
     }
-    bump(s.totals);
+    if (live.mySnap && e.callerId && e.callerId === live.meId) {
+      var m = live.mySnap;
+      if (!m.totals.today) m.totals.activeDays++;
+      applyCall(m, e);
+      var key = e.client || 'unknown client';
+      var app = m.clients.filter(function (x) { return x.name === key; })[0];
+      if (!app) { app = { name: key, calls: 0, errors: 0, avgMs: 0 }; m.clients.push(app); }
+      bumpCounter(app, e);
+      m.clients.sort(function (a, b) { return b.calls - a.calls; });
+      rollDays(m);
+      m.daily[m.daily.length - 1].calls++;
+      updateMine();
+    }
+    // only the render right after the event highlights the new feed row
+    setTimeout(function () { if (live.lastNewId === e.id) live.lastNewId = 0; }, 0);
+  }
+  function bumpCounter(c, e) {
+    c.calls++;
+    if (!e.ok) c.errors++;
+    c.avgMs = Math.round(((c.avgMs || 0) * (c.calls - 1) + (e.ms || 0)) / c.calls);
+    c.lastAt = e.at;
+    return c;
+  }
+  /** Apply one finished call to a snapshot (global or personal - both have the same core shape). */
+  function applyCall(s, e) {
+    rollHours(s);
+    bumpCounter(s.totals, e);
     s.totals.today++;
-    s.services[e.service] = bump(s.services[e.service] || { calls: 0, errors: 0, avgMs: 0 });
+    s.services[e.service] = bumpCounter(s.services[e.service] || { calls: 0, errors: 0, avgMs: 0 }, e);
     var tool = s.tools.filter(function (t) { return t.tool === e.tool; })[0];
     if (!tool) { tool = { tool: e.tool, service: e.service, calls: 0, errors: 0, avgMs: 0 }; s.tools.push(tool); }
-    bump(tool);
+    bumpCounter(tool, e);
     s.tools.sort(function (a, b) { return b.calls - a.calls; });
     s.tools = s.tools.slice(0, 8);
-    if (live.isAdmin && e.caller) {
-      var c = s.callers.filter(function (x) { return x.name === e.caller; })[0];
-      if (!c) { c = { name: e.caller, calls: 0, errors: 0, avgMs: 0 }; s.callers.push(c); }
-      bump(c);
-      s.callers.sort(function (a, b) { return b.calls - a.calls; });
-    }
     s.hourly[s.hourly.length - 1]++;
     s.recent.unshift(e);
     s.recent = s.recent.slice(0, 40);
-    live.lastNewId = e.id;
-    updateBoard();
+  }
+  function localDay(t) { var d = new Date(t); return d.getFullYear() + '-' + (d.getMonth() < 9 ? '0' : '') + (d.getMonth() + 1) + '-' + (d.getDate() < 10 ? '0' : '') + d.getDate(); }
+  /** Start a new day column (and reset "today") after midnight. */
+  function rollDays(m) {
+    var today = localDay(Date.now());
+    if (m.daily[m.daily.length - 1].day === today) return;
+    m.daily.shift();
+    m.daily.push({ day: today, calls: 0 });
+    m.totals.today = 0;
   }
   /** Move the 24-hour window forward when an hour has passed since the snapshot. */
   function rollHours(s) {
@@ -1126,11 +1160,15 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     if (now >= end) end = (Math.floor(now / HOUR_MS) + 1) * HOUR_MS;
     s.hourlyEndsAt = new Date(end).toISOString();
   }
-  setInterval(function () { if (live.snap) { rollHours(live.snap); updateBoard(); } }, 60000);
+  setInterval(function () {
+    if (live.snap) { rollHours(live.snap); updateBoard(); }
+    if (live.mySnap) { rollHours(live.mySnap); rollDays(live.mySnap); updateMine(); }
+  }, 60000);
 
   function statusBoard(d) {
     live.services = d.services;
     live.isAdmin = d.me.role === 'admin';
+    live.meId = d.me.id;
     var section = el('section', { class: 'board', 'aria-label': 'Status board' });
     live.boardEl = section;
     if (live.snap) updateBoard(); else section.appendChild(el('p', { class: 'muted', text: 'Loading statistics…' }));
@@ -1170,7 +1208,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     return el('div', { class: 'empty' }, [svgEl('svg', { viewBox: '-80 -56 160 112', 'aria-hidden': 'true' }, '<g transform="scale(1.1)">' + CLAUDE_MARK + '</g>'), el('div', { text: text })]);
   }
 
-  function perServicePanel(s) {
+  function perServicePanel(s, title) {
     var ids = live.services.filter(function (x) { return x.configured || s.services[x.id]; }).map(function (x) { SERVICE_NAMES[x.id] = x.displayName; return x.id; });
     ids.push('core');
     SERVICE_NAMES.core = 'Claude tools (TRaSH, search, status)';
@@ -1187,67 +1225,95 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
         el('div', { class: 'track', role: 'img', 'aria-label': short + ' ' + c.calls + ' calls' }, [fill])
       ]);
     });
-    return el('div', { class: 'panel' }, [el('h3', { text: 'Calls per connection' }), el('ul', { class: 'bars' }, rows)]);
+    return el('div', { class: 'panel' }, [el('h3', { text: title || 'Calls per connection' }), el('ul', { class: 'bars' }, rows)]);
   }
 
-  function hourlyPanel(s) {
-    var W = 480, H = 160, L = 30, R = 470, T = 18, B = 124, n = s.hourly.length, slot = (R - L) / n;
-    var max = Math.max(4, Math.max.apply(null, s.hourly));
-    var end = Date.parse(s.hourlyEndsAt);
-    var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': 'Tool calls per hour, last 24 hours: ' + s.hourly.reduce(function (a, b) { return a + b; }, 0) + ' in total' });
+  /** Hand-drawn column chart. opts: label(i) -> axis label or '', tip(i) -> hover text, aria. The last column is highlighted. */
+  function columnChart(values, opts) {
+    var W = 480, H = 160, L = 30, R = 470, T = 18, B = 124, n = values.length, slot = (R - L) / n;
+    var max = Math.max(4, Math.max.apply(null, values));
+    var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': opts.aria });
     svg.appendChild(svgEl('path', { class: 'grid', d: 'M' + L + ' ' + T + ' H' + R }));
     var mx = svgEl('text', { x: L - 6, y: T + 4, 'text-anchor': 'end' }); mx.textContent = String(max); svg.appendChild(mx);
-    s.hourly.forEach(function (v, i) {
-      var from = new Date(end - (n - i) * HOUR_MS), x = L + i * slot + 2, w = slot - 4;
+    values.forEach(function (v, i) {
+      var x = L + i * slot + Math.min(2, slot * 0.15), w = slot - 2 * Math.min(2, slot * 0.15);
       var h = v ? Math.max(4, (B - T) * v / max) : 0;
       var g = svgEl('g');
-      var tip = svgEl('title'); tip.textContent = from.getHours() + ':00 - ' + ((from.getHours() + 1) % 24) + ':00: ' + v + (v === 1 ? ' call' : ' calls');
-      g.appendChild(tip);
+      var tip = svgEl('title'); tip.textContent = opts.tip(i); g.appendChild(tip);
       g.appendChild(svgEl('rect', { class: 'bar-hit', x: L + i * slot, y: T, width: slot, height: B - T }));
       if (h) {
         // a slightly wobbly, hand-drawn column anchored on the baseline
-        var j = (i % 3) - 1;
-        g.appendChild(svgEl('path', { class: 'bar' + (i === n - 1 ? ' now' : ''), d: 'M' + x + ' ' + B + ' L' + (x + j * 0.6) + ' ' + (B - h + 3) + ' Q' + x + ' ' + (B - h) + ' ' + (x + 3) + ' ' + (B - h + j * 0.8) + ' L' + (x + w - 3) + ' ' + (B - h - j * 0.8) + ' Q' + (x + w) + ' ' + (B - h) + ' ' + (x + w - j * 0.6) + ' ' + (B - h + 3) + ' L' + (x + w) + ' ' + B + ' Z' }));
-        g.appendChild(svgEl('path', { d: 'M' + x + ' ' + B + ' V' + (B - h + 3) + ' H' + (x + w) + ' V' + B + ' Z', fill: 'url(#hatch)', 'pointer-events': 'none' }));
+        var j = (i % 3) - 1, r = Math.min(3, w / 3);
+        g.appendChild(svgEl('path', { class: 'bar' + (i === n - 1 ? ' now' : ''), d: 'M' + x + ' ' + B + ' L' + (x + j * 0.6) + ' ' + (B - h + r) + ' Q' + x + ' ' + (B - h) + ' ' + (x + r) + ' ' + (B - h + j * 0.8) + ' L' + (x + w - r) + ' ' + (B - h - j * 0.8) + ' Q' + (x + w) + ' ' + (B - h) + ' ' + (x + w - j * 0.6) + ' ' + (B - h + r) + ' L' + (x + w) + ' ' + B + ' Z' }));
+        g.appendChild(svgEl('path', { d: 'M' + x + ' ' + B + ' V' + (B - h + r) + ' H' + (x + w) + ' V' + B + ' Z', fill: 'url(#hatch)', 'pointer-events': 'none' }));
       }
       svg.appendChild(g);
-      if (i % 6 === 0 || i === n - 1) {
+      var label = opts.label(i);
+      if (label) {
         var lab = svgEl('text', { x: x + w / 2, y: B + 20, 'text-anchor': 'middle' });
-        lab.textContent = i === n - 1 ? 'now' : from.getHours() + ':00';
+        lab.textContent = label;
         svg.appendChild(lab);
       }
     });
     svg.appendChild(svgEl('path', { class: 'axis', d: 'M' + (L - 4) + ' ' + B + ' Q' + ((L + R) / 2) + ' ' + (B + 2) + ' ' + (R + 2) + ' ' + B }));
+    return svg;
+  }
+
+  function hourlyPanel(s) {
+    var n = s.hourly.length, end = Date.parse(s.hourlyEndsAt);
+    function from(i) { return new Date(end - (n - i) * HOUR_MS); }
     var total = s.hourly.reduce(function (a, b) { return a + b; }, 0);
     var peak = s.hourly.indexOf(Math.max.apply(null, s.hourly));
-    var peakFrom = new Date(end - (n - peak) * HOUR_MS);
+    var svg = columnChart(s.hourly, {
+      aria: 'Tool calls per hour, last 24 hours: ' + total + ' in total',
+      label: function (i) { return i === n - 1 ? 'now' : i % 6 === 0 ? from(i).getHours() + ':00' : ''; },
+      tip: function (i) { var h = from(i).getHours(); return h + ':00 - ' + ((h + 1) % 24) + ':00: ' + s.hourly[i] + (s.hourly[i] === 1 ? ' call' : ' calls'); }
+    });
     return el('div', { class: 'panel chart' }, [
       el('h3', { text: 'Last 24 hours' }), svg,
-      el('p', { class: 'note', text: total ? fmtNum(total) + ' calls · busiest hour ' + peakFrom.getHours() + ':00 (' + s.hourly[peak] + ')' : 'No calls in the last 24 hours.' })
+      el('p', { class: 'note', text: total ? fmtNum(total) + ' calls · busiest hour ' + from(peak).getHours() + ':00 (' + s.hourly[peak] + ')' : 'No calls in the last 24 hours.' })
     ]);
   }
 
-  function feedPanel(s) {
+  function dailyPanel(m) {
+    var vals = m.daily.map(function (x) { return x.calls; }), n = vals.length;
+    function date(i) { var p = m.daily[i].day.split('-'); return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])); }
+    var total = vals.reduce(function (a, b) { return a + b; }, 0);
+    var best = vals.indexOf(Math.max.apply(null, vals));
+    var streak = 0;
+    for (var i = n - 1; i >= 0 && vals[i] > 0; i--) streak++;
+    if (!streak && n > 1 && vals[n - 1] === 0) { for (i = n - 2; i >= 0 && vals[i] > 0; i--) streak++; }
+    var svg = columnChart(vals, {
+      aria: 'Your tool calls per day, last ' + n + ' days: ' + total + ' in total',
+      label: function (i) { return i === n - 1 ? 'today' : (n - 1 - i) % 7 === 0 ? date(i).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''; },
+      tip: function (i) { return date(i).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) + ': ' + vals[i] + (vals[i] === 1 ? ' call' : ' calls'); }
+    });
+    return el('div', { class: 'panel chart' }, [
+      el('h3', { text: 'Last ' + n + ' days' }), svg,
+      el('p', { class: 'note', text: total ? fmtNum(total) + ' calls · best day ' + date(best).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' (' + vals[best] + ')' + (streak > 1 ? ' · ' + streak + '-day streak' : '') : 'Nothing yet this month.' })
+    ]);
+  }
+
+  function feedPanel(s, title, mine) {
     var rows = s.recent.slice(0, 25).map(function (e) {
       return el('li', { class: e.id === live.lastNewId && !reduceMotion ? 'new' : '' }, [
         el('span', { class: 't', text: clock(e.at) }),
         serviceIcon(e.service, true),
         el('span', { class: 'tool', text: e.tool, title: e.tool }),
         el('span', { class: 'mark ' + (e.ok ? 'ok' : 'err'), text: e.ok ? '✓ ok' : '✗ failed' }),
-        el('span', { class: 'meta', text: [e.caller, fmtMs(e.ms)].filter(Boolean).join(' · ') })
+        el('span', { class: 'meta', text: [mine ? e.client : e.caller, fmtMs(e.ms)].filter(Boolean).join(' · ') })
       ]);
     });
-    live.lastNewId = 0;
     var pill = livePill();
     pill.setAttribute('data-static', '1');
     pill.classList.add('static');
     return el('div', { class: 'panel' }, [
-      el('div', { class: 'card-head' }, [el('h3', { text: 'Live feed' }), pill]),
-      rows.length ? el('ul', { class: 'feed', 'aria-live': 'polite' }, rows) : emptyNote('Waiting for the first call - ask Claude about your library!')
+      el('div', { class: 'card-head' }, [el('h3', { text: title || 'Live feed' }), pill]),
+      rows.length ? el('ul', { class: 'feed', 'aria-live': 'polite' }, rows) : emptyNote(mine ? 'No calls from your apps since the server started.' : 'Waiting for the first call - ask Claude about your library!')
     ]);
   }
 
-  function toolsPanel(s) {
+  function toolsPanel(s, title) {
     var max = s.tools.length ? s.tools[0].calls : 0;
     var rows = s.tools.map(function (t) {
       var fill = el('div', { class: 'fill' + (t.errors > t.calls / 2 ? ' err' : '') });
@@ -1257,7 +1323,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
         el('div', { class: 'track small' }, [fill])
       ]);
     });
-    return el('div', { class: 'panel' }, [el('h3', { text: 'Favourite tools' }), rows.length ? el('ol', { class: 'toplist' }, rows) : emptyNote('No favourites yet.')]);
+    return el('div', { class: 'panel' }, [el('h3', { text: title || 'Favourite tools' }), rows.length ? el('ol', { class: 'toplist' }, rows) : emptyNote('No favourites yet.')]);
   }
 
   function callersPanel(s) {
@@ -1267,6 +1333,87 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     var table = el('table', null, [el('thead', null, [el('tr', null, [el('th', { text: 'User' }), el('th', { text: 'Calls' }), el('th', { text: 'Success' }), el('th', { text: 'Last call' })])]), el('tbody', null, rows)]);
     labelTables(el('div', null, [table]));
     return el('div', { class: 'panel' }, [el('h3', { text: 'Who is asking' }), rows.length ? el('div', { class: 'table-wrap' }, [table]) : emptyNote('Nobody has called yet.')]);
+  }
+
+
+  // ---------- my activity (personal statistics) ----------
+  function refreshMine() {
+    return api('GET', '/me/stats').then(function (r) { live.mySnap = r; updateMine(); }, function () {});
+  }
+
+  function viewMine(d) {
+    live.meId = d.me.id;
+    live.services = d.services;
+    var section = el('section', { class: 'board', 'aria-label': 'My activity' });
+    live.meEl = section;
+    if (live.mySnap) updateMine(); else section.appendChild(el('p', { class: 'muted', text: 'Loading your statistics…' }));
+    refreshMine();
+    return section;
+  }
+
+  function updateMine() {
+    var m = live.mySnap, root = live.meEl;
+    if (!m || !root) return;
+    var t = m.totals, lg = m.logins;
+    var rate = t.calls ? Math.round(1000 * (t.calls - t.errors) / t.calls) / 10 : null;
+    var tiles = el('div', { class: 'tiles' }, [
+      tile('me-today', fmtNum(t.today), 'My calls today', t.today ? 'nice work' : 'nothing yet today',
+        '<path class="thin" d="M4 20 L12 12 L18 16 L30 4 M24 4 H30 V10"/>'),
+      tile('me-all', fmtNum(t.calls), 'My calls', t.activeDays ? 'on ' + t.activeDays + ' active day' + (t.activeDays === 1 ? '' : 's') : 'none yet',
+        '<path class="thin" d="M5 4 V20 M10 4 V20 M15 4 V20 M20 4 V20 M2 16 L24 8"/>'),
+      tile('me-rate', rate === null ? '-' : rate + '%', 'Success rate', t.calls ? 'avg ' + fmtMs(t.avgMs) : 'no calls yet',
+        '<path class="check-tick" d="M8 12 L14 18 L26 5"/>'),
+      tile('me-logins', fmtNum(lg.count), 'Sign-ins', lg.lastAt ? 'last ' + ago(lg.lastAt) : 'none recorded',
+        '<rect x="9" y="11" width="16" height="11" rx="3" class="thin"/><path class="thin" d="M12 11 V7 A5 5 0 0 1 22 7 V11"/>')
+    ]);
+    var head = el('div', { class: 'board-head' }, [
+      el('h2', { text: 'My activity' }),
+      el('span', { class: 'note', text: 'Only you (and admins) can see this. Counting since ' + fmtDate(m.since) })
+    ]);
+    root.replaceChildren(head,
+      el('p', { class: 'muted', text: 'Hi ' + m.name + ' - here is what you and your apps have been up to.' }),
+      tiles,
+      el('div', { class: 'board-grid' }, [perServicePanel(m, 'My calls per connection'), dailyPanel(m)]),
+      el('div', { class: 'board-grid' }, [appsPanel(m), toolsPanel(m, 'My favourite tools')]),
+      el('div', { class: 'board-grid' }, [feedPanel(m, 'My recent calls', true), signInsPanel(lg)])
+    );
+    labelTables(root);
+  }
+
+  function appsPanel(m) {
+    var max = m.clients.length ? m.clients[0].calls : 0;
+    var rows = m.clients.map(function (c) {
+      var fill = el('div', { class: 'fill' });
+      fill.style.width = (max ? 100 * c.calls / max : 0) + '%';
+      return el('li', { title: c.name + ': ' + c.calls + ' calls, ' + c.errors + ' failed, avg ' + fmtMs(c.avgMs) }, [
+        el('div', { class: 'app-name' }, [el('strong', { text: c.name }), el('span', { class: 'note', text: 'last used ' + ago(c.lastAt) })]),
+        el('span', { class: 'muted', text: fmtNum(c.calls) + (c.errors ? ' · ' + fmtNum(c.errors) + ' failed' : '') }),
+        el('div', { class: 'track small' }, [fill])
+      ]);
+    });
+    return el('div', { class: 'panel' }, [
+      el('h3', { text: 'My apps' }),
+      el('p', { class: 'note', text: 'Calls per access token or connected app.' }),
+      rows.length ? el('ol', { class: 'toplist apps' }, rows) : emptyNote('No app has used your tokens yet - see "Connect".')
+    ]);
+  }
+
+  function signInsPanel(lg) {
+    var how = { passkey: 'Passkey', password: 'Password', 'new account': 'Account created', 'connected app': 'Approved an app' };
+    var rows = lg.recent.map(function (x) {
+      return el('tr', null, [el('td', { text: fmtDate(x.at) }), el('td', { text: how[x.method] || x.method }), el('td', { text: x.device })]);
+    });
+    var methods = Object.keys(lg.methods).map(function (k) { return el('span', { class: 'pill', text: (how[k] || k) + ': ' + lg.methods[k] }); });
+    return el('div', { class: 'panel' }, [
+      el('h3', { text: 'Sign-ins' }),
+      methods.length ? el('div', { class: 'pills' }, methods) : null,
+      lg.failed ? el('div', { class: 'msg warn', text: lg.failed + ' wrong password' + (lg.failed === 1 ? '' : 's') + ' entered for your account, last ' + ago(lg.lastFailedAt) + '. If that was not you, change your password under "My sign-in".' }) : null,
+      rows.length ? el('div', { class: 'table-wrap' }, [el('table', null, [
+        el('thead', null, [el('tr', null, [el('th', { text: 'When' }), el('th', { text: 'How' }), el('th', { text: 'Device' })])]),
+        el('tbody', null, rows)
+      ])]) : emptyNote('No sign-ins recorded yet.'),
+      el('p', { class: 'note', text: 'The last 20 sign-ins are kept. Devices are shown as browser and system only.' })
+    ]);
   }
 
   // ---------- brand guide ----------
@@ -1463,7 +1610,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     who.classList.remove('hidden');
     whoName.textContent = d.me.name + ' · ' + d.me.role;
     var isAdmin = d.me.role === 'admin';
-    var tabs = [['services', 'Services'], ['connect', 'Connect'], ['tokens', 'Access tokens'], ['passkeys', 'My sign-in']];
+    var tabs = [['services', 'Services'], ['mine', 'My activity'], ['connect', 'Connect'], ['tokens', 'Access tokens'], ['passkeys', 'My sign-in']];
     if (isAdmin) tabs.push(['users', 'Users'], ['certificates', 'Certificates'], ['security', 'Security']);
     else tabs.push(['certificates', 'Certificates']);
     tabs.push(['brand', 'Brand']);
@@ -1484,6 +1631,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
         case 'certificates': view = [viewCertificates(d)]; break;
         case 'security': view = [viewSecurity(d)]; break;
         case 'brand': view = viewBrand(d); break;
+        case 'mine': view = [viewMine(d)]; break;
       }
       content.replaceChildren.apply(content, view);
       labelTables(content);

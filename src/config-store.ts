@@ -671,6 +671,11 @@ export class ConfigStore {
 
   /** Returns the owning user if the token is valid. Updates lastUsedAt (throttled). */
   verifyToken(token: string): StoredUser | undefined {
+    return this.resolveToken(token)?.user;
+  }
+
+  /** Like verifyToken, but also returns the token's name (used to attribute usage statistics). */
+  resolveToken(token: string): { user: StoredUser; tokenName: string } | undefined {
     const entry = this.data.tokens.find(t => hashMatches(t.hash, token));
     if (!entry) return undefined;
     if (entry.expiresAt && Date.parse(entry.expiresAt) <= Date.now()) return undefined;
@@ -685,7 +690,7 @@ export class ConfigStore {
         // non-fatal
       }
     }
-    return user;
+    return { user, tokenName: entry.name };
   }
 
   // ---------- OAuth (clients, access + refresh tokens) ----------

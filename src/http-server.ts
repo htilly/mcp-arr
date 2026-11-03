@@ -26,7 +26,7 @@ import { renderAdminPage } from './admin-ui.js';
 import { Auth, AuthError } from './auth.js';
 import { TlsManager } from './tls.js';
 import { OAuthProvider, OAuthError } from './oauth.js';
-import { stats, CallEvent } from './stats.js';
+import { stats, CallEvent, CallContext, LoginMethod } from './stats.js';
 
 export interface HttpServerOptions {
   store: ConfigStore;
@@ -39,7 +39,7 @@ export interface HttpServerOptions {
   mcpPath: string;
   serverVersion: string;
   /** Builds a fresh MCP server; `caller` (the token owner's name) is used for the usage statistics. */
-  createServer: (caller?: string) => Server;
+  createServer: (caller?: CallContext) => Server;
   onConfigChanged: () => void;
   getConfiguredSummary: () => string[];
   /** Present when OAuth sign-in for Claude/OpenAI connectors is active (see oauth.ts). */
@@ -208,15 +208,15 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
 
   // ----- MCP endpoint -----
 
-  function mcpUser(req: IncomingMessage, url: URL): StoredUser | undefined {
+  function mcpUser(req: IncomingMessage, url: URL): { user: StoredUser; tokenName: string } | undefined {
     const header = req.headers.authorization;
     const token = header?.startsWith('Bearer ') ? header.slice(7).trim() : url.searchParams.get('token') ?? undefined;
-    return token ? store.verifyToken(token) : undefined;
+    return token ? store.resolveToken(token) : undefined;
   }
 
   async function handleMcp(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-    const user = mcpUser(req, url);
-    if (!user) {
+    const found = mcpUser(req, url);
+    if (!found) {
       sendJson(res, 401, {
         jsonrpc: '2.0',
         error: { code: -32001, message: 'Unauthorized: missing or invalid access token. Create one in the web UI (/admin).' },
@@ -230,7 +230,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       return;
     }
     const body = req.method === 'POST' ? await readJson(req) : undefined;
-    const server = opts.createServer(user.name);
+    const server = opts.createServer({ userId: found.user.id, name: found.user.name, client: found.tokenName });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       void transport.close();
@@ -365,6 +365,12 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     return `${SESSION_COOKIE}=${sid}; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=${auth.sessionTtlSeconds}`;
   }
 
+  /** Create a web UI session (returns the Set-Cookie value) and count the sign-in for the user's statistics. */
+  function startSession(req: IncomingMessage, user: StoredUser, method: LoginMethod): string {
+    stats.recordLogin(user.id, user.name, method, req.headers['user-agent']);
+    return sessionCookie(auth.createSession(user.id));
+  }
+
   function currentUser(req: IncomingMessage): StoredUser | undefined {
     return auth.sessionUser(parseCookies(req)[SESSION_COOKIE]);
   }
@@ -462,7 +468,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       'X-Accel-Buffering': 'no',
     });
     res.write('retry: 5000\n\n');
-    const viewer = { name: user.name, admin: user.role === 'admin' };
+    const viewer = { id: user.id, name: user.name, admin: user.role === 'admin' };
     const onCall = (e: CallEvent) => {
       res.write(`event: call\ndata: ${JSON.stringify(stats.forViewer(e, viewer))}\n\n`);
     };
@@ -529,7 +535,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       if (current && current.id === user.id) {
         sendJson(res, 200, { ok: true, user: publicUser(user) });
       } else {
-        sendJson(res, 200, { ok: true, user: publicUser(user) }, { 'Set-Cookie': sessionCookie(auth.createSession(user.id)) });
+        sendJson(res, 200, { ok: true, user: publicUser(user) }, { 'Set-Cookie': startSession(req, user, 'new account') });
       }
       return;
     }
@@ -545,17 +551,23 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
         code: str(body.code),
         inviteToken: str(body.inviteToken),
       }));
-      sendJson(res, 200, { ok: true, user: publicUser(user) }, { 'Set-Cookie': sessionCookie(auth.createSession(user.id)) });
+      sendJson(res, 200, { ok: true, user: publicUser(user) }, { 'Set-Cookie': startSession(req, user, 'new account') });
       return;
     }
 
     if (path === '/login/password' && method === 'POST') {
       const body = await readJson(req);
-      const user = await guarded(req, async () => auth.loginWithPassword(
-        str(body.name) ?? '',
-        typeof body.password === 'string' ? body.password : ''
-      ));
-      sendJson(res, 200, { ok: true, user: publicUser(user) }, { 'Set-Cookie': sessionCookie(auth.createSession(user.id)) });
+      const name = str(body.name) ?? '';
+      let user: StoredUser;
+      try {
+        user = await guarded(req, async () => auth.loginWithPassword(name, typeof body.password === 'string' ? body.password : ''));
+      } catch (error) {
+        // count wrong passwords against an existing account, so its owner can see them
+        const target = store.listUsers().find(u => u.name.toLowerCase() === name.trim().toLowerCase());
+        if (target && error instanceof AuthError && error.status === 401) stats.recordLoginFailure(target.id, target.name);
+        throw error;
+      }
+      sendJson(res, 200, { ok: true, user: publicUser(user) }, { 'Set-Cookie': startSession(req, user, 'password') });
       return;
     }
 
@@ -577,7 +589,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     if (path === '/login/verify' && method === 'POST') {
       const body = await readJson(req);
       const user = await guarded(req, () => auth.finishLogin(str(body.flowId) ?? '', body.response as never));
-      sendJson(res, 200, { ok: true, user: publicUser(user) }, { 'Set-Cookie': sessionCookie(auth.createSession(user.id)) });
+      sendJson(res, 200, { ok: true, user: publicUser(user) }, { 'Set-Cookie': startSession(req, user, 'passkey') });
       return;
     }
 
@@ -591,7 +603,12 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     const user = requireUser(req);
 
     if (path === '/stats' && method === 'GET') {
-      sendJson(res, 200, stats.snapshot({ name: user.name, admin: user.role === 'admin' }));
+      sendJson(res, 200, stats.snapshot({ id: user.id, name: user.name, admin: user.role === 'admin' }));
+      return;
+    }
+
+    if (path === '/me/stats' && method === 'GET') {
+      sendJson(res, 200, stats.userSnapshot(user.id, user.name));
       return;
     }
 
@@ -616,7 +633,9 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       }
       if (oauthMatch[2] && method === 'POST') {
         try {
-          sendJson(res, 200, { redirect: opts.oauth.complete(oauthMatch[1], oauthMatch[2] === 'approve' ? user.id : undefined) });
+          const approved = oauthMatch[2] === 'approve';
+          sendJson(res, 200, { redirect: opts.oauth.complete(oauthMatch[1], approved ? user.id : undefined) });
+          if (approved) stats.recordLogin(user.id, user.name, 'connected app', req.headers['user-agent']);
         } catch (error) {
           if (error instanceof OAuthError) throw new HttpError(error.status, error.message);
           throw error;
@@ -736,6 +755,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
           if (targetId === admin.id) throw new HttpError(400, 'You cannot delete yourself');
           store.deleteUser(targetId);
           auth.destroyUserSessions(targetId);
+          stats.removeUser(targetId);
         } else {
           throw new HttpError(405, 'Method not allowed');
         }
