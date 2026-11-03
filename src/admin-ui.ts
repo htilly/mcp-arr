@@ -9,78 +9,140 @@ const PAGE = String.raw`<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mcp-arr admin</title>
+<title>MCP-ARR admin</title>
 <style nonce="__NONCE__">
+/* Sketchbook look: paper, felt-tip ink, terracotta + teal. System hand-writing fonts only (CSP allows no web fonts). */
 :root {
-  --bg: #f5f6f8; --panel: #ffffff; --text: #1d2330; --muted: #667085; --border: #e2e5ea;
-  --accent: #3b6fe0; --accent-text: #ffffff; --ok: #16803c; --ok-bg: #e5f5ea; --err: #b42318; --err-bg: #fdecea;
-  --warn: #8a5a00; --warn-bg: #fff4dc; --input: #ffffff; --code: #f0f2f5;
+  --bg: #e6d6b2; --paper: #f4ead3; --panel: #f9f1de; --text: #3b322a; --muted: #7a6b5b; --border: #3b322a; --line: #d9c9a4;
+  --accent: #d06c43; --accent-deep: #8f4425; --accent-text: #fffaf0; --sea: #5f9e96; --sea-pale: #cfe5df; --olive: #a3a372; --gold: #e3a979; --steel: #b9b4aa;
+  --ok: #2f7a3a; --ok-bg: #dcefd9; --err: #a32a1c; --err-bg: #f6d9d2; --warn: #7a4d00; --warn-bg: #f6e3b4;
+  --input: #fffaf0; --code: #ece0c2; --shadow: rgba(59, 50, 42, .16);
+  --hand: "Segoe Print", "Bradley Hand", "Chalkboard SE", "Comic Neue", "Comic Sans MS", "Marker Felt", cursive;
+  --body: "Segoe Print", "Bradley Hand", "Chalkboard SE", "Comic Neue", "Comic Sans MS", system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #12151b; --panel: #1b1f27; --text: #e6e8ec; --muted: #9aa3b2; --border: #2c323d;
-    --accent: #6b95f2; --accent-text: #0d1117; --ok: #5fd38a; --ok-bg: #173323; --err: #ff8a80; --err-bg: #3a1c1c;
-    --warn: #f2c063; --warn-bg: #3a2f14; --input: #141820; --code: #232833;
+    --bg: #1f1b16; --paper: #29251f; --panel: #322c24; --text: #f1e6cf; --muted: #b5a78f; --border: #8a7c66; --line: #43392d;
+    --accent: #e07f55; --accent-deep: #f2a07b; --accent-text: #25150d; --sea: #78bab1; --sea-pale: #2f5752; --olive: #b7b783; --gold: #c98c5e; --steel: #6d685f;
+    --ok: #79c47e; --ok-bg: #1f3a24; --err: #ff9a8a; --err-bg: #4a2420; --warn: #f2c063; --warn-bg: #3f3216;
+    --input: #241f19; --code: #3a3329; --shadow: rgba(0, 0, 0, .4);
   }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--panel); }
-header h1 { font-size: 18px; margin: 0; }
-header .sub { color: var(--muted); font-size: 13px; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 var(--body); }
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; border-bottom: 3px solid var(--border); background: var(--paper); }
+.brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.brand svg { width: 64px; height: 44px; flex: none; }
+header h1 { font: 700 26px/1 var(--hand); letter-spacing: 1px; margin: 0; white-space: nowrap; }
+header .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
 .who { display: flex; align-items: center; gap: 10px; font-size: 14px; }
-main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; }
-nav.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px; }
-nav.tabs button { border-radius: 999px; }
-nav.tabs button.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+main { max-width: 1100px; margin: 0 auto; padding: 22px 16px 60px; }
+nav.tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+nav.tabs button { border-radius: 14px 18px 12px 16px / 16px 12px 18px 14px; }
+nav.tabs button.active { background: var(--sea-pale); border-color: var(--sea); box-shadow: 2px 3px 0 var(--sea); transform: translateY(-1px); }
 section { margin-bottom: 28px; }
-h2 { font-size: 16px; margin: 0 0 12px; }
-h3 { font-size: 14px; margin: 16px 0 6px; }
-.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 14px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+h2 { font: 700 22px/1.2 var(--hand); margin: 0 0 12px; }
+h3 { font: 700 16px/1.3 var(--hand); margin: 16px 0 6px; }
+.panel { background: var(--panel); border: 2.5px solid var(--border); border-radius: 16px 20px 14px 22px / 20px 14px 22px 16px; box-shadow: 4px 5px 0 var(--shadow); padding: 16px 18px; margin-bottom: 16px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 18px; }
 .grid .panel { margin-bottom: 0; }
-.card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
-label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+.card-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.card-title svg.icon { width: 52px; height: 44px; flex: none; }
+.card-title strong { font: 700 18px/1.2 var(--hand); }
+label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 3px; }
 input[type=text], input[type=password], input[type=url], select {
-  width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--input); color: var(--text); font: inherit;
+  width: 100%; padding: 8px 10px; border: 2px solid var(--border); border-radius: 9px 12px 8px 11px; background: var(--input); color: var(--text); font: inherit;
 }
+input:focus-visible, select:focus-visible, button:focus-visible, a.button:focus-visible, summary:focus-visible { outline: 3px dashed var(--sea); outline-offset: 2px; }
 input:disabled { opacity: .65; }
-.row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
-button, a.button { font: inherit; font-size: 14px; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; text-decoration: none; display: inline-block; }
-button.primary, a.button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.row { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
+button, a.button { font: inherit; font-size: 14px; padding: 6px 14px; border-radius: 10px 13px 9px 12px; border: 2px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; text-decoration: none; display: inline-block; box-shadow: 2px 3px 0 var(--shadow); }
+button:hover:not(:disabled), a.button:hover { background: var(--sea-pale); }
+button:active:not(:disabled) { transform: translate(1px, 2px); box-shadow: none; }
+button.primary, a.button.primary { background: var(--accent); border-color: var(--accent-deep); color: var(--accent-text); font-weight: 700; }
+button.primary:hover:not(:disabled), a.button.primary:hover { background: var(--accent-deep); color: #fffaf0; }
 button.danger { color: var(--err); }
-button.link { border: none; background: none; color: var(--accent); padding: 0; }
+button.link { border: none; background: none; color: var(--accent-deep); padding: 0; box-shadow: none; text-decoration: underline; }
 button:disabled { opacity: .5; cursor: default; }
-.pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--code); color: var(--muted); white-space: nowrap; }
-.pill.ok { background: var(--ok-bg); color: var(--ok); }
-.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill { font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1.5px solid var(--border); background: var(--code); color: var(--muted); white-space: nowrap; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
 .pills { display: flex; gap: 6px; flex-wrap: wrap; }
 .note { font-size: 12px; color: var(--muted); margin-top: 3px; }
-.msg { font-size: 13px; margin-top: 10px; padding: 6px 10px; border-radius: 6px; display: none; word-break: break-word; }
-.msg.ok { display: block; background: var(--ok-bg); color: var(--ok); }
-.msg.err { display: block; background: var(--err-bg); color: var(--err); }
-.msg.warn { display: block; background: var(--warn-bg); color: var(--warn); }
-code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+.msg { font-size: 13px; margin-top: 10px; padding: 6px 10px; border-radius: 9px 12px 8px 11px; border: 1.5px solid transparent; display: none; word-break: break-word; }
+.msg.ok { display: block; background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
+.msg.err { display: block; background: var(--err-bg); color: var(--err); border-color: var(--err); }
+.msg.warn { display: block; background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
+code, pre { font-family: var(--mono); font-size: 13px; }
 code { word-break: break-all; }
 p, strong, td { overflow-wrap: anywhere; }
-pre { background: var(--code); padding: 10px 12px; border-radius: 6px; overflow-x: auto; margin: 6px 0 0; white-space: pre-wrap; word-break: break-all; }
+pre { background: var(--code); border: 1.5px dashed var(--muted); padding: 10px 12px; border-radius: 9px 12px 8px 11px; overflow-x: auto; margin: 6px 0 0; white-space: pre-wrap; word-break: break-all; }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-th { color: var(--muted); font-weight: 500; font-size: 12px; }
+th, td { text-align: left; padding: 8px 6px; border-bottom: 1.5px dashed var(--line); vertical-align: middle; }
+th { color: var(--muted); font: 700 14px var(--hand); }
 td select { width: auto; padding: 4px 6px; }
 details { margin-top: 8px; }
-summary { cursor: pointer; font-weight: 500; }
+summary { cursor: pointer; font-weight: 700; }
 details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
-.center { max-width: 420px; margin: 8vh auto; }
+.center { max-width: 440px; margin: 6vh auto; }
 .muted { color: var(--muted); }
 .hidden { display: none !important; }
-.big { width: 100%; padding: 11px; font-size: 15px; }
+.big { width: 100%; padding: 11px; font-size: 16px; }
+
+/* drawings */
+svg .ink { stroke: var(--text); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+svg .thin { stroke: var(--text); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.f-paper { fill: var(--panel); } .f-clay { fill: var(--accent); } .f-sea { fill: var(--sea); } .f-pale { fill: var(--sea-pale); }
+.f-steel { fill: var(--steel); } .f-gold { fill: var(--gold); } .f-ink { fill: var(--text); } .f-none { fill: none; }
+.hatch-line { stroke: var(--text); stroke-width: 1.3; opacity: .35; }
+.check-ring { fill: var(--paper); stroke: var(--ok); stroke-width: 3; }
+.check-tick { fill: none; stroke: var(--ok); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.defs { position: absolute; }
+svg .thick { stroke-width: 10; }
+.off { opacity: .45; filter: grayscale(.6); }
+
+/* hub sketch on the Services tab */
+.hub { padding: 10px; overflow-x: auto; }
+.hub svg { display: block; width: 100%; min-width: 620px; height: auto; }
+.hub .arrow-o { stroke: var(--accent-deep); stroke-width: 15; stroke-linecap: round; fill: none; }
+.hub .arrow-i { stroke: var(--accent); stroke-width: 9; stroke-linecap: round; fill: none; }
+.hub .arrow-h { fill: var(--accent); stroke: var(--accent-deep); stroke-width: 3; stroke-linejoin: round; }
+.hub .label { font: 700 18px var(--hand); fill: var(--text); }
+.hub .name { font: 15px var(--hand); fill: var(--text); }
+.hub .hub-title { font: 700 22px var(--hand); fill: var(--text); }
+.hub .tag-box { fill: var(--sea-pale); stroke: var(--sea); stroke-width: 2.5; }
+.hub .tag { font: 700 14px var(--hand); fill: var(--text); }
+.hub .card-box { fill: var(--paper); stroke: var(--text); stroke-width: 2.5; }
+.hub .off-arrow { opacity: .25; }
+@media (prefers-reduced-motion: no-preference) {
+  .hub .arrow-i, .hub .arrow-o { stroke-dasharray: 300; animation: draw .8s cubic-bezier(.6,.1,.3,1) both; }
+  .hub .arrow-h { animation: pop .3s .6s ease both; }
+}
+@keyframes draw { from { stroke-dashoffset: 300; } to { stroke-dashoffset: 0; } }
+@keyframes pop { from { opacity: 0; } to { opacity: 1; } }
 </style>
 </head>
 <body>
+<svg class="defs" width="0" height="0" aria-hidden="true" focusable="false">
+  <defs>
+    <pattern id="hatch" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(38)"><line x1="0" y1="0" x2="0" y2="9" class="hatch-line"/></pattern>
+    <pattern id="hatchx" width="11" height="11" patternUnits="userSpaceOnUse" patternTransform="rotate(-50)"><line x1="0" y1="0" x2="0" y2="11" class="hatch-line"/></pattern>
+  </defs>
+</svg>
 <header>
-  <div><h1>mcp-arr</h1><div class="sub">MCP server for the *arr suite</div></div>
+  <div class="brand">
+    <svg viewBox="-14 0 142 88" aria-hidden="true">
+      <path d="M44 14 A32 32 0 1 0 44 74" fill="none" stroke="#d06c43" stroke-width="15" stroke-linecap="round"/>
+      <path d="M44 6 A40 40 0 1 0 44 82 M44 22 A24 24 0 1 0 44 66" class="thin" opacity=".7"/>
+      <path class="ink f-sea" d="M78 22 C66 18 54 28 56 38 C46 40 46 54 54 58 C48 68 58 78 70 76 C74 84 86 82 88 72 L88 24 Z"/>
+      <path class="ink f-sea" d="M92 22 C104 18 116 28 114 38 C124 40 124 54 116 58 C122 68 112 78 100 76 C96 84 86 82 84 72 L84 26 Z"/>
+      <path class="thin" d="M66 34 C60 40 70 44 64 50 M104 34 C110 40 100 44 106 50"/>
+    </svg>
+    <div><h1>MCP-ARR</h1><div class="sub">Media management via AI</div></div>
+  </div>
   <div class="who hidden" id="who"><span id="who-name"></span><button id="logout">Sign out</button></div>
 </header>
 <main id="app"><p class="muted">Loading…</p></main>
@@ -124,6 +186,69 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
       });
     } });
     return b;
+  }
+
+
+  // ---------- drawings (hand-drawn service icons, 130x110 box centred on 0,0) ----------
+  var ICONS = {
+    sonarr: '<path class="thin" d="M-18 -50 L-40 -86 M12 -50 L38 -88"/><rect x="-70" y="-50" width="140" height="100" rx="14" class="ink f-clay"/><rect x="-70" y="-50" width="140" height="100" rx="14" fill="url(#hatch)"/><rect x="-58" y="-38" width="88" height="76" rx="16" class="ink f-steel"/><rect x="-58" y="-38" width="88" height="76" rx="16" fill="url(#hatchx)"/><circle cx="50" cy="-18" r="8" class="ink f-paper"/><circle cx="50" cy="8" r="8" class="ink f-paper"/><path class="thin" d="M-50 50 L-56 66 M50 50 L56 66"/>',
+    radarr: '<circle r="58" class="ink f-steel"/><circle r="58" fill="url(#hatch)"/><circle r="12" class="ink f-paper"/><circle cx="0" cy="-34" r="15" class="ink f-ink"/><circle cx="32" cy="-11" r="15" class="ink f-ink"/><circle cx="20" cy="28" r="15" class="ink f-ink"/><circle cx="-20" cy="28" r="15" class="ink f-ink"/><circle cx="-32" cy="-11" r="15" class="ink f-ink"/>',
+    lidarr: '<path class="ink f-gold" d="M-34 -56 L50 -74 L50 -48 L-34 -30 Z"/><path class="ink f-gold" d="M-34 -56 L-28 -56 L-28 40 L-34 40 Z M44 -72 L50 -72 L50 24 L44 24 Z"/><ellipse cx="-50" cy="44" rx="24" ry="17" transform="rotate(-20 -50 44)" class="ink f-gold"/><ellipse cx="28" cy="28" rx="24" ry="17" transform="rotate(-20 28 28)" class="ink f-gold"/><ellipse cx="-50" cy="44" rx="24" ry="17" transform="rotate(-20 -50 44)" fill="url(#hatch)"/><ellipse cx="28" cy="28" rx="24" ry="17" transform="rotate(-20 28 28)" fill="url(#hatch)"/>',
+    prowlarr: '<rect x="-76" y="-38" width="110" height="36" rx="18" class="ink f-paper"/><path class="thin" d="M-62 -20 L-20 -20"/><path class="ink f-clay" d="M30 26 L44 14 L84 56 Q86 66 76 68 Z"/><circle cx="10" cy="-6" r="40" class="ink thick f-none"/><circle cx="10" cy="-6" r="45" class="thin"/><circle cx="10" cy="-6" r="35" class="thin"/>',
+    bazarr: '<path class="ink f-pale" d="M-66 -54 H62 Q74 -54 74 -42 V24 Q74 36 62 36 H-6 L-34 62 L-28 36 H-66 Q-78 36 -78 24 V-42 Q-78 -54 -66 -54 Z"/><rect x="-56" y="-34" width="108" height="16" rx="5" class="ink f-ink"/><rect x="-40" y="-6" width="76" height="16" rx="5" class="ink f-ink"/>',
+    tautulli: '<rect x="-64" y="-58" width="128" height="116" rx="10" class="ink f-paper"/><path class="thin" d="M-50 40 H50 M-50 40 V-44"/><rect x="-40" y="4" width="16" height="36" class="ink f-sea"/><rect x="-16" y="-14" width="16" height="54" class="ink f-gold"/><rect x="8" y="-30" width="16" height="70" class="ink f-clay"/><rect x="8" y="-30" width="16" height="70" fill="url(#hatch)"/><path class="ink f-ink" d="M34 -6 L50 4 L34 14 Z"/>',
+    overseerr: '<g transform="rotate(-8)"><path class="ink f-gold" d="M-74 -40 H74 V-14 A14 14 0 0 0 74 14 V40 H-74 V14 A14 14 0 0 0 -74 -14 Z"/><path fill="url(#hatch)" d="M-74 -40 H74 V-14 A14 14 0 0 0 74 14 V40 H-74 V14 A14 14 0 0 0 -74 -14 Z"/><path class="thin" d="M30 -36 V36" stroke-dasharray="6 6"/><path class="ink f-paper" d="M-26 -22 L-18 -6 L0 -4 L-13 8 L-9 26 L-26 17 L-43 26 L-39 8 L-52 -4 L-34 -6 Z"/></g>'
+  };
+  var SVGNS = 'http://www.w3.org/2000/svg';
+  function svgEl(tag, attrs, inner) {
+    var n = document.createElementNS(SVGNS, tag);
+    Object.keys(attrs || {}).forEach(function (k) { n.setAttribute(k, attrs[k]); });
+    if (inner) n.innerHTML = inner;
+    return n;
+  }
+  /** Small icon for a service id, used in the service cards. */
+  function serviceIcon(id, on) {
+    var svg = svgEl('svg', { viewBox: '-84 -92 168 176', class: 'icon' + (on ? '' : ' off'), 'aria-hidden': 'true' });
+    svg.appendChild(svgEl('g', {}, ICONS[id] || ''));
+    return svg;
+  }
+  function arrowPath(g, x1, y1, x2, y2, on) {
+    var dx = x2 - x1, dy = y2 - y1, len = Math.sqrt(dx * dx + dy * dy), ux = dx / len, uy = dy / len, nx = -uy, ny = ux;
+    var bx = x2 - ux * 26, by = y2 - uy * 26;
+    var wrap = svgEl('g', { class: on ? '' : 'off-arrow' });
+    var d = 'M' + x1 + ' ' + y1 + ' L' + bx + ' ' + by;
+    wrap.appendChild(svgEl('path', { d: d, class: 'arrow-o' }));
+    wrap.appendChild(svgEl('path', { d: d, class: 'arrow-i' }));
+    wrap.appendChild(svgEl('path', { class: 'arrow-h', d: 'M' + x2 + ' ' + y2 + ' L' + (bx + nx * 18) + ' ' + (by + ny * 18) + ' L' + (bx - nx * 18) + ' ' + (by - ny * 18) + ' Z' }));
+    g.appendChild(wrap);
+  }
+  /** Sketch of Claude in the middle with the services around it; services that are enabled get a check mark. */
+  function hubSketch(services) {
+    var W = 1000, H = 440, cx = 500, cy = 215;
+    var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': 'Claude connected to ' + services.filter(function (s) { return s.configured; }).length + ' of ' + services.length + ' services' });
+    var slots = [[130, 80], [130, 215], [130, 350], [870, 80], [870, 215], [870, 350], [500, 62]];
+    var arrows = svgEl('g'), nodes = svgEl('g');
+    svg.appendChild(arrows);
+    services.slice(0, slots.length).forEach(function (s, i) {
+      var sx = slots[i][0], sy = slots[i][1], left = sx < cx, top = sx === cx;
+      var tx = top ? cx : (left ? sx + 120 : sx - 120), ty = top ? sy + 60 : sy;
+      var fx = top ? cx : (left ? cx - 90 : cx + 90), fy = top ? cy - 60 : cy + (sy - cy) * 0.3;
+      arrowPath(arrows, fx, fy, tx, ty, s.configured);
+      var g = svgEl('g', { transform: 'translate(' + sx + ' ' + sy + ')' });
+      var ic = svgEl('g', { transform: 'translate(' + (top ? -118 : (left ? -52 : 52)) + ' 0) scale(.42)', class: s.configured ? '' : 'off' }, ICONS[s.id] || '');
+      g.appendChild(ic);
+      var short = s.displayName.split(' (')[0], kind = (/\((.*)\)/.exec(s.displayName) || [])[1] || '';
+      var bx = top ? -20 : (left ? 4 : -112);
+      g.appendChild(svgEl('rect', { x: bx, y: -26, width: 112, height: 52, rx: 9, class: 'card-box' }));
+      var t1 = svgEl('text', { x: bx + 56, y: -3, 'text-anchor': 'middle', class: 'name' }); t1.textContent = short; g.appendChild(t1);
+      var t2 = svgEl('text', { x: bx + 56, y: 16, 'text-anchor': 'middle', class: 'tag' }); t2.textContent = kind; g.appendChild(t2);
+      if (s.configured) g.appendChild(svgEl('g', { transform: 'translate(' + (bx + 112 - 12) + ' -30)' }, '<circle r="13" class="check-ring"/><path class="check-tick" d="M-6 0 L-2 5 L7 -6"/>'));
+      nodes.appendChild(g);
+    });
+    svg.appendChild(nodes);
+    var hub = svgEl('g', { transform: 'translate(' + cx + ' ' + cy + ')' }, '<path d="M-14 -38 A40 40 0 1 0 -14 38" fill="none" stroke="#d06c43" stroke-width="20" stroke-linecap="round"/><path class="ink f-sea" d="M20 -36 C6 -42 -6 -30 -4 -20 C-16 -18 -16 -2 -8 2 C-14 14 -2 26 12 22 C16 32 30 30 32 18 L32 -34 Z"/><path class="ink f-sea" d="M36 -36 C50 -42 62 -30 60 -20 C72 -18 72 -2 64 2 C70 14 58 26 44 22 C40 32 28 30 26 18 L26 -30 Z"/><text y="76" text-anchor="middle" class="hub-title">Claude</text><rect x="-95" y="86" width="190" height="30" rx="9" class="tag-box"/><text y="107" text-anchor="middle" class="tag">Natural language control</text>');
+    svg.appendChild(hub);
+    return svg;
   }
 
   function api(method, path, body) {
@@ -347,7 +472,7 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
       api('PUT', '/services/' + svc.id, p).then(onUpdated, function (e) { showMsg(msg, 'err', e.message); });
     } }) : null;
     return el('div', { class: 'panel' }, [
-      el('div', { class: 'card-head' }, [el('strong', { text: svc.displayName }), el('span', { class: 'pill' + (svc.configured ? ' ok' : ''), text: svc.configured ? 'Enabled' : 'Not configured' })]),
+      el('div', { class: 'card-head' }, [el('div', { class: 'card-title' }, [serviceIcon(svc.id, svc.configured), el('strong', { text: svc.displayName })]), el('span', { class: 'pill' + (svc.configured ? ' ok' : ''), text: svc.configured ? 'Enabled' : 'Not configured' })]),
       el('label', { text: 'URL' }), urlInput,
       svc.urlSource === 'env' ? el('div', { class: 'note', text: 'Set by ' + svc.envPrefix + '_URL (read-only here)' }) : null,
       el('label', { text: 'API key' }), keyInput,
@@ -360,7 +485,7 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
   function viewServices(d, redraw) {
     var summary = el('p', { class: 'muted', text: d.configuredSummary.length ? 'Enabled: ' + d.configuredSummary.join(', ') : 'No services enabled yet.' });
     if (d.me.role !== 'admin') {
-      return [el('section', null, [el('h2', { text: 'Services' }), el('div', { class: 'panel' }, [
+      return [el('section', null, [el('h2', { text: 'Services' }), el('div', { class: 'panel hub' }, [hubSketch(d.services)]), el('div', { class: 'panel' }, [
         el('div', { class: 'pills' }, d.services.map(function (s) { return el('span', { class: 'pill' + (s.configured ? ' ok' : ''), text: s.displayName }); })),
         el('p', { class: 'note', text: 'Only admins can change service settings.' })
       ])])];
@@ -368,7 +493,7 @@ details > div { padding: 6px 0 0 14px; color: var(--muted); font-size: 14px; }
     var grid = el('div', { class: 'grid' }, d.services.map(function (s) {
       return serviceCard(s, function (r) { d.services = r.services; d.configuredSummary = r.configuredSummary; redraw(); });
     }));
-    return [el('section', null, [el('h2', { text: 'Services' }), summary, grid])];
+    return [el('section', null, [el('h2', { text: 'Services' }), el('div', { class: 'panel hub' }, [hubSketch(d.services)]), summary, grid])];
   }
 
   function viewConnect(d) {
