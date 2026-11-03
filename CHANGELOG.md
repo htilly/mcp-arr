@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - Readarr support is gone (removed upstream in 1.6.1); the Readarr tools no longer exist.
 
 ### Added
+- Web UI: phone layout. The page detects a narrow screen (and touch input) and adapts: swipeable tab row, a separate phone version of the Services sketch, tables that turn into stacked rows with the column name on each line, full-width buttons, 44 px touch targets and 16 px inputs (no zoom on iOS), and safe-area padding for notches.
 - Web UI: simple **name + password** sign-in as an alternative to passkeys. Available in setup, recovery and invite flows, and under "My sign-in" for existing users (set / change / remove). Passwords are scrypt-hashed, minimum 8 characters, rate-limited like other sign-in attempts. User names are now unique (case-insensitive). The UI works on pages where passkeys are unavailable (untrusted certificate).
 
 ### Fixed

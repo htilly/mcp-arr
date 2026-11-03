@@ -8,7 +8,7 @@ const PAGE = String.raw`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>MCP-ARR admin</title>
 <style nonce="__NONCE__">
 /* Sketchbook look: paper, felt-tip ink, terracotta + teal. System hand-writing fonts only (CSP allows no web fonts). */
@@ -123,6 +123,55 @@ svg .thick { stroke-width: 10; }
 }
 @keyframes draw { from { stroke-dashoffset: 300; } to { stroke-dashoffset: 0; } }
 @keyframes pop { from { opacity: 0; } to { opacity: 1; } }
+
+/* ---- phones and tablets ---- */
+body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); -webkit-text-size-adjust: 100%; }
+@media (pointer: coarse) {
+  button, a.button, nav.tabs button { min-height: 44px; padding-top: 9px; padding-bottom: 9px; }
+  button.link { min-height: 0; padding: 8px 0; }
+  summary { padding: 8px 0; }
+  input[type=text], input[type=password], input[type=url], select { min-height: 44px; }
+}
+@media (max-width: 720px) {
+  body { font-size: 16px; }
+  /* 16px inputs stop iOS from zooming the page when a field is focused */
+  input[type=text], input[type=password], input[type=url], select { font-size: 16px; }
+  header { padding: 10px 14px; flex-wrap: wrap; position: sticky; top: 0; z-index: 5; }
+  .brand svg { width: 48px; height: 34px; }
+  header h1 { font-size: 22px; }
+  header .sub { font-size: 12px; }
+  .who { font-size: 13px; gap: 8px; margin-left: auto; }
+  main { padding: 14px 12px 48px; }
+  /* tabs become one swipeable row instead of wrapping over four lines */
+  nav.tabs { flex-wrap: nowrap; overflow-x: auto; margin: 0 -12px 16px; padding: 4px 12px 8px; scroll-snap-type: x proximity; scroll-padding-left: 12px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  nav.tabs::-webkit-scrollbar { display: none; }
+  nav.tabs button { flex: none; scroll-snap-align: start; white-space: nowrap; }
+  h2 { font-size: 20px; }
+  .panel { padding: 14px; box-shadow: 3px 4px 0 var(--shadow); }
+  .grid { grid-template-columns: 1fr; gap: 14px; }
+  .center { margin: 3vh auto; }
+  .row > button, .row > a.button { flex: 1 1 auto; text-align: center; }
+  .row code { flex: 1 1 100%; }
+  /* the sketch gets its own phone layout instead of scrolling sideways */
+  .hub { padding: 6px; overflow-x: visible; }
+  .hub svg { min-width: 0; }
+  /* tables turn into stacked rows: every cell shows its column name */
+  .table-wrap { overflow-x: visible; }
+  table.stack, table.stack tbody, table.stack tr, table.stack td { display: block; width: 100%; }
+  table.stack thead { display: none; }
+  table.stack tr { border: 2px solid var(--border); border-radius: 12px 14px 11px 13px; background: var(--paper); padding: 6px 12px; margin-bottom: 12px; }
+  table.stack td { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 7px 0; border-bottom: 1.5px dashed var(--line); text-align: right; }
+  table.stack td:last-child { border-bottom: none; justify-content: flex-end; flex-wrap: wrap; }
+  table.stack td::before { content: attr(data-label); flex: none; color: var(--muted); font: 700 13px var(--hand); text-align: left; }
+  table.stack td:empty { display: none; }
+  table.stack td:last-child::before { content: none; }
+  table.stack td select { width: auto; }
+  pre { font-size: 12px; }
+}
+@media (max-width: 380px) {
+  .card-head { flex-wrap: wrap; }
+  .card-title svg.icon { width: 44px; height: 38px; }
+}
 </style>
 </head>
 <body>
@@ -221,6 +270,32 @@ svg .thick { stroke-width: 10; }
     wrap.appendChild(svgEl('path', { d: d, class: 'arrow-i' }));
     wrap.appendChild(svgEl('path', { class: 'arrow-h', d: 'M' + x2 + ' ' + y2 + ' L' + (bx + nx * 18) + ' ' + (by + ny * 18) + ' L' + (bx - nx * 18) + ' ' + (by - ny * 18) + ' Z' }));
     g.appendChild(wrap);
+  }
+
+  var phone = window.matchMedia ? window.matchMedia('(max-width: 720px)') : { matches: false };
+  /** Phone layout of the hub sketch: Claude on top, one arrow down, services in two columns. */
+  function hubSketchPhone(services) {
+    var W = 400, rows = Math.ceil(services.length / 2), top = 206, rowH = 92, H = top + rows * rowH + 6;
+    var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': 'Claude connected to ' + services.filter(function (s) { return s.configured; }).length + ' of ' + services.length + ' services' });
+    svg.appendChild(svgEl('g', { transform: 'translate(200 52) scale(.8)' }, '<path d="M-14 -38 A40 40 0 1 0 -14 38" fill="none" stroke="#d06c43" stroke-width="20" stroke-linecap="round"/><path class="ink f-sea" d="M20 -36 C6 -42 -6 -30 -4 -20 C-16 -18 -16 -2 -8 2 C-14 14 -2 26 12 22 C16 32 30 30 32 18 L32 -34 Z"/><path class="ink f-sea" d="M36 -36 C50 -42 62 -30 60 -20 C72 -18 72 -2 64 2 C70 14 58 26 44 22 C40 32 28 30 26 18 L26 -30 Z"/>'));
+    var t = svgEl('text', { x: 200, y: 118, 'text-anchor': 'middle', class: 'hub-title' }); t.textContent = 'Claude'; svg.appendChild(t);
+    svg.appendChild(svgEl('rect', { x: 105, y: 126, width: 190, height: 28, rx: 9, class: 'tag-box' }));
+    var tg = svgEl('text', { x: 200, y: 146, 'text-anchor': 'middle', class: 'tag' }); tg.textContent = 'Natural language control'; svg.appendChild(tg);
+    var arrows = svgEl('g'); svg.appendChild(arrows);
+    arrowPath(arrows, 200, 158, 200, top - 8, true);
+    services.forEach(function (s, i) {
+      var col = i % 2, row = Math.floor(i / 2), x = 8 + col * 194, y = top + row * rowH;
+      if (i === services.length - 1 && col === 0) x = 103; // a lone last card sits in the middle
+      var g = svgEl('g', { transform: 'translate(' + x + ' ' + y + ')' });
+      g.appendChild(svgEl('rect', { x: 0, y: 4, width: 186, height: 78, rx: 11, class: 'card-box' }));
+      g.appendChild(svgEl('g', { transform: 'translate(34 44) scale(.3)', class: s.configured ? '' : 'off' }, ICONS[s.id] || ''));
+      var short = s.displayName.split(' (')[0], kind = (/\((.*)\)/.exec(s.displayName) || [])[1] || '';
+      var n1 = svgEl('text', { x: 74, y: 40, class: 'name' }); n1.textContent = short; g.appendChild(n1);
+      var n2 = svgEl('text', { x: 74, y: 62, class: 'tag' }); n2.textContent = kind; g.appendChild(n2);
+      if (s.configured) g.appendChild(svgEl('g', { transform: 'translate(170 10)' }, '<circle r="12" class="check-ring"/><path class="check-tick" d="M-6 0 L-2 5 L7 -6"/>'));
+      svg.appendChild(g);
+    });
+    return svg;
   }
   /** Sketch of Claude in the middle with the services around it; services that are enabled get a check mark. */
   function hubSketch(services) {
@@ -519,7 +594,7 @@ svg .thick { stroke-width: 10; }
   function viewServices(d, redraw) {
     var summary = el('p', { class: 'muted', text: d.configuredSummary.length ? 'Enabled: ' + d.configuredSummary.join(', ') : 'No services enabled yet.' });
     if (d.me.role !== 'admin') {
-      return [el('section', null, [el('h2', { text: 'Services' }), el('div', { class: 'panel hub' }, [hubSketch(d.services)]), el('div', { class: 'panel' }, [
+      return [el('section', null, [el('h2', { text: 'Services' }), el('div', { class: 'panel hub' }, [phone.matches ? hubSketchPhone(d.services) : hubSketch(d.services)]), el('div', { class: 'panel' }, [
         el('div', { class: 'pills' }, d.services.map(function (s) { return el('span', { class: 'pill' + (s.configured ? ' ok' : ''), text: s.displayName }); })),
         el('p', { class: 'note', text: 'Only admins can change service settings.' })
       ])])];
@@ -527,7 +602,7 @@ svg .thick { stroke-width: 10; }
     var grid = el('div', { class: 'grid' }, d.services.map(function (s) {
       return serviceCard(s, function (r) { d.services = r.services; d.configuredSummary = r.configuredSummary; redraw(); });
     }));
-    return [el('section', null, [el('h2', { text: 'Services' }), el('div', { class: 'panel hub' }, [hubSketch(d.services)]), summary, grid])];
+    return [el('section', null, [el('h2', { text: 'Services' }), el('div', { class: 'panel hub' }, [phone.matches ? hubSketchPhone(d.services) : hubSketch(d.services)]), summary, grid])];
   }
 
   function viewConnect(d) {
@@ -760,6 +835,23 @@ svg .thick { stroke-width: 10; }
     ].reduce(function (a, b) { return a.concat(b); }, []))]);
   }
 
+
+  var redrawNow = null;
+  // Switching between phone and desktop width (rotating a tablet, resizing) redraws the current tab.
+  if (phone.addEventListener) phone.addEventListener('change', function () { if (redrawNow) redrawNow(); });
+  else if (phone.addListener) phone.addListener(function () { if (redrawNow) redrawNow(); });
+  /** Copy each column heading onto its cells so the phone layout can show it ("stack" tables only have heading rows). */
+  function labelTables(root) {
+    Array.prototype.forEach.call(root.querySelectorAll('table'), function (t) {
+      var heads = Array.prototype.map.call(t.querySelectorAll('thead th'), function (th) { return th.textContent; });
+      if (!heads.length) return;
+      t.classList.add('stack');
+      Array.prototype.forEach.call(t.querySelectorAll('tbody tr'), function (tr) {
+        Array.prototype.forEach.call(tr.children, function (td, i) { if (heads[i]) td.setAttribute('data-label', heads[i]); });
+      });
+    });
+  }
+
   function renderMain(d) {
     who.classList.remove('hidden');
     whoName.textContent = d.me.name + ' · ' + d.me.role;
@@ -785,6 +877,8 @@ svg .thick { stroke-width: 10; }
         case 'security': view = [viewSecurity(d)]; break;
       }
       content.replaceChildren.apply(content, view);
+      labelTables(content);
+      redrawNow = redraw;
     }
     redraw();
     app.replaceChildren(nav, content);
