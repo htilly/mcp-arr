@@ -13,7 +13,12 @@ MCP server for the *arr media management suite (Sonarr, Radarr, Lidarr, Prowlarr
 
 ```
 src/
-├── index.ts          # Server entry point, tool registration
+├── index.ts          # Server entry point, tool registration (applyConfig/buildTools/buildServer)
+├── http-server.ts    # HTTP(S) mode: /mcp (stateless Streamable HTTP), /admin API with roles, /ca.crt
+├── auth.ts           # Passkey (WebAuthn) registration/login, sessions, setup/recovery codes
+├── tls.ts            # Built-in offline CA, BYO certificate files, renewal / hot reload
+├── admin-ui.ts       # Web UI page (single self-contained HTML string, no external assets)
+├── config-store.ts   # Encrypted config file (AES-256-GCM), env merge, users/tokens/invites
 ├── tools/            # Tool implementations by service
 │   ├── sonarr.ts     # TV show management
 │   ├── radarr.ts     # Movie management
@@ -49,6 +54,20 @@ node dist/index.js
 | PROWLARR_API_KEY | For Prowlarr | API key |
 | BAZARR_URL | For Bazarr | Base URL (e.g., http://localhost:6767) |
 | BAZARR_API_KEY | For Bazarr | API key from Bazarr settings |
+| MCP_TRANSPORT | No | `stdio` (default) or `http` (HTTPS server + web UI) |
+| PUBLIC_URL | HTTP mode | Browser URL, e.g. https://mcp-arr.home.lan:3000 (host name, not IP - passkeys) |
+| PORT / HOST / MCP_PATH | No | Listen address and MCP path (default 3000 / 0.0.0.0 / /mcp) |
+| TLS_MODE | No | `internal` (built-in CA, default), `file`, `off` |
+| TLS_SANS / TLS_CA_NAME_CONSTRAINTS | No | Extra certificate names / CA name constraints |
+| TLS_CERT_FILE / TLS_KEY_FILE | TLS_MODE=file | Own certificate + key |
+| CONFIG_PATH | No | Encrypted config file (HTTP default ./config/config.json, Docker /config/config.json) |
+| CONFIG_ENCRYPTION_KEY(_FILE) | Recommended | Encryption passphrase (or file with it, e.g. Docker secret) |
+| CONFIG_ENCRYPTION_KEY_PREVIOUS | No | Old passphrase, for key rotation |
+| KEY_FILE_PATH | No | Fallback auto-generated key file (Docker /secrets/master.key) |
+| ADMIN_RECOVERY | No | `true` prints a one-time code to register a new admin passkey |
+| TRUST_PROXY | No | Use X-Forwarded-For for rate limiting |
+
+In HTTP mode, service env vars override values from the config file (shown read-only in the UI).
 
 ## Constraints
 

@@ -21,3 +21,8 @@ SESSION-*.md
 
 # npm pack artifacts
 *.tgz
+
+# Local config volume (docker-compose)
+config/
+secrets/
+mcp-arr-key.txt

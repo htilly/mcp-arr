@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **BREAKING (HTTP mode):** `MCP_TRANSPORT=http` now serves **HTTPS with authentication**. It requires `PUBLIC_URL` and a writable `CONFIG_PATH`, and every MCP request needs a per-user access token created in the web UI. Existing unauthenticated plain-HTTP setups (e.g. n8n pointing at `http://host:3000/mcp`) must be updated - see README "Remote server". `TLS_MODE=off` keeps plain HTTP for use behind a TLS-terminating reverse proxy, but tokens are still required. stdio mode is unchanged.
 - **Synced with upstream `aplaceforallmystuff/mcp-arr` v1.7.3.** Fork-only features are kept; where both sides changed the same tool, the result is a superset:
   - `sonarr_get_series` and `radarr_get_movies` accept upstream's `limit` / `offset` / `search` **and** the fork's `sortBy` / `sortDir`. Sorting is applied before pagination. **Behaviour change for fork users:** `limit` now defaults to 25 (max 100) instead of returning everything, and the response uses upstream's pagination fields (`total`, `returned`, `hasMore`, `nextOffset`, ...) instead of `totalCount` / `count` / `limitedTo`.
   - The server starts in TRaSH-only mode when nothing is configured, instead of exiting.
@@ -18,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `radarr_get_movies` reads `rating` / `ratingVotes` from the TMDB entry of Radarr's per-source `ratings` map. It read `ratings.value`, which does not exist on a Radarr movie, so the rating was never populated. The per-source `ratings` map from upstream is returned alongside.
 
 ### Added
+- **Remote HTTPS server + web UI** (`MCP_TRANSPORT=http`, `PUBLIC_URL`), designed for networks without internet access:
+  - Streamable HTTP MCP endpoint (`MCP_PATH`, default `/mcp`) over HTTPS, still stateless (fresh server per request, no session id) so Claude Code works
+  - Built-in offline certificate authority (`TLS_MODE=internal`): name-constrained root CA, server certificate auto-renewed and hot-swapped; or bring your own certificate (`TLS_MODE=file`, reloaded on change), or `TLS_MODE=off` behind a reverse proxy
+  - Whole config file encrypted at rest (AES-256-GCM): API keys, users, passkeys, token hashes, CA keys. Key from `CONFIG_ENCRYPTION_KEY` / `CONFIG_ENCRYPTION_KEY_FILE` (Docker secret) or an auto-generated key file (with warning); key migration and rotation (`CONFIG_ENCRYPTION_KEY_PREVIOUS`)
+  - Per-user login with passkeys (WebAuthn), roles admin/user, single-use invite links, multiple passkeys per user, `ADMIN_RECOVERY` for lost passkeys
+  - Per-user MCP access tokens (`Authorization: Bearer` or `?token=`), revoked when the user is deleted
+  - Web UI: services (with connection test; tools reload live, no restart), users & invites, tokens, passkeys, certificates (download + install guide), security status
+  - `docker-compose.yml` example with Docker secret; Dockerfile with `/config` and `/secrets` volumes
+- Node.js 20+ is now required
 - **Bazarr (subtitles) integration** – optional, enabled with `BAZARR_URL` + `BAZARR_API_KEY`; server can run with only Bazarr configured:
   - `bazarr_status`, `bazarr_get_health`, `bazarr_get_badges` – System status, health, missing-subtitle counts
   - `bazarr_get_series`, `bazarr_get_episodes`, `bazarr_get_movies` – Subtitle status per series/episode/movie

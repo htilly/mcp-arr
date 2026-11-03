@@ -37,13 +37,14 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
 | **Tautulli (Plex)** | Activity, history, libraries, users, recently added, server status, terminate session |
 | **Overseerr (Requests)** | List requests, approve/decline, view users, search media, request management |
 | **Bazarr (Subtitles)** | Missing subtitles, series/episode/movie subtitle status, search & download subtitles, history, providers, languages |
+| **Remote server** | Optional HTTPS server with web UI: passkey login per user, encrypted config, offline certificates |
 | **Cross-Service** | Status check, unified search across all configured services |
 | **Configuration** | Quality profiles, download clients, naming conventions, health checks, storage info |
 | **TRaSH Guides** | Reference quality profiles, custom formats, naming conventions, compare against recommendations |
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 20+
 - At least one of:
   - *arr application(s) with API access: [Sonarr](https://sonarr.tv/), [Radarr](https://radarr.video/), [Lidarr](https://lidarr.audio/), [Prowlarr](https://prowlarr.com/)
   - [Tautulli](https://tautulli.com/) (Plex monitoring and statistics)
@@ -60,30 +61,23 @@ npx mcp-arr-server
 
 ### Remote HTTP Mode
 
+`MCP_TRANSPORT=http` runs mcp-arr as a shared **HTTPS** server with a web UI, passkey login and per-user access tokens. It needs `PUBLIC_URL` (the browser address, a host name) and stores its settings in an encrypted config file — see [Remote server](#remote-server-docker-https-web-ui-with-passkeys) for setup.
+
 ```bash
-MCP_TRANSPORT=http PORT=3000 npx mcp-arr-server
+MCP_TRANSPORT=http PUBLIC_URL=https://mcp-arr.home.lan:3000 CONFIG_ENCRYPTION_KEY=change-me npx mcp-arr-server
 ```
 
-By default the remote server listens on `127.0.0.1:3000` and serves MCP on `/mcp`.
-
-Environment variables for remote mode:
-
-- `MCP_TRANSPORT=http` to enable remote Streamable HTTP transport
-- `HOST` to override the bind host (default `127.0.0.1`)
-- `PORT` to override the port (default `3000`)
-- `MCP_PATH` to override the MCP endpoint path (default `/mcp`)
+The MCP endpoint is `/mcp` (`MCP_PATH`), stateless Streamable HTTP, and listens on `0.0.0.0:3000` (`HOST`, `PORT`).
 
 ### Docker
 
-Prebuilt images are published to GitHub Container Registry on every release. You do not need to
-build anything:
+This fork publishes an image to GitHub Container Registry on every push to `main`:
 
 ```bash
-docker pull ghcr.io/aplaceforallmystuff/mcp-arr:latest
+docker pull ghcr.io/htilly/mcp-arr:main
 ```
 
-Tags follow the release version — `latest`, `1`, `1.7`, and each exact version such as `1.7.3`.
-Pin to a major or minor tag if you want updates without surprises.
+Tags: `main` and `main-<short sha>`.
 
 Run in local stdio mode:
 
@@ -91,38 +85,10 @@ Run in local stdio mode:
 docker run --rm -i \
   -e SONARR_URL=http://host.docker.internal:8989 \
   -e SONARR_API_KEY=your-sonarr-api-key \
-  ghcr.io/aplaceforallmystuff/mcp-arr:latest
+  ghcr.io/htilly/mcp-arr:main
 ```
 
-Run in remote HTTP mode:
-
-```bash
-docker run --rm -p 3000:3000 \
-  -e MCP_TRANSPORT=http \
-  -e HOST=0.0.0.0 \
-  -e PORT=3000 \
-  -e SONARR_URL=http://host.docker.internal:8989 \
-  -e SONARR_API_KEY=your-sonarr-api-key \
-  ghcr.io/aplaceforallmystuff/mcp-arr:latest
-```
-
-Minimal `docker-compose.yml`:
-
-```yaml
-services:
-  mcp-arr:
-    image: ghcr.io/aplaceforallmystuff/mcp-arr:latest
-    ports:
-      - "3000:3000"
-    environment:
-      MCP_TRANSPORT: http
-      HOST: 0.0.0.0
-      PORT: 3000
-      SONARR_URL: http://host.docker.internal:8989
-      SONARR_API_KEY: your-sonarr-api-key
-      RADARR_URL: http://host.docker.internal:7878
-      RADARR_API_KEY: your-radarr-api-key
-```
+For remote HTTPS mode with the web UI, use the [`docker-compose.yml`](docker-compose.yml) in this repo (see [Remote server](#remote-server-docker-https-web-ui-with-passkeys)).
 
 #### Building it yourself
 
@@ -210,6 +176,97 @@ Add to `~/.claude.json`:
 
 **Note**: Only configure the services you have running. The server automatically detects which services are available based on the environment variables you provide.
 
+### Remote server (Docker, HTTPS, web UI with passkeys)
+
+Run mcp-arr **once** on your server (e.g. next to Sonarr/Radarr) and point all MCP clients at one HTTPS URL. A web UI manages service URLs and API keys, users and access tokens. It is built for networks **without internet access**:
+
+- **HTTPS without Let's Encrypt** – a built-in certificate authority issues and renews the server certificate offline. You install its root certificate once per device. The CA is *name-constrained* to your server's names, so it cannot be abused to impersonate other websites. You can also bring your own certificate (step-ca, Caddy, your router, …).
+- **Encrypted at rest** – the whole config file (API keys, users, passkeys, token hashes, CA private keys) is AES-256-GCM encrypted.
+- **Per-user login with passkeys** – no passwords. Roles: *admin* (services, users, invites, certificates) and *user* (own passkeys and access tokens).
+- **Per-user MCP access tokens** – every client gets its own token, revocable at any time.
+
+> **Claude custom connectors** (claude.ai, mobile, Desktop "Connectors") are called from Anthropic's cloud and need a public internet address with OAuth, so they can't reach an offline server. Use **Claude Code** or **Claude Desktop via `mcp-remote`** – both connect from your own machine.
+
+#### Setup
+
+1. **Pick a host name** and make it resolve on your LAN (router / Pi-hole / AdGuard DNS entry, or the hosts file), e.g. `mcp-arr.home.lan`. Passkeys require a host name — an IP address does not work.
+2. **Create the encryption key** (used as a Docker secret):
+   ```bash
+   openssl rand -base64 32 > mcp-arr-key.txt
+   ```
+3. Set `PUBLIC_URL` in `docker-compose.yml` (e.g. `https://mcp-arr.home.lan:3000`) and start:
+   ```bash
+   docker compose up -d
+   docker compose logs mcp-arr     # setup code + CA fingerprint
+   ```
+4. Open `https://mcp-arr.home.lan:3000/ca.crt` (accept the browser warning this once), check that the SHA-256 fingerprint matches the log, and **install the root certificate** (the web UI's *Certificates* tab has steps for macOS, Windows, iOS, Android and Linux).
+5. Open `https://mcp-arr.home.lan:3000/admin`, enter the setup code and **register your passkey** — you are the first admin.
+6. Add your services (**Test**, then **Save** — tools are enabled immediately), invite other people from **Users** (single-use links, 24 h), and create an **access token** per MCP client.
+
+#### Connect MCP clients
+
+Node.js-based clients don't use the system certificate store, so point them at the root certificate with `NODE_EXTRA_CA_CERTS` (not needed with `TLS_MODE=file` and a certificate your system already trusts):
+
+```bash
+# Claude Code (set NODE_EXTRA_CA_CERTS in the shell/profile that starts claude)
+export NODE_EXTRA_CA_CERTS=/path/to/mcp-arr-ca.crt
+claude mcp add --transport http arr https://mcp-arr.home.lan:3000/mcp --header "Authorization: Bearer <token>"
+```
+
+```json
+// Claude Desktop (claude_desktop_config.json), via the local mcp-remote bridge
+{
+  "mcpServers": {
+    "arr": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp-arr.home.lan:3000/mcp", "--header", "Authorization: Bearer <token>"],
+      "env": { "NODE_EXTRA_CA_CERTS": "/path/to/mcp-arr-ca.crt" }
+    }
+  }
+}
+```
+
+Clients that can't send headers can use `https://…/mcp?token=<token>`. On an offline machine, install `mcp-remote` once while online (`npm i -g mcp-remote`) and use `"command": "mcp-remote"`.
+
+#### Certificates (`TLS_MODE`)
+
+| Mode | Use when |
+|------|----------|
+| `internal` (default) | No other CA on your network. Root CA (10 years) + server certificate (397 days, renewed automatically and hot-swapped, no restart). Changing host names outside the CA's name constraints generates a new CA (you'll need to reinstall it) — set `TLS_CA_NAME_CONSTRAINTS=home.lan` to allow any name under a domain. |
+| `file` | You already run a LAN CA, e.g. [step-ca](https://smallstep.com/docs/step-ca/) (which also offers ACME for automatic renewal on an offline network), Caddy's internal CA, your router/NAS, or a certificate obtained elsewhere via DNS-01. Set `TLS_CERT_FILE` / `TLS_KEY_FILE`; files are reloaded automatically when they change. |
+| `off` | A reverse proxy in front terminates HTTPS. Set `TRUST_PROXY=true` so rate limiting uses `X-Forwarded-For`. `PUBLIC_URL` must still be the proxy's `https://` address. |
+
+#### Encryption key
+
+Resolved in this order:
+
+1. `CONFIG_ENCRYPTION_KEY` – passphrase in an environment variable
+2. `CONFIG_ENCRYPTION_KEY_FILE` – file containing the passphrase (recommended: a Docker secret, see `docker-compose.yml`)
+3. Otherwise a random key file is created at `KEY_FILE_PATH` (Docker: `/secrets/master.key`). This protects a copied config file, but not someone who has both volumes — the UI and log show a warning. Keep it on a separate volume.
+
+Switching from the key file to a passphrase is automatic (the file is re-encrypted on start). To change passphrases, start once with the old one in `CONFIG_ENCRYPTION_KEY_PREVIOUS`. Without the right key the server refuses to start — **back up your key**; there is no way to recover the data without it.
+
+#### HTTP mode settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_TRANSPORT` | `stdio` | Set to `http` for the remote server |
+| `PUBLIC_URL` | – (required) | The URL you open in the browser, e.g. `https://mcp-arr.home.lan:3000` (passkey origin + certificate name) |
+| `PORT` / `HOST` | `3000` / `0.0.0.0` | Listen address |
+| `TLS_MODE` | `internal` | `internal`, `file` or `off` (see above) |
+| `TLS_SANS` | – | Extra names/IPs for the certificate, comma-separated |
+| `TLS_CA_NAME_CONSTRAINTS` | names from `PUBLIC_URL` + `TLS_SANS` | Domains/IPs the built-in CA may issue for |
+| `TLS_CERT_FILE` / `TLS_KEY_FILE` | – | Certificate and key for `TLS_MODE=file` |
+| `CONFIG_PATH` | `/config/config.json` (Docker) | Encrypted config file |
+| `CONFIG_ENCRYPTION_KEY` / `_FILE` / `_PREVIOUS` | – | Encryption key (see above) |
+| `KEY_FILE_PATH` | `/secrets/master.key` (Docker) | Fallback auto-generated key file |
+| `ADMIN_RECOVERY` | `false` | `true` prints a one-time recovery code to register a new admin passkey |
+| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` (only behind your own reverse proxy) |
+
+Service variables (`SONARR_URL`, `SONARR_API_KEY`, …) still work and take precedence over the web UI, where they show as read-only.
+
+**Offline notes:** everything works without internet except the TRaSH Guides tools, which fetch guide data from GitHub and return an error when offline. To install on an air-gapped host, build the image elsewhere and move it with `docker save` / `docker load`.
+
 ### Using the local build (Cursor / Claude)
 
 If you develop from source and run `npm run build`, the **published npm package** used by `npx mcp-arr-server` is an older version. To use your local build and latest code (e.g. Tautulli history with pagination):
@@ -245,7 +302,7 @@ Use your actual paths and API keys. Only include the services you use.
 
 ## ChatGPT / Remote MCP
 
-To use `mcp-arr` with ChatGPT, run the server in remote HTTP mode on a reachable host and connect ChatGPT to the `/mcp` endpoint.
+To use `mcp-arr` with ChatGPT, run the server in remote HTTP mode on a reachable host and connect ChatGPT to the `/mcp` endpoint. Note that ChatGPT (like Claude custom connectors) connects from the vendor's cloud, so the server must be reachable from the internet with a publicly trusted certificate, and the client must be able to send the access token (`Authorization: Bearer` or `?token=`).
 
 The server now exposes the generic `search` and `fetch` tools expected by ChatGPT-style remote MCP integrations:
 
@@ -529,7 +586,22 @@ The *arr application is not running or the URL is incorrect. Verify:
 - There's no firewall blocking the connection
 
 ### "Sonarr/Radarr/etc not configured"
-You tried to use a tool for a service that isn't configured. Add the corresponding URL and API_KEY environment variables.
+You tried to use a tool for a service that isn't configured. Add the corresponding URL and API_KEY environment variables (or configure it in the web UI in HTTP mode).
+
+### HTTP mode: "Unauthorized" from `/mcp`
+Create an access token in the web UI (**Access tokens**) and send it as `Authorization: Bearer <token>`. Tokens stop working when they are revoked or their user is deleted.
+
+### HTTP mode: certificate errors (`self-signed certificate in certificate chain`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE`)
+Install the root certificate from `/ca.crt` on the device, and for Node.js clients (Claude Code, `mcp-remote`) set `NODE_EXTRA_CA_CERTS=/path/to/mcp-arr-ca.crt`. Connect using a name that is in the certificate (`PUBLIC_URL` host or `TLS_SANS`).
+
+### HTTP mode: passkey prompt fails or "Passkeys unavailable"
+Passkeys only work over trusted HTTPS on the exact host name in `PUBLIC_URL` (not an IP address, not a different alias). Install the root certificate and open the configured URL.
+
+### HTTP mode: lost all admin passkeys
+Start the server once with `ADMIN_RECOVERY=true`. The log shows a one-time recovery code; on the sign-in page choose "Lost your passkey?" to register a new admin. Remove the variable afterwards.
+
+### HTTP mode: "encryption key does not match" / "no key is available"
+The config file was encrypted with a different key. Start with the original `CONFIG_ENCRYPTION_KEY` (or restore the key file). To change keys, put the old one in `CONFIG_ENCRYPTION_KEY_PREVIOUS` for one start. Without the key the data can't be recovered — move the config file away to start fresh.
 
 ## Need help building or securing MCP servers?
 

@@ -19,3 +19,8 @@ docker-registry
 .gitignore
 .npmrc
 .env*
+
+# Local config volume
+config
+secrets
+mcp-arr-key.txt

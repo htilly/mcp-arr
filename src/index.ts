@@ -13,17 +13,21 @@
  * - TAUTULLI_URL, TAUTULLI_API_KEY
  * - OVERSEERR_URL, OVERSEERR_API_KEY
  * - BAZARR_URL, BAZARR_API_KEY
+ *
+ * Remote / Docker mode (HTTPS + web UI with passkey login), see README:
+ * - MCP_TRANSPORT=http (default: stdio), PUBLIC_URL, PORT, HOST
+ * - TLS_MODE (internal|file|off), TLS_SANS, TLS_CA_NAME_CONSTRAINTS, TLS_CERT_FILE, TLS_KEY_FILE
+ * - CONFIG_PATH, CONFIG_ENCRYPTION_KEY, CONFIG_ENCRYPTION_KEY_FILE, CONFIG_ENCRYPTION_KEY_PREVIOUS, KEY_FILE_PATH
+ * - ADMIN_RECOVERY, TRUST_PROXY
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import {
   SonarrClient,
@@ -36,6 +40,9 @@ import { trashClient, TrashService } from "./trash-client.js";
 import { TautulliClient } from "./tautulli-client.js";
 import { OverseerrClient } from "./overseerr-client.js";
 import { BazarrClient, BazarrSubtitle } from "./bazarr-client.js";
+import { ConfigStore, EffectiveConfig, SERVICE_DEFS } from "./config-store.js";
+import { resolve as resolvePath } from "node:path";
+import { isIP } from "node:net";
 
 // Read from package.json rather than hardcoding, so the version reported to
 // clients can never drift from the released version. package.json sits at the
@@ -58,12 +65,8 @@ function readServerVersion(): string {
 }
 
 const SERVER_VERSION = readServerVersion();
-const TRANSPORT_MODE = (process.env.MCP_TRANSPORT || "stdio").toLowerCase();
-const HTTP_HOST = process.env.HOST || "127.0.0.1";
-const HTTP_PORT = Number(process.env.PORT || "3000");
-const HTTP_PATH = process.env.MCP_PATH || "/mcp";
 
-// Configuration from environment
+// Configuration (environment variables and/or config file, see config-store.ts)
 interface ServiceConfig {
   name: ArrService;
   displayName: string;
@@ -71,25 +74,14 @@ interface ServiceConfig {
   apiKey?: string;
 }
 
-const services: ServiceConfig[] = [
-  { name: 'sonarr', displayName: 'Sonarr (TV)', url: process.env.SONARR_URL, apiKey: process.env.SONARR_API_KEY },
-  { name: 'radarr', displayName: 'Radarr (Movies)', url: process.env.RADARR_URL, apiKey: process.env.RADARR_API_KEY },
-  { name: 'lidarr', displayName: 'Lidarr (Music)', url: process.env.LIDARR_URL, apiKey: process.env.LIDARR_API_KEY },
-  { name: 'prowlarr', displayName: 'Prowlarr (Indexers)', url: process.env.PROWLARR_URL, apiKey: process.env.PROWLARR_API_KEY },
-];
+const ARR_SERVICE_IDS: ArrService[] = ['sonarr', 'radarr', 'lidarr', 'prowlarr'];
 
-const configuredServices = services.filter(s => s.url && s.apiKey);
-const tautulliUrl = process.env.TAUTULLI_URL;
-const tautulliApiKey = process.env.TAUTULLI_API_KEY;
-const tautulliConfigured = Boolean(tautulliUrl && tautulliApiKey);
-const overseerrUrl = process.env.OVERSEERR_URL;
-const overseerrApiKey = process.env.OVERSEERR_API_KEY;
-const overseerrConfigured = Boolean(overseerrUrl && overseerrApiKey);
-const bazarrUrl = process.env.BAZARR_URL;
-const bazarrApiKey = process.env.BAZARR_API_KEY;
-const bazarrConfigured = Boolean(bazarrUrl && bazarrApiKey);
+let services: ServiceConfig[] = [];
+let configuredServices: ServiceConfig[] = [];
+let tautulliConfigured = false;
+let overseerrConfigured = false;
+let bazarrConfigured = false;
 
-// Initialize clients for configured services
 const clients: {
   sonarr?: SonarrClient;
   radarr?: RadarrClient;
@@ -98,43 +90,60 @@ const clients: {
 } = {};
 
 let tautulliClient: TautulliClient | undefined;
-if (tautulliConfigured) {
-  tautulliClient = new TautulliClient({ url: tautulliUrl!, apiKey: tautulliApiKey! });
-}
-
 let overseerrClient: OverseerrClient | undefined;
-if (overseerrConfigured) {
-  overseerrClient = new OverseerrClient({ url: overseerrUrl!, apiKey: overseerrApiKey! });
-}
-
 let bazarrClient: BazarrClient | undefined;
-if (bazarrConfigured) {
-  bazarrClient = new BazarrClient({ url: bazarrUrl!, apiKey: bazarrApiKey! });
+let statusParts: string[] = [];
+
+const TOOLS: Tool[] = [];
+
+/** True when at least one service has both a URL and an API key. */
+function anyServiceConfigured(): boolean {
+  return configuredServices.length > 0 || tautulliConfigured || overseerrConfigured || bazarrConfigured;
 }
 
-for (const service of configuredServices) {
-  const config = { url: service.url!, apiKey: service.apiKey! };
-  switch (service.name) {
-    case 'sonarr':
-      clients.sonarr = new SonarrClient(config);
-      break;
-    case 'radarr':
-      clients.radarr = new RadarrClient(config);
-      break;
-    case 'lidarr':
-      clients.lidarr = new LidarrClient(config);
-      break;
-    case 'prowlarr':
-      clients.prowlarr = new ProwlarrClient(config);
-      break;
+/**
+ * (Re)build all service clients and the tool list from the effective configuration.
+ * Called at startup and whenever the configuration changes via the web UI.
+ */
+function applyConfig(config: EffectiveConfig): void {
+  services = ARR_SERVICE_IDS.map(id => ({
+    name: id,
+    displayName: SERVICE_DEFS.find(d => d.id === id)!.displayName,
+    url: config[id].url,
+    apiKey: config[id].apiKey,
+  }));
+  configuredServices = services.filter(s => s.url && s.apiKey);
+
+  for (const key of Object.keys(clients) as (keyof typeof clients)[]) delete clients[key];
+  for (const service of configuredServices) {
+    const cfg = { url: service.url!, apiKey: service.apiKey! };
+    switch (service.name) {
+      case 'sonarr': clients.sonarr = new SonarrClient(cfg); break;
+      case 'radarr': clients.radarr = new RadarrClient(cfg); break;
+      case 'lidarr': clients.lidarr = new LidarrClient(cfg); break;
+      case 'prowlarr': clients.prowlarr = new ProwlarrClient(cfg); break;
+    }
   }
+
+  const t = config.tautulli, o = config.overseerr, b = config.bazarr;
+  tautulliConfigured = Boolean(t.url && t.apiKey);
+  overseerrConfigured = Boolean(o.url && o.apiKey);
+  bazarrConfigured = Boolean(b.url && b.apiKey);
+  tautulliClient = tautulliConfigured ? new TautulliClient({ url: t.url!, apiKey: t.apiKey! }) : undefined;
+  overseerrClient = overseerrConfigured ? new OverseerrClient({ url: o.url!, apiKey: o.apiKey! }) : undefined;
+  bazarrClient = bazarrConfigured ? new BazarrClient({ url: b.url!, apiKey: b.apiKey! }) : undefined;
+
+  statusParts = configuredServices.map(s => s.displayName);
+  if (tautulliConfigured) statusParts.push('Tautulli (Plex)');
+  if (overseerrConfigured) statusParts.push('Overseerr (Requests)');
+  if (bazarrConfigured) statusParts.push('Bazarr (Subtitles)');
+
+  buildTools();
 }
 
-const statusParts = configuredServices.map(s => s.displayName);
-if (tautulliConfigured) statusParts.push('Tautulli (Plex)');
-if (overseerrConfigured) statusParts.push('Overseerr (Requests)');
-if (bazarrConfigured) statusParts.push('Bazarr (Subtitles)');
-const TOOLS: Tool[] = [
+function buildTools(): void {
+TOOLS.length = 0;
+TOOLS.push(
   {
     name: "arr_status",
     description: statusParts.length > 0
@@ -174,7 +183,7 @@ const TOOLS: Tool[] = [
       required: ["id"],
     },
   },
-];
+);
 
 // Configuration review tools for each service
 // These are added dynamically based on configured services
@@ -1415,6 +1424,8 @@ TOOLS.push(
   }
 );
 
+} // end buildTools
+
 // Build a fresh MCP server instance with all request handlers registered.
 // The HTTP transport builds a new instance per request (see startHttpServer)
 // so concurrent / long-lived transports never share a single server. A shared
@@ -1438,8 +1449,6 @@ function buildServer(): Server {
   return server;
 }
 
-// Module-level instance used by the stdio transport (single, long-lived session).
-const server = buildServer();
 
 type SearchEntry = {
   id: string;
@@ -1668,8 +1677,8 @@ async function getPaginatedQueue(
 }
 
 // Registers the MCP request handlers on a server instance. Called by
-// buildServer() for every server created (one per HTTP request, plus the
-// module-level stdio instance).
+// buildServer() for every server created (one per HTTP request, plus one for
+// stdio).
 function registerHandlers(server: Server): void {
 // Handle list tools request
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -3820,79 +3829,99 @@ function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-async function startHttpServer() {
-  const httpServer = createServer(async (req, res) => {
-    if (!req.url) {
-      res.statusCode = 400;
-      res.end("Missing URL");
-      return;
-    }
-
-    const requestUrl = new URL(req.url, `http://${req.headers.host || `${HTTP_HOST}:${HTTP_PORT}`}`);
-
-    if (requestUrl.pathname === "/health" && req.method === "GET") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        status: "ok",
-        version: SERVER_VERSION,
-        transport: "http",
-        configuredServices: configuredServices.map((service) => service.name),
-      }));
-      return;
-    }
-
-    if (requestUrl.pathname !== HTTP_PATH) {
-      res.statusCode = 404;
-      res.end("Not found");
-      return;
-    }
-
-    // Stateless HTTP: a fresh server + transport per request, with no session
-    // id issued (sessionIdGenerator: undefined). This lets MCP clients that do
-    // not echo the Mcp-Session-Id header back — e.g. Claude Code — work. Using a
-    // new server per request means requests are no longer serialized through a
-    // single shared server, so a long-lived GET (SSE) stream can stay open
-    // without blocking other requests. The previous shared-server + serialized
-    // queue deadlocked the moment a streamable client (e.g. a gateway/proxy)
-    // opened its GET stream — that request never completes, so every later
-    // request hung behind it.
-    const requestServer = buildServer();
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
-    res.on("close", () => {
-      void transport.close();
-      void requestServer.close();
-    });
-    try {
-      await requestServer.connect(transport);
-      await transport.handleRequest(req, res);
-    } catch (error) {
-      if (!res.headersSent) {
-        res.statusCode = 500;
-        res.end(error instanceof Error ? error.message : String(error));
-      }
-    }
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(HTTP_PORT, HTTP_HOST, () => resolve());
-  });
-
-  console.error(`*arr MCP server running over HTTP at http://${HTTP_HOST}:${HTTP_PORT}${HTTP_PATH}`);
-}
-
 // Start the server
 async function main() {
-  if (TRANSPORT_MODE === "http") {
-    await startHttpServer();
+  const transportMode = (process.env.MCP_TRANSPORT || 'stdio').toLowerCase();
+  const isHttp = transportMode === 'http';
+  if (!isHttp && transportMode !== 'stdio') {
+    throw new Error(`Unknown MCP_TRANSPORT '${transportMode}' (use 'stdio' or 'http')`);
+  }
+
+  if (!isHttp) {
+    // stdio: env vars, plus an (encrypted) config file only when CONFIG_PATH is set explicitly
+    const store = new ConfigStore({ path: process.env.CONFIG_PATH || undefined, allowAutoKey: false });
+    store.load();
+    applyConfig(store.getEffective());
+    const server = buildServer();
+    await server.connect(new StdioServerTransport());
+    console.error(`*arr MCP server running over stdio - configured services: ${statusParts.join(', ') || 'none (TRaSH-only mode)'}`);
     return;
   }
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error(`*arr MCP server running over stdio - configured services: ${statusParts.join(', ') || 'none (TRaSH-only mode)'}`);
+  // ----- HTTP(S) mode -----
+  const env = process.env;
+  const tlsMode = (env.TLS_MODE || 'internal').toLowerCase();
+  if (tlsMode !== 'internal' && tlsMode !== 'file' && tlsMode !== 'off') {
+    throw new Error(`Unknown TLS_MODE '${tlsMode}' (use 'internal', 'file' or 'off')`);
+  }
+
+  if (!env.PUBLIC_URL) {
+    throw new Error(
+      "PUBLIC_URL is required in HTTP mode, e.g. PUBLIC_URL=https://mcp-arr.home.lan:3000 - " +
+      "the address you open in the browser. Passkeys need a host name (not an IP address); " +
+      "add it to your local DNS or hosts file."
+    );
+  }
+  let publicUrl: URL;
+  try {
+    publicUrl = new URL(env.PUBLIC_URL);
+  } catch {
+    throw new Error(`PUBLIC_URL '${env.PUBLIC_URL}' is not a valid URL`);
+  }
+  const hostname = publicUrl.hostname.replace(/^\[|\]$/g, '');
+  if (isIP(hostname)) {
+    throw new Error(`PUBLIC_URL must use a host name, not an IP address (${hostname}): passkeys cannot be bound to IP addresses. Add a name such as mcp-arr.home.lan to your local DNS or hosts file.`);
+  }
+  if (publicUrl.protocol !== 'https:' && hostname !== 'localhost') {
+    throw new Error('PUBLIC_URL must start with https:// (MCP clients and passkeys require HTTPS)');
+  }
+
+  const store = new ConfigStore({
+    path: env.CONFIG_PATH || resolvePath(process.cwd(), 'config', 'config.json'),
+    allowAutoKey: true,
+  });
+  store.load();
+  applyConfig(store.getEffective());
+
+  const [{ startHttpServer }, { Auth }, { TlsManager }] = await Promise.all([
+    import("./http-server.js"),
+    import("./auth.js"),
+    import("./tls.js"),
+  ]);
+
+  const splitList = (v?: string) => (v ?? '').split(',').map(x => x.trim()).filter(Boolean);
+  const tls = new TlsManager({
+    mode: tlsMode,
+    store,
+    names: [hostname, ...splitList(env.TLS_SANS)],
+    caPermitted: splitList(env.TLS_CA_NAME_CONSTRAINTS),
+    certFile: env.TLS_CERT_FILE,
+    keyFile: env.TLS_KEY_FILE,
+    leafDays: env.TLS_LEAF_DAYS ? Number(env.TLS_LEAF_DAYS) : undefined,
+  });
+  await tls.init();
+
+  const auth = new Auth({
+    store,
+    rpID: hostname,
+    origin: publicUrl.origin,
+    recoveryEnabled: env.ADMIN_RECOVERY === 'true',
+  });
+
+  await startHttpServer({
+    store,
+    auth,
+    tls,
+    publicUrl,
+    port: Number(env.PORT || 3000),
+    host: env.HOST || '0.0.0.0',
+    trustProxy: env.TRUST_PROXY === 'true',
+    createServer: buildServer,
+    mcpPath: env.MCP_PATH || '/mcp',
+    serverVersion: SERVER_VERSION,
+    onConfigChanged: () => applyConfig(store.getEffective()),
+    getConfiguredSummary: () => statusParts,
+  });
 }
 
 main().catch((error) => {
