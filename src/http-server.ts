@@ -27,7 +27,7 @@ import { Auth, AuthError } from './auth.js';
 import type { TlsMaterial } from './tls.js';
 import { OAuthError } from './oauth.js';
 import type { Runtime, TestResult } from './runtime.js';
-import { SETTING_DEFS, STARTUP_KEYS, effectiveSettings, isSettingKey, normaliseSetting, settingDef } from './settings.js';
+import { SETTING_DEFS, STARTUP_KEYS, effectiveSettings, isSettingKey, normaliseSetting, settingDef, validatePublicUrl } from './settings.js';
 import { stats, CallEvent, CallContext, LoginMethod } from './stats.js';
 
 export interface HttpServerOptions {
@@ -37,6 +37,12 @@ export interface HttpServerOptions {
   runtime: Runtime;
   /** Build a new runtime from saved settings (throws on invalid settings). */
   reconfigure: (stored: Record<string, string>, previous: Runtime) => Promise<Runtime>;
+  /** Setup mode: why PUBLIC_URL is unusable (not set / invalid). Passkeys and OAuth are off. */
+  setupReason?: string;
+  /** Validate settings for a new PUBLIC_URL (before restarting with it). Throws when invalid. */
+  validateForUrl: (stored: Record<string, string>, url: URL) => void;
+  /** Ask the caller to stop this server and start again (after PUBLIC_URL changed). */
+  requestRestart: () => void;
   /** Check settings without applying them. */
   testSettings: (stored: Record<string, string>, log: (m: string) => void) => Promise<TestResult>;
   /** Process environment (settings set there are read-only in the UI). */
@@ -165,10 +171,25 @@ function publicUser(u: StoredUser) {
 
 // ---------- server ----------
 
-export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
+export interface HttpServerHandle {
+  /** Close the listener and everything this server started (for a restart). */
+  stop: () => Promise<void>;
+}
+
+export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServerHandle> {
   const { store, auth } = opts;
   let rt = opts.runtime;
   const publicOrigin = opts.publicUrl.origin;
+  const setupMode = Boolean(opts.setupReason);
+
+  /**
+   * The origin the browser uses. Normally PUBLIC_URL; in setup mode (no PUBLIC_URL yet) the
+   * address the page was opened with (IP or container name), checked against the Host header.
+   */
+  function originOf(req: IncomingMessage): string {
+    if (!setupMode) return publicOrigin;
+    return `${serverIsHttps ? 'https' : 'http'}://${req.headers.host ?? 'localhost'}`;
+  }
 
   const failures = new Map<string, { count: number; first: number }>();
 
@@ -398,8 +419,8 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     if (!(req.headers['content-type'] ?? '').includes('application/json')) {
       throw new HttpError(415, 'Content-Type must be application/json');
     }
-    if (req.headers.origin !== publicOrigin) {
-      throw new HttpError(403, `Origin not allowed - open the web UI at ${publicOrigin}`);
+    if (req.headers.origin !== originOf(req)) {
+      throw new HttpError(403, `Origin not allowed - open the web UI at ${originOf(req)}`);
     }
   }
 
@@ -439,6 +460,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
         credentials: user.credentials.map(c => ({ id: c.id, name: c.name, createdAt: c.createdAt, lastUsedAt: c.lastUsedAt })),
       },
       publicUrl: publicOrigin,
+      setup: setupMode ? { reason: opts.setupReason } : undefined,
       services: servicesView(isAdmin),
       configuredSummary: opts.getConfiguredSummary(),
       tokens: tokensView(user),
@@ -609,8 +631,14 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
         user: user ? publicUser(user) : null,
         rpID: auth.rpID,
         oauth: Boolean(rt.oauth),
+        setupMode,
+        setupReason: opts.setupReason,
       });
       return;
+    }
+
+    if (setupMode && (path === '/register/options' || path === '/register/verify' || path === '/login/options' || path === '/login/verify')) {
+      throw new HttpError(400, 'Passkeys need a host name: set PUBLIC_URL first (Settings tab). Use a password until then.');
     }
 
     if (path === '/register/options' && method === 'POST') {
@@ -851,6 +879,27 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     if (path === '/settings' && method === 'PUT') {
       const admin = requireAdmin(req);
       const next = mergeSettings(await readJson(req), true);
+      const before = effectiveSettings(store.getSettings(), opts.env).PUBLIC_URL.value;
+      const after = effectiveSettings(next, opts.env).PUBLIC_URL.value;
+      if (after !== before || (setupMode && after)) {
+        // New address: passkeys, certificate names, OAuth issuer and cookies all depend on it -
+        // validate, save and restart the server with it.
+        let url: URL | undefined;
+        try {
+          if (after) {
+            url = validatePublicUrl(after);
+            opts.validateForUrl(next, url);
+          }
+        } catch (error) {
+          throw new HttpError(400, error instanceof Error ? error.message : String(error));
+        }
+        if (applying) throw new HttpError(409, 'Settings are being applied - try again in a moment');
+        store.setSettings(next);
+        console.error(`PUBLIC_URL changed in the web UI by ${admin.name}: ${before || '(not set)'} -> ${after || '(not set)'}`);
+        sendJson(res, 200, { ok: true, restart: true, reloadUrl: url ? `${url.origin}/admin` : undefined });
+        setTimeout(() => opts.requestRestart(), 500).unref();
+        return;
+      }
       const { listenerChange } = await applySettings(next);
       const reloadUrl = listenerChange ? publicOrigin + '/admin' : undefined;
       sendJson(res, 200, { ok: true, listenerChange, reloadUrl, overview: overview(store.getUser(admin.id)!) });
@@ -904,7 +953,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
       const body = await readJson(req);
       const { token, invite } = store.createInvite(role(body.role ?? 'user'), admin.id);
       sendJson(res, 200, {
-        link: `${publicOrigin}/admin#invite=${token}`,
+        link: `${originOf(req)}/admin#invite=${token}`,
         invite: { id: invite.id, role: invite.role, expiresAt: invite.expiresAt },
         overview: overview(admin),
       });
@@ -928,7 +977,8 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
     try {
-      if (rt.tls.mode !== 'off') {
+      // No HSTS for a temporary certificate: browsers would then refuse it without a way to proceed
+      if (rt.tls.mode !== 'off' && !rt.tls.temporary) {
         res.setHeader('Strict-Transport-Security', 'max-age=31536000');
       }
       if (await handleOAuth(req, res, url)) return;
@@ -1055,10 +1105,24 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
   const summary = opts.getConfiguredSummary();
   const info = rt.tls.info();
   console.error(`*arr MCP server running (${material ? 'https' : 'http'}) on ${opts.host}:${opts.port}`);
-  console.error(`  Public URL:  ${publicOrigin}   MCP endpoint: ${publicOrigin}${opts.mcpPath}   Web UI: ${publicOrigin}/admin`);
+  if (setupMode) {
+    console.error('');
+    console.error('  ================================================');
+    console.error(`  SETUP MODE: ${opts.setupReason}.`);
+    console.error(`  Open ${serverIsHttps ? 'https' : 'http'}://<this server's IP or name>:${opts.port}/admin (accept the temporary certificate),`);
+    console.error('  sign in with a password and set the public address under Settings.');
+    console.error('  Passkeys and OAuth are off until then.');
+    console.error('  ================================================');
+    console.error('');
+  } else {
+    console.error(`  Public URL:  ${publicOrigin}   MCP endpoint: ${publicOrigin}${opts.mcpPath}   Web UI: ${publicOrigin}/admin`);
+  }
   console.error(`  Config:      ${store.path} (encrypted, key from ${store.keySource})`);
   for (const w of store.warnings) console.error(`  WARNING: ${w}`);
-  if (info.mode === 'internal' && info.ca) {
+  if (info.temporary) {
+    console.error(`  TLS:         temporary self-signed certificate for ${info.names.join(', ')} (accept it in the browser)`);
+    if (info.lastError) console.error(`  WARNING:     ${info.lastError}`);
+  } else if (info.mode === 'internal' && info.ca) {
     console.error(`  TLS:         built-in CA - download ${publicOrigin}/ca.crt and install it on your devices`);
     console.error(`  CA SHA-256:  ${info.ca.fingerprint256}`);
   } else if (info.mode === 'file') {
@@ -1077,7 +1141,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
     console.error('');
     console.error('  ================================================');
     console.error(`  ${what} code: ${code}`);
-    console.error(`  Open ${publicOrigin}/admin and enter this code to register a passkey.`);
+    console.error(`  Open ${setupMode ? 'the web UI' : `${publicOrigin}/admin`} and enter this code to ${setupMode ? 'create the first admin (with a password)' : 'register a passkey'}.`);
     console.error('  ================================================');
     console.error('');
   }
@@ -1089,4 +1153,18 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
   };
   process.once('SIGTERM', shutdown);
   process.once('SIGINT', shutdown);
+
+  return {
+    stop: async () => {
+      process.off('SIGTERM', shutdown);
+      process.off('SIGINT', shutdown);
+      clearInterval(cleanup);
+      rt.tls.stop();
+      await new Promise<void>(resolve => {
+        server.close(() => resolve());
+        server.closeAllConnections?.();
+        setTimeout(resolve, 2000).unref();
+      });
+    },
+  };
 }

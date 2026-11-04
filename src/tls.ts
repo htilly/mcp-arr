@@ -75,6 +75,8 @@ export interface CertSummary {
 
 export interface TlsInfo {
   mode: TlsMode;
+  /** A temporary self-signed certificate is served (setup mode / settings error). */
+  temporary?: boolean;
   names: string[];
   ca?: CertSummary & { permitted: string[] };
   leaf?: CertSummary;
@@ -103,6 +105,14 @@ export interface TlsManagerOptions {
    * HSTS would refuse a self-signed certificate.
    */
   initialMaterial?: TlsMaterial;
+  /**
+   * Setup mode (PUBLIC_URL not set) or settings that could not be applied: serve a temporary
+   * self-signed certificate for `names` (host names and IPs). Nothing is stored, so an existing
+   * built-in CA stays untouched.
+   */
+  temporary?: boolean;
+  /** Shown as lastError (e.g. why the configured settings could not be used). */
+  error?: string;
 }
 
 const ALG = { name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256' } as const;
@@ -127,6 +137,7 @@ export class TlsManager {
   private dnsSolver?: DnsSolver;
   private releaseChallenge?: () => void;
   private readonly initialMaterial?: TlsMaterial;
+  readonly temporary: boolean;
   private readonly fileListener = () => this.reloadFiles();
   private acmeStatus: AcmeInfo['status'] = 'pending';
   private pendingCnames?: PendingCname[];
@@ -146,6 +157,8 @@ export class TlsManager {
     this.keyFile = opts.keyFile;
     this.acme = opts.acme;
     this.initialMaterial = opts.initialMaterial;
+    this.temporary = Boolean(opts.temporary);
+    this.lastError = opts.error;
     if (this.mode === 'acme' && !this.acme) throw new Error('TLS_MODE=acme needs ACME settings');
   }
 
@@ -165,6 +178,7 @@ export class TlsManager {
    * Returns a description of the problem, or undefined if nothing looks wrong.
    */
   publicTrustProblem(host: string): string | undefined {
+    if (this.temporary) return 'a temporary self-signed certificate is in use';
     if (this.mode === 'acme') {
       if (this.acme!.staging || this.acme!.directoryUrl === LETSENCRYPT_STAGING) return "it comes from Let's Encrypt staging (ACME_STAGING=true), which is not trusted";
       const dirHost = new URL(this.acme!.directoryUrl).hostname;
@@ -196,6 +210,7 @@ export class TlsManager {
     const tls = this.store.getTls();
     return {
       mode: this.mode,
+      ...(this.temporary ? { temporary: true } : {}),
       names: this.names,
       ...(this.mode === 'internal' && tls.ca ? { ca: { ...summarize(tls.ca.certPem), permitted: tls.ca.permitted } } : {}),
       ...(this.material ? { leaf: summarize(this.material.cert) } : {}),
@@ -219,6 +234,10 @@ export class TlsManager {
 
   async init(): Promise<void> {
     if (this.mode === 'off') return;
+    if (this.temporary) {
+      this.material = await createSelfSigned(this.names, 'temporary - set PUBLIC_URL');
+      return;
+    }
     if (this.mode === 'file') {
       if (!this.certFile || !this.keyFile) throw new Error('TLS_MODE=file requires TLS_CERT_FILE and TLS_KEY_FILE');
       this.material = loadFiles(this.certFile, this.keyFile);
@@ -493,12 +512,12 @@ async function createCa(permitted: string[]): Promise<StoredKeyPair> {
 }
 
 /** Short-lived self-signed certificate, served while the first ACME certificate is pending. */
-async function createSelfSigned(names: string[]): Promise<TlsMaterial> {
+async function createSelfSigned(names: string[], note = 'temporary - waiting for ACME'): Promise<TlsMaterial> {
   const keys = (await webcrypto.subtle.generateKey(ALG, true, ['sign', 'verify'])) as CryptoKeyPair;
-  const dnsNames = names.map(n => n.replace(/^\*\./, ''));
+  const dnsNames = names.filter(n => !isIP(n)).map(n => n.replace(/^\*\./, ''));
   const cert = await x509.X509CertificateGenerator.createSelfSigned({
     serialNumber: serial(),
-    name: `CN=${dnsNames[0]}, O=mcp-arr (temporary - waiting for ACME)`,
+    name: `CN=${dnsNames[0] ?? names[0] ?? 'localhost'}, O=mcp-arr (${note})`,
     notBefore: new Date(Date.now() - 3600_000),
     notAfter: new Date(Date.now() + 90 * DAY_MS),
     keys,
@@ -506,7 +525,7 @@ async function createSelfSigned(names: string[]): Promise<TlsMaterial> {
     extensions: [
       new x509.BasicConstraintsExtension(false, undefined, true),
       new x509.ExtendedKeyUsageExtension([x509.ExtendedKeyUsage.serverAuth]),
-      new x509.SubjectAlternativeNameExtension(names.map(value => ({ type: 'dns' as const, value }))),
+      new x509.SubjectAlternativeNameExtension(names.map(value => ({ type: isIP(value) ? 'ip' as const : 'dns' as const, value }))),
     ],
   });
   return { cert: cert.toString('pem') + '\n', key: await exportKeyPem(keys.privateKey) };

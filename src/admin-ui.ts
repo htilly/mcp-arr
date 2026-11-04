@@ -74,6 +74,8 @@ label.check input { width: 20px; height: 20px; flex: none; margin: 0; accent-col
 .setting .src { font-size: 11px; margin-left: 6px; }
 .setting .help { font-size: 12px; color: var(--muted); margin-top: 3px; }
 pre.testlog { max-height: 260px; overflow-y: auto; }
+.setup-banner { border-color: var(--warn); background: var(--warn-bg); }
+.setup-banner p { margin: 6px 0 0; }
 .pill.warn { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
 .pills { display: flex; gap: 6px; flex-wrap: wrap; }
 .note { font-size: 12px; color: var(--muted); margin-top: 3px; }
@@ -509,8 +511,9 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
     return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   }
+  var setupMode = false; // PUBLIC_URL not set yet: passkeys are off (set from /state)
   function passkeysSupported() {
-    return Boolean(window.isSecureContext && window.PublicKeyCredential && navigator.credentials);
+    return Boolean(!setupMode && window.isSecureContext && window.PublicKeyCredential && navigator.credentials);
   }
   function createPasskey(o) {
     var pk = Object.assign({}, o, {
@@ -628,7 +631,9 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     if (pk) {
       fields.push(el('h3', { text: 'Passkey (recommended)' }), el('label', { text: 'Name for this passkey' }), keyName, el('div', { class: 'row' }, [pkBtn]));
     } else {
-      fields.push(el('div', { class: 'msg warn', text: 'Passkeys are not available on this page (it needs trusted HTTPS on the configured host name). You can use a password for now.' }));
+      fields.push(el('div', { class: 'msg warn', text: setupMode
+        ? 'Setup mode: the public address (PUBLIC_URL) is not set yet, so passkeys are not available. Use a password now; after setting the address under Settings you can add a passkey.'
+        : 'Passkeys are not available on this page (it needs trusted HTTPS on the configured host name). You can use a password for now.' }));
     }
     fields.push(el('h3', { text: pk ? 'Or use a password' : 'Password' }), el('label', { text: 'Password' }), password, el('label', { text: 'Repeat password' }), password2, el('div', { class: 'row' }, [pwBtn]), msg);
     var form = el('form', { onsubmit: function (ev) { ev.preventDefault(); if (pk) createWithPasskey(); else createWithPassword(); } }, fields);
@@ -1125,6 +1130,33 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
       }, function (e) { testBtn.disabled = false; logBox.classList.add('hidden'); showMsg(msg, 'err', e.message); });
     } });
     var saveBtn = el('button', { class: 'primary', type: 'button', text: 'Save & apply', disabled: !dirty, onclick: function () {
+      var fromUrl = S.values.PUBLIC_URL.value, toUrl = current('PUBLIC_URL');
+      if (toUrl !== fromUrl || (d.setup && toUrl)) {
+        var passkeys = (d.users || []).reduce(function (n, u) { return n + (u.passkeys || 0); }, 0);
+        var noPw = (d.users || []).filter(function (u) { return u.passkeys > 0 && !u.hasPassword; }).map(function (u) { return u.name; });
+        var lines = ['Change the public address' + (fromUrl ? ' from ' + fromUrl : '') + ' to ' + (toUrl || '(not set - setup mode)') + '?', ''];
+        function hostOf(u) { try { return new URL(u).hostname; } catch (e) { return ''; } }
+        var sameHost = fromUrl && toUrl && hostOf(fromUrl) === hostOf(toUrl);
+        if (passkeys > 0 && sameHost) {
+          lines.push('The host name stays the same, so the ' + passkeys + ' registered passkey(s) keep working.');
+        } else if (passkeys > 0) {
+          lines.push('WARNING: passkeys are bound to the host name. All ' + passkeys + ' registered passkey(s) will STOP WORKING. Everyone has to sign in with a password and register a new passkey.');
+          if (noPw.length) lines.push('These users have no password and will be locked out until an admin gives them a new invite (or you start with ADMIN_RECOVERY=true): ' + noPw.join(', ') + '.');
+        } else {
+          lines.push('No passkeys are registered yet, so nobody loses access.');
+        }
+        lines.push('', 'The server restarts on the new address. MCP clients and connectors must be pointed to the new URL. The name must resolve to this server, or the web UI will not be reachable (recover by setting PUBLIC_URL in the environment).');
+        if (!toUrl) lines.push('', 'Without an address the server returns to setup mode (temporary certificate, passwords only).');
+        if (!confirm(lines.join('\n'))) return;
+        saveBtn.disabled = true;
+        showMsg(msg, 'warn', 'Saving…');
+        api('PUT', '/settings', payload()).then(function (r) {
+          settingsDraft = null;
+          showMsg(msg, 'ok', 'Saved. The server restarts on ' + (r.reloadUrl ? r.reloadUrl.replace(/\/admin$/, '') : 'setup mode') + ' - you will be taken there and need to sign in again.');
+          setTimeout(function () { location.href = r.reloadUrl || '/admin'; }, 4000);
+        }, function (e) { saveBtn.disabled = false; showMsg(msg, 'err', e.message); });
+        return;
+      }
       var fromMode = S.values.TLS_MODE.value, toMode = current('TLS_MODE');
       if (fromMode !== toMode) {
         var warn = {
@@ -1163,6 +1195,9 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     return el('section', null, [
       el('h2', { text: 'Settings' }),
       el('p', { class: 'muted', text: 'Changes are stored in the encrypted config file and applied immediately - no restart. Environment variables always win; those fields are read-only here.' }),
+      group('Public address', d.setup
+        ? 'Not set yet - the server runs in setup mode. Use the host name you will open in the browser (it must resolve to this server, e.g. a local DNS record).'
+        : 'Changing it restarts the server on the new address. Registered passkeys only work on the address they were created for.', 'server'),
       group('Certificate', null, 'tls'),
       group('Let’s Encrypt / ACME', 'A publicly trusted certificate for a domain you own, renewed automatically. The name must resolve to this server (for a LAN-only server: a local DNS record).', 'acme'),
       group('DNS validation', 'The CA checks a TXT record under _acme-challenge.<name>. Nothing has to be reachable from the internet.', 'dns'),
@@ -1832,7 +1867,12 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
       redrawNow = redraw;
     }
     redraw();
-    app.replaceChildren(nav, content);
+    var banner = d.setup ? el('div', { class: 'panel setup-banner' }, [
+      el('strong', { text: 'Setup mode - ' + (d.setup.reason || 'PUBLIC_URL is not set') + '.' }),
+      el('p', { text: 'The server runs with a temporary certificate. Passkeys, OAuth connectors and the built-in CA are off until the public address is set. Set it under Settings → Public address; the server then restarts on that address.' }),
+      isAdmin ? el('div', { class: 'row' }, [el('button', { class: 'primary', text: 'Set the public address', onclick: function () { currentTab = 'settings'; redraw(); } })]) : null
+    ]) : null;
+    app.replaceChildren.apply(app, [banner, nav, content].filter(Boolean));
     startLive();
   }
 
@@ -1867,6 +1907,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     var oauthReq = /oauth=([A-Za-z0-9_-]+)/.exec(location.hash);
     return api('GET', '/state').then(function (s) {
       lastState = s;
+      setupMode = Boolean(s.setupMode);
       if (m && !s.user) return renderInvite(m[1]);
       if (s.setupRequired) return renderSetup();
       if (!s.user) return renderLogin(s);

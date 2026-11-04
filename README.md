@@ -61,7 +61,7 @@ npx mcp-arr-server
 
 ### Remote HTTP Mode
 
-`MCP_TRANSPORT=http` runs mcp-arr as a shared **HTTPS** server with a web UI, passkey login and per-user access tokens. It needs `PUBLIC_URL` (the browser address, a host name) and stores its settings in an encrypted config file — see [Remote server](#remote-server-docker-https-web-ui-with-passkeys) for setup.
+`MCP_TRANSPORT=http` runs mcp-arr as a shared **HTTPS** server with a web UI, passkey login and per-user access tokens. It needs `PUBLIC_URL` (the browser address, a host name - set it in the environment or later in the web UI) and stores its settings in an encrypted config file — see [Remote server](#remote-server-docker-https-web-ui-with-passkeys) for setup.
 
 ```bash
 MCP_TRANSPORT=http PUBLIC_URL=https://mcp-arr.home.lan:3000 CONFIG_ENCRYPTION_KEY=change-me npx mcp-arr-server
@@ -240,7 +240,10 @@ Admins can change the certificate mode and every certificate, Let's Encrypt, DNS
 - **Save & apply** stores the values in the encrypted config file and switches immediately: new certificate manager, OAuth on/off, proxy trust. Switching between HTTPS and plain HTTP (`off`) re-opens the listener on the same port and the page reloads. When switching to Let's Encrypt, the current certificate keeps being served until the new one is issued (browsers that remember HSTS would refuse a temporary certificate).
 - Secrets (API tokens, HMAC keys) are never sent back to the browser - leave the field empty to keep the saved value.
 - **Environment variables always win**: a setting set in the environment is shown read-only with the variable's name. Remove it from your compose file to manage it in the UI. If a setting ever locks you out (e.g. `off` without a proxy), set `TLS_MODE` in the environment and restart.
-- Only in the environment: `PUBLIC_URL` (passkeys are bound to its host), `PORT`, `HOST`, `MCP_PATH`, the encryption key settings, and `ACME_DNS_HOOK` (a web UI admin must not be able to run programs on the server).
+- **Public address (`PUBLIC_URL`)** can be set here too. Changing it restarts the server on the new address (in-process, a few seconds), after a confirmation that says how many passkeys will stop working - passkeys are bound to the host name - and which users have no password to fall back on. MCP clients and connectors must then use the new URL.
+- **Setup mode:** without a `PUBLIC_URL` (or with an invalid one) the server does not exit. It starts with a temporary self-signed certificate for its own host name and IP addresses (nothing is stored, an existing built-in CA is not touched), password sign-in only (no passkeys, no OAuth), and a banner pointing to *Settings → Public address*. Open `https://<server IP>:<port>/admin`, accept the certificate warning, create the admin with the setup code and a password, and set the address.
+- Settings saved in the UI that cannot be used at startup (e.g. missing certificate files) no longer stop the server: it starts with a temporary certificate and shows the error in the *Certificates* tab, so you can fix it in the UI.
+- Only in the environment: `PORT`, `HOST`, `MCP_PATH`, the encryption key settings, and `ACME_DNS_HOOK` (a web UI admin must not be able to run programs on the server).
 
 #### Certificates (`TLS_MODE`)
 
@@ -323,7 +326,7 @@ All `TLS_*`, `ACME_*`, DNS-provider and `OAUTH*` variables and `TRUST_PROXY` can
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MCP_TRANSPORT` | `stdio` | Set to `http` for the remote server |
-| `PUBLIC_URL` | – (required) | The URL you open in the browser, e.g. `https://mcp-arr.home.lan:3000` (passkey origin + certificate name) |
+| `PUBLIC_URL` | – (setup mode) | The URL you open in the browser, e.g. `https://mcp-arr.home.lan:3000` (passkey origin + certificate name). Can also be set in the web UI; without it the server starts in setup mode |
 | `PORT` / `HOST` | `3000` / `0.0.0.0` | Listen address |
 | `TLS_MODE` | `internal` | `internal`, `file`, `acme` or `off` (see above) |
 | `TLS_SANS` | – | Extra names/IPs for the certificate, comma-separated |

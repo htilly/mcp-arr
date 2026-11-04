@@ -28,6 +28,13 @@ export interface RuntimeContext {
   /** HOST - listen address (also used for the http-01 listener). */
   listenHost: string;
   mcpPath: string;
+  /**
+   * Setup mode: PUBLIC_URL is not set yet. A temporary certificate for `setupNames` is served,
+   * passkeys and OAuth are off, and the admin sets PUBLIC_URL in the web UI.
+   */
+  setup?: boolean;
+  /** Host names / IPs for the temporary certificate (setup mode and fallback). */
+  setupNames: string[];
 }
 
 export interface Runtime {
@@ -51,6 +58,7 @@ export function parseTlsMode(env: NodeJS.ProcessEnv): TlsMode {
 
 function tlsManagerFor(ctx: RuntimeContext, env: NodeJS.ProcessEnv, previous?: Runtime): TlsManager {
   const mode = parseTlsMode(env);
+  if (ctx.setup && mode !== 'off') return temporaryTls(ctx);
   const names = [ctx.hostname, ...splitList(env.TLS_SANS)];
   const acme = mode === 'acme' ? acmeSettingsFromEnv(env, names, ctx.publicUrl.origin, ctx.listenHost) : undefined;
   if (mode === 'file' && (!env.TLS_CERT_FILE || !env.TLS_KEY_FILE)) throw new Error('Own certificate files: set both the certificate and the key file');
@@ -71,6 +79,34 @@ function tlsManagerFor(ctx: RuntimeContext, env: NodeJS.ProcessEnv, previous?: R
  * Build (and start) everything that depends on the settings. Throws on invalid settings; on
  * failure nothing that was started is left running.
  */
+function temporaryTls(ctx: RuntimeContext, error?: string): TlsManager {
+  return new TlsManager({ mode: 'internal', store: ctx.store, names: [...new Set([...(ctx.setup ? [] : [ctx.hostname]), ...ctx.setupNames])], temporary: true, error });
+}
+
+/** Check settings without starting anything (used before a restart for a new PUBLIC_URL). */
+export function validateSettings(ctx: RuntimeContext, env: NodeJS.ProcessEnv): void {
+  const oauthSetting = (env.OAUTH || 'auto').toLowerCase();
+  if (!['auto', 'on', 'off'].includes(oauthSetting)) throw new Error(`Unknown OAUTH '${env.OAUTH}' (use 'auto', 'on' or 'off')`);
+  tlsManagerFor(ctx, env);
+}
+
+/**
+ * Like buildRuntime, but never fails: when the settings cannot be used (bad certificate files,
+ * invalid ACME settings ...) the server still starts with a temporary certificate and shows the
+ * error, so it can be fixed in the web UI.
+ */
+export async function buildRuntimeOrFallback(ctx: RuntimeContext, env: NodeJS.ProcessEnv): Promise<Runtime> {
+  try {
+    return await buildRuntime(ctx, env);
+  } catch (err) {
+    const message = `The certificate settings could not be used: ${errMsg(err)}. Serving a temporary self-signed certificate - fix the settings in the web UI (Settings).`;
+    console.error(`WARNING: ${message}`);
+    const tls = temporaryTls(ctx, message);
+    await tls.init();
+    return { tls, tlsMode: tls.mode, oauthReason: 'off while the certificate settings have an error', oauthHosts: [], trustProxy: env.TRUST_PROXY === 'true' };
+  }
+}
+
 export async function buildRuntime(ctx: RuntimeContext, env: NodeJS.ProcessEnv, previous?: Runtime): Promise<Runtime> {
   const oauthSetting = (env.OAUTH || 'auto').toLowerCase();
   if (!['auto', 'on', 'off'].includes(oauthSetting)) throw new Error(`Unknown OAUTH '${env.OAUTH}' (use 'auto', 'on' or 'off')`);
@@ -83,7 +119,7 @@ export async function buildRuntime(ctx: RuntimeContext, env: NodeJS.ProcessEnv, 
     throw err;
   }
 
-  const decision = resolveOAuthMode({
+  const decision = ctx.setup ? { enabled: false, reason: 'PUBLIC_URL is not set yet (setup mode)' } : resolveOAuthMode({
     setting: env.OAUTH,
     publicUrl: ctx.publicUrl,
     tlsMode: tls.mode,
