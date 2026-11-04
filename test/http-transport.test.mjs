@@ -108,13 +108,20 @@ test("HTTP transport serves clients that omit the session header (stateless) and
   assert.doesNotMatch(server.stderr(), /Fatal error/);
 });
 
-test("HTTP mode refuses to start without PUBLIC_URL", async () => {
+test("HTTP mode without PUBLIC_URL starts in setup mode instead of exiting", async () => {
   const { dir, configPath } = seedConfig();
   const server = startServer(() => ({ CONFIG_PATH: configPath }));
-  const [code] = await once(server.child, "exit");
-  rmSync(dir, { recursive: true, force: true });
-  assert.notEqual(code, 0);
-  assert.match(server.stderr(), /PUBLIC_URL is required/);
+  try {
+    const deadline = Date.now() + 15000;
+    while (!/SETUP MODE/.test(server.stderr()) && Date.now() < deadline && server.child.exitCode === null) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.equal(server.child.exitCode, null, "the server keeps running");
+    assert.match(server.stderr(), /SETUP MODE: PUBLIC_URL is not set/);
+  } finally {
+    await stopServer(server);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("TLS_MODE=internal serves HTTPS with a certificate chained to the built-in CA", async () => {

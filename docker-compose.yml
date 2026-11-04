@@ -28,7 +28,7 @@ services:
       MCP_TRANSPORT: http
       HOST: 0.0.0.0
       PORT: 3000
-      PUBLIC_URL: https://mcp-arr.home.lan:3000      # the address you open in the browser
+      PUBLIC_URL: https://mcp-arr.home.lan:3000      # the address you open in the browser (or leave it out and set it in the web UI)
       CONFIG_ENCRYPTION_KEY_FILE: /run/secrets/mcp_arr_key
       # Extra names/IPs for the certificate (e.g. to reach it by IP from MCP clients):
       # TLS_SANS: 192.168.1.10,mcp-arr
