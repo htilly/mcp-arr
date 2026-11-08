@@ -764,10 +764,20 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
         el('p', { class: 'note', text: 'Only admins can change service settings.' })
       ])]), statusBoard(d)];
     }
+    summary.append(' · ', el('button', { class: 'link', text: 'Configure services', onclick: function () { currentTab = 'config'; redraw(); } }));
+    return [el('section', null, [el('h2', { text: 'Services' }), liveHub(d), summary]), statusBoard(d)];
+  }
+
+  /** Admin-only: URL and API key for each service. */
+  function viewServiceConfig(d, redraw) {
     var grid = el('div', { class: 'grid' }, d.services.map(function (s) {
       return serviceCard(s, function (r) { d.services = r.services; d.configuredSummary = r.configuredSummary; redraw(); });
     }));
-    return [el('section', null, [el('h2', { text: 'Services' }), liveHub(d), summary]), statusBoard(d), el('section', null, [el('h2', { text: 'Connections' }), grid])];
+    return el('section', null, [
+      el('h2', { text: 'Service configuration' }),
+      el('p', { class: 'muted', text: 'URL and API key for each service. Values set by environment variables are shown read-only.' }),
+      grid
+    ]);
   }
 
   function viewConnect(d) {
@@ -1838,7 +1848,9 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     who.classList.remove('hidden');
     whoName.textContent = d.me.name + ' · ' + d.me.role;
     var isAdmin = d.me.role === 'admin';
-    var tabs = [['services', 'Services'], ['mine', 'My activity'], ['connect', 'Connect'], ['tokens', 'Access tokens'], ['passkeys', 'My sign-in']];
+    var tabs = [['services', 'Services']];
+    if (isAdmin) tabs.push(['config', 'Service configuration']);
+    tabs.push(['mine', 'My activity'], ['connect', 'Connect'], ['tokens', 'Access tokens'], ['passkeys', 'My sign-in']);
     if (isAdmin) tabs.push(['users', 'Users'], ['settings', 'Settings'], ['certificates', 'Certificates'], ['security', 'Security']);
     else tabs.push(['certificates', 'Certificates']);
     tabs.push(['brand', 'Brand']);
@@ -1852,6 +1864,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
       var view;
       switch (currentTab) {
         case 'services': view = viewServices(d, redraw); break;
+        case 'config': view = [viewServiceConfig(d, redraw)]; break;
         case 'connect': view = [viewConnect(d)]; break;
         case 'tokens': view = [viewTokens(d, redraw)]; break;
         case 'passkeys': view = [viewPasskeys(d, redraw)]; break;
