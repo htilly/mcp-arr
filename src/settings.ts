@@ -7,11 +7,13 @@
  * admin run programs on the server (ACME_DNS_HOOK) can only be set in the environment.
  */
 
+import { isIP } from 'node:net';
+
 export type SettingType = 'select' | 'text' | 'secret' | 'bool' | 'number' | 'list' | 'url' | 'email';
 
 export interface SettingDef {
   key: string;
-  group: 'tls' | 'acme' | 'dns' | 'access';
+  group: 'server' | 'tls' | 'acme' | 'dns' | 'access';
   label: string;
   type: SettingType;
   options?: { value: string; label: string }[];
@@ -33,6 +35,10 @@ const ACME = { TLS_MODE: ['acme'] };
 const DNS = { TLS_MODE: ['acme'], ACME_CHALLENGE: ['dns-01'] };
 
 export const SETTING_DEFS: SettingDef[] = [
+  {
+    key: 'PUBLIC_URL', group: 'server', label: 'Public address (PUBLIC_URL)', type: 'url', placeholder: 'https://mcp-arr.home.lan:3000',
+    help: 'The address you open in the browser and give to MCP clients. Must be a host name (not an IP address) that resolves to this server. Passkeys are bound to this host name.',
+  },
   {
     key: 'TLS_MODE', group: 'tls', label: 'Certificate', type: 'select', default: 'internal',
     options: [
@@ -95,7 +101,7 @@ export const SETTING_DEFS: SettingDef[] = [
 ];
 
 /** Shown read-only: only the environment can set these. */
-export const STARTUP_KEYS = ['PUBLIC_URL', 'PORT', 'HOST', 'MCP_PATH', 'ACME_DNS_HOOK', 'TLS_LEAF_DAYS'];
+export const STARTUP_KEYS = ['PORT', 'HOST', 'MCP_PATH', 'ACME_DNS_HOOK', 'TLS_LEAF_DAYS'];
 
 const DEF_BY_KEY = new Map(SETTING_DEFS.map(d => [d.key, d]));
 
@@ -186,6 +192,10 @@ export function normaliseSetting(key: string, raw: unknown): string {
       v = v.split(',').map(x => x.trim()).filter(Boolean).join(',');
       break;
     case 'url': {
+      if (key === 'PUBLIC_URL') {
+        v = validatePublicUrl(v).origin;
+        break;
+      }
       let u: URL;
       try {
         u = new URL(v);
@@ -204,4 +214,25 @@ export function normaliseSetting(key: string, raw: unknown): string {
 
 export function settingDef(key: string): SettingDef | undefined {
   return DEF_BY_KEY.get(key);
+}
+
+/**
+ * Check a PUBLIC_URL value. Passkeys need a host name (not an IP address), and MCP clients and
+ * passkeys need HTTPS (http:// only for localhost).
+ */
+export function validatePublicUrl(value: string): URL {
+  let u: URL;
+  try {
+    u = new URL(value);
+  } catch {
+    throw new Error(`PUBLIC_URL '${value}' is not a valid URL`);
+  }
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  if (isIP(host)) {
+    throw new Error(`PUBLIC_URL must use a host name, not an IP address (${host}): passkeys cannot be bound to IP addresses. Add a name such as mcp-arr.home.lan to your local DNS or hosts file.`);
+  }
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && host === 'localhost')) {
+    throw new Error('PUBLIC_URL must start with https:// (MCP clients and passkeys require HTTPS)');
+  }
+  return u;
 }

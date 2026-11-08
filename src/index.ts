@@ -43,7 +43,7 @@ import { OverseerrClient } from "./overseerr-client.js";
 import { BazarrClient, BazarrSubtitle } from "./bazarr-client.js";
 import { ConfigStore, EffectiveConfig, SERVICE_DEFS } from "./config-store.js";
 import { resolve as resolvePath, dirname, join as joinPath } from "node:path";
-import { isIP } from "node:net";
+import { hostname as osHostname, networkInterfaces } from "node:os";
 import { stats, CallContext } from "./stats.js";
 import {
   applyToolPolicy,
@@ -3923,27 +3923,6 @@ async function main() {
   }
 
   // ----- HTTP(S) mode -----
-  if (!process.env.PUBLIC_URL) {
-    throw new Error(
-      "PUBLIC_URL is required in HTTP mode, e.g. PUBLIC_URL=https://mcp-arr.home.lan:3000 - " +
-      "the address you open in the browser. Passkeys need a host name (not an IP address); " +
-      "add it to your local DNS or hosts file."
-    );
-  }
-  let publicUrl: URL;
-  try {
-    publicUrl = new URL(process.env.PUBLIC_URL);
-  } catch {
-    throw new Error(`PUBLIC_URL '${process.env.PUBLIC_URL}' is not a valid URL`);
-  }
-  const hostname = publicUrl.hostname.replace(/^\[|\]$/g, '');
-  if (isIP(hostname)) {
-    throw new Error(`PUBLIC_URL must use a host name, not an IP address (${hostname}): passkeys cannot be bound to IP addresses. Add a name such as mcp-arr.home.lan to your local DNS or hosts file.`);
-  }
-  if (publicUrl.protocol !== 'https:' && hostname !== 'localhost') {
-    throw new Error('PUBLIC_URL must start with https:// (MCP clients and passkeys require HTTPS)');
-  }
-
   const store = new ConfigStore({
     path: process.env.CONFIG_PATH || resolvePath(process.cwd(), 'config', 'config.json'),
     allowAutoKey: true,
@@ -3953,42 +3932,82 @@ async function main() {
   applyConfig(store.getEffective());
   if (store.path) stats.attachFile(joinPath(dirname(store.path), 'stats.json'));
 
-  const [{ startHttpServer }, { Auth }, { buildRuntime, testSettings }, { mergedEnv }] = await Promise.all([
+  const [{ startHttpServer }, { Auth }, { buildRuntime, buildRuntimeOrFallback, testSettings, validateSettings }, { mergedEnv, validatePublicUrl }] = await Promise.all([
     import("./http-server.js"),
     import("./auth.js"),
     import("./runtime.js"),
     import("./settings.js"),
   ]);
-
-  // Settings from the web UI (encrypted config), overridden by environment variables
-  const env = mergedEnv(store.getSettings(), process.env);
+  const port = Number(process.env.PORT || 3000);
+  const listenHost = process.env.HOST || '0.0.0.0';
   const mcpPath = process.env.MCP_PATH || '/mcp';
-  const ctx = { store, publicUrl, hostname, listenHost: process.env.HOST || '0.0.0.0', mcpPath };
-  const runtime = await buildRuntime(ctx, env);
 
-  const auth = new Auth({
-    store,
-    rpID: hostname,
-    origin: publicUrl.origin,
-    recoveryEnabled: process.env.ADMIN_RECOVERY === 'true',
-  });
+  // Runs until PUBLIC_URL is changed in the web UI, then starts again with the new address
+  for (;;) {
+    // Settings from the web UI (encrypted config), overridden by environment variables
+    const env = mergedEnv(store.getSettings(), process.env);
+    let publicUrl: URL | undefined;
+    let setupReason = '';
+    if (env.PUBLIC_URL) {
+      try {
+        publicUrl = validatePublicUrl(env.PUBLIC_URL);
+      } catch (error) {
+        setupReason = `${error instanceof Error ? error.message : String(error)}${process.env.PUBLIC_URL ? ' (environment variable PUBLIC_URL)' : ''}`;
+      }
+    } else {
+      setupReason = 'PUBLIC_URL is not set';
+    }
+    const setup = !publicUrl;
+    if (setup) {
+      // Setup mode: reachable by IP / container name with a temporary certificate and password
+      // sign-in, so the admin can set PUBLIC_URL in the web UI.
+      publicUrl = new URL(`https://localhost:${port}`);
+    }
+    const hostname = publicUrl!.hostname.replace(/^\[|\]$/g, '');
+    const ctx = { store, publicUrl: publicUrl!, hostname, listenHost, mcpPath, setup, setupNames: localNames() };
+    const runtime = await buildRuntimeOrFallback(ctx, env);
 
-  await startHttpServer({
-    store,
-    auth,
-    runtime,
-    reconfigure: (stored, previous) => buildRuntime(ctx, mergedEnv(stored, process.env), previous),
-    testSettings: (stored, log) => testSettings(ctx, mergedEnv(stored, process.env), log),
-    env: process.env,
-    publicUrl,
-    port: Number(process.env.PORT || 3000),
-    host: ctx.listenHost,
-    createServer: (caller?: CallContext) => buildServer(caller),
-    mcpPath,
-    serverVersion: SERVER_VERSION,
-    onConfigChanged: () => applyConfig(store.getEffective()),
-    getConfiguredSummary: () => statusParts,
-  });
+    const auth = new Auth({
+      store,
+      rpID: hostname,
+      origin: publicUrl!.origin,
+      recoveryEnabled: process.env.ADMIN_RECOVERY === 'true',
+    });
+
+    let restart!: () => void;
+    const restartRequested = new Promise<void>(resolve => (restart = resolve));
+    const handle = await startHttpServer({
+      store,
+      auth,
+      runtime,
+      setupReason: setup ? setupReason : undefined,
+      reconfigure: (stored, previous) => buildRuntime(ctx, mergedEnv(stored, process.env), previous),
+      validateForUrl: (stored, url) => validateSettings({ ...ctx, setup: false, publicUrl: url, hostname: url.hostname }, mergedEnv(stored, process.env)),
+      testSettings: (stored, log) => testSettings(ctx, mergedEnv(stored, process.env), log),
+      requestRestart: () => restart(),
+      env: process.env,
+      publicUrl: publicUrl!,
+      port,
+      host: listenHost,
+      createServer: (caller?: CallContext) => buildServer(caller),
+      mcpPath,
+      serverVersion: SERVER_VERSION,
+      onConfigChanged: () => applyConfig(store.getEffective()),
+      getConfiguredSummary: () => statusParts,
+    });
+    await restartRequested;
+    await handle.stop();
+    console.error('Restarting with the new PUBLIC_URL ...');
+  }
+}
+
+/** This machine's host name, localhost and its IP addresses (for the setup-mode certificate). */
+function localNames(): string[] {
+  const names = new Set<string>(['localhost', osHostname().toLowerCase(), '127.0.0.1', '::1']);
+  for (const list of Object.values(networkInterfaces())) {
+    for (const a of list ?? []) if (!a.internal && !a.address.startsWith('fe80')) names.add(a.address);
+  }
+  return [...names].filter(Boolean);
 }
 
 main().catch((error) => {

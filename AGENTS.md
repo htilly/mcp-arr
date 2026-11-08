@@ -61,7 +61,7 @@ node dist/index.js
 | BAZARR_API_KEY | For Bazarr | API key from Bazarr settings |
 | ARR_READ_ONLY | No | `true` hides and blocks tools that change state |
 | MCP_TRANSPORT | No | `stdio` (default) or `http` (HTTPS server + web UI) |
-| PUBLIC_URL | HTTP mode | Browser URL, e.g. https://mcp-arr.home.lan:3000 (host name, not IP - passkeys) |
+| PUBLIC_URL | HTTP mode | Browser URL, e.g. https://mcp-arr.home.lan:3000 (host name, not IP - passkeys). Also settable in the web UI (restarts in-process); unset = setup mode (temporary cert, passwords only) |
 | PORT / HOST / MCP_PATH | No | Listen address and MCP path (default 3000 / 0.0.0.0 / /mcp) |
 | TLS_MODE | No | `internal` (built-in CA, default), `file`, `acme` (Let's Encrypt), `off` |
 | ACME_* | TLS_MODE=acme | `ACME_EMAIL`, `ACME_STAGING`, `ACME_DOMAINS`, `ACME_CHALLENGE` (http-01/dns-01), `ACME_HTTP_PORT`, `ACME_DNS_PROVIDER` (cloudflare/acme-dns/exec) + provider vars, `ACME_DIRECTORY_URL`, `ACME_EAB_*` - see README |

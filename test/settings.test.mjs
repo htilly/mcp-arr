@@ -50,16 +50,17 @@ function seed(settings) {
   return { dir, configPath };
 }
 
-function start(env) {
-  const port = 36000 + Math.floor(Math.random() * 1000);
+function start(env, port = 36000 + Math.floor(Math.random() * 1000)) {
+  const full = { PATH: process.env.PATH, MCP_TRANSPORT: "http", HOST: "127.0.0.1", PORT: String(port), CONFIG_ENCRYPTION_KEY: KEY, PUBLIC_URL: `https://mcp.example.com:${port}`, ...env };
+  for (const k of Object.keys(full)) if (full[k] === undefined) delete full[k];
   const child = spawn(process.execPath, ["dist/index.js"], {
     cwd: new URL("..", import.meta.url),
-    env: { PATH: process.env.PATH, MCP_TRANSPORT: "http", HOST: "127.0.0.1", PORT: String(port), CONFIG_ENCRYPTION_KEY: KEY, PUBLIC_URL: `https://mcp.example.com:${port}`, ...env },
+    env: full,
     stdio: ["ignore", "ignore", "pipe"],
   });
   let out = "";
   child.stderr.setEncoding("utf8").on("data", (c) => (out += c));
-  return { port, child, out: () => out, origin: `https://mcp.example.com:${port}` };
+  return { port, child, out: () => out, origin: full.PUBLIC_URL ? new URL(full.PUBLIC_URL).origin : `https://127.0.0.1:${port}` };
 }
 
 async function stop(s) {
@@ -73,10 +74,11 @@ function call(s, secure, path, { method = "GET", body, cookie } = {}) {
   return new Promise((resolve, reject) => {
     const data = body === undefined ? undefined : JSON.stringify(body);
     const req = (secure ? httpsRequest : httpRequest)({
-      host: "127.0.0.1", port: s.port, path, method, rejectUnauthorized: false, servername: "mcp.example.com",
+      host: "127.0.0.1", port: s.port, path, method, agent: false, rejectUnauthorized: false, servername: new URL(s.origin).hostname === "127.0.0.1" ? undefined : new URL(s.origin).hostname,
       headers: { "Content-Type": "application/json", Origin: s.origin, ...(cookie ? { Cookie: cookie } : {}), ...(data ? { "Content-Length": Buffer.byteLength(data) } : {}) },
     }, (res) => {
-      const issuer = secure ? res.socket?.getPeerCertificate?.()?.issuer?.CN : undefined;
+      const peer = secure ? res.socket?.getPeerCertificate?.() : undefined;
+      const issuer = peer?.issuer ? `${peer.issuer.CN ?? ""} ${peer.issuer.O ?? ""}`.trim() : undefined;
       let text = "";
       res.setEncoding("utf8").on("data", (c) => (text += c)).on("end", () => {
         let json;
@@ -177,6 +179,77 @@ test("settings are saved, validated, tested and applied live - including HTTP <-
     s = start({ CONFIG_PATH: configPath });
     await until(async () => (await call(s, true, "/health")).status === 200, 15000, "https after restart");
     assert.match(s.out(), /built-in CA/);
+  } finally {
+    await stop(s);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("setup mode: starts without PUBLIC_URL, passwords only, then PUBLIC_URL is set in the web UI and the server restarts on it", { timeout: 60_000 }, async () => {
+  const { dir, configPath } = seed();
+  let s = start({ CONFIG_PATH: configPath, PUBLIC_URL: undefined });
+  try {
+    await until(async () => (await call(s, true, "/health")).status === 200, 15000, "server in setup mode");
+    let st = (await call(s, true, "/admin/api/state")).json;
+    assert.equal(st.setupMode, true);
+    assert.match(st.setupReason, /PUBLIC_URL is not set/);
+    const health = await call(s, true, "/health");
+    assert.match(health.issuer, /temporary/, "temporary self-signed certificate");
+    assert.equal(health.headers["strict-transport-security"], undefined, "no HSTS for a temporary certificate");
+
+    // Passkeys are off, passwords work; the page's own address is the allowed origin
+    assert.equal((await call(s, true, "/admin/api/login/options", { method: "POST", body: {} })).status, 400);
+    const cookie = await login(s, true);
+    const ui = (path, opts = {}) => call(s, true, `/admin/api${path}`, { cookie, ...opts });
+    const ov = (await ui("/overview")).json;
+    assert.match(ov.setup.reason, /PUBLIC_URL/);
+    assert.equal(ov.oauth.enabled, false);
+    assert.equal(ov.settings.values.PUBLIC_URL.value, "");
+
+    // Invalid addresses are refused
+    let r = await ui("/settings", { method: "PUT", body: { values: { PUBLIC_URL: "https://192.168.1.10:3000" } } });
+    assert.equal(r.status, 400);
+    assert.match(r.json.error, /host name, not an IP/);
+    assert.equal((await ui("/settings", { method: "PUT", body: { values: { PUBLIC_URL: "http://mcp.example.com" } } })).status, 400);
+
+    // Set it: the server restarts on the new address with the built-in CA
+    r = await ui("/settings", { method: "PUT", body: { values: { PUBLIC_URL: `https://mcp.example.com:${s.port}` } } });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.restart, true);
+    assert.equal(r.json.reloadUrl, `https://mcp.example.com:${s.port}/admin`);
+    const named = { ...s, origin: `https://mcp.example.com:${s.port}` };
+    await until(async () => (await call(named, true, "/admin/api/state")).json?.setupMode === false, 15000, "restart with PUBLIC_URL");
+    assert.match((await call(named, true, "/health")).issuer, /mcp-arr local CA/);
+    assert.match(s.out(), /PUBLIC_URL changed in the web UI by Alice/);
+    // The old (setup) origin is no longer accepted
+    assert.equal((await call(s, true, "/admin/api/login/password", { method: "POST", body: { name: "Alice", password: "correct horse battery" } })).status, 403);
+    const cookie2 = await login(named, true);
+    assert.equal((await call(named, true, "/admin/api/overview", { cookie: cookie2 })).json.settings.values.PUBLIC_URL.source, "file");
+
+    // Saved, so it survives a restart without the environment variable
+    await stop(s);
+    s = start({ CONFIG_PATH: configPath, PUBLIC_URL: undefined }, s.port);
+    const again = { ...s, origin: `https://mcp.example.com:${s.port}` };
+    await until(async () => (await call(again, true, "/admin/api/state")).json?.setupMode === false, 15000, "restart from saved PUBLIC_URL");
+  } finally {
+    await stop(s);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("saved settings that cannot be used do not stop the server", { timeout: 30_000 }, async () => {
+  const { dir, configPath } = seed({ TLS_MODE: "file", TLS_CERT_FILE: "/nonexistent/cert.pem", TLS_KEY_FILE: "/nonexistent/key.pem" });
+  const s = start({ CONFIG_PATH: configPath });
+  try {
+    await until(async () => (await call(s, true, "/health")).status === 200, 15000, "server with broken settings");
+    assert.match((await call(s, true, "/health")).issuer, /temporary/);
+    const cookie = await login(s, true);
+    const ov = (await call(s, true, "/admin/api/overview", { cookie })).json;
+    assert.match(ov.tls.lastError, /could not be used: TLS_CERT_FILE \/nonexistent\/cert.pem does not exist/);
+    // ... and can be fixed in the web UI
+    const r = await call(s, true, "/admin/api/settings", { method: "PUT", cookie, body: { values: { TLS_MODE: "internal" } } });
+    assert.equal(r.status, 200, r.text);
+    await until(async () => /mcp-arr local CA/.test((await call(s, true, "/health")).issuer), 10000, "fixed");
   } finally {
     await stop(s);
     rmSync(dir, { recursive: true, force: true });
