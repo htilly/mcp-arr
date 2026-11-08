@@ -12,7 +12,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 
 /** Tool name prefixes that belong to a configurable service. Anything else counts as 'core'. */
-const SERVICE_PREFIXES = ['sonarr', 'radarr', 'lidarr', 'prowlarr', 'tautulli', 'overseerr', 'bazarr'];
+const SERVICE_PREFIXES = ['sonarr', 'radarr', 'lidarr', 'prowlarr', 'tautulli', 'overseerr', 'bazarr', 'maintainerr'];
 
 export function serviceForTool(tool: string): string {
   const prefix = tool.split('_')[0];

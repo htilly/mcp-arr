@@ -36,7 +36,8 @@ export type ServiceId =
   | 'prowlarr'
   | 'tautulli'
   | 'overseerr'
-  | 'bazarr';
+  | 'bazarr'
+  | 'maintainerr';
 
 export interface ServiceDef {
   id: ServiceId;
@@ -53,6 +54,7 @@ export const SERVICE_DEFS: ServiceDef[] = [
   { id: 'tautulli', displayName: 'Tautulli (Plex)', envPrefix: 'TAUTULLI', exampleUrl: 'http://localhost:8181' },
   { id: 'overseerr', displayName: 'Overseerr (Requests)', envPrefix: 'OVERSEERR', exampleUrl: 'http://localhost:5055' },
   { id: 'bazarr', displayName: 'Bazarr (Subtitles)', envPrefix: 'BAZARR', exampleUrl: 'http://localhost:6767' },
+  { id: 'maintainerr', displayName: 'Maintainerr (Cleanup)', envPrefix: 'MAINTAINERR', exampleUrl: 'http://localhost:6246' },
 ];
 
 export function isServiceId(value: string): value is ServiceId {

@@ -17,6 +17,7 @@ const CONFIRM_REQUIRED_TOOLS = new Set([
   "tautulli_terminate_session",
   "overseerr_approve_request",
   "overseerr_decline_request",
+  "maintainerr_handle_collections",
 ]);
 
 /**
@@ -43,6 +44,11 @@ const WRITE_TOOLS = new Set([
   "bazarr_download_episode_subtitle",
   "bazarr_download_movie_subtitle",
   "bazarr_reset_providers",
+  "maintainerr_run_rules",
+  "maintainerr_postpone_deletion",
+  "maintainerr_exclude_media",
+  "maintainerr_remove_exclusion",
+  "maintainerr_remove_from_collection",
 ]);
 
 export function isWriteTool(name: string): boolean {
@@ -73,6 +79,7 @@ interface PropertySchema {
   type?: string;
   enum?: unknown[];
   minimum?: number;
+  maximum?: number;
   items?: PropertySchema;
 }
 
@@ -81,6 +88,7 @@ function describeProblem(value: unknown, schema: PropertySchema): string | undef
     case "integer":
       if (typeof value !== "number" || !Number.isSafeInteger(value)) return "must be an integer";
       if (schema.minimum !== undefined && value < schema.minimum) return `must be at least ${schema.minimum}`;
+      if (schema.maximum !== undefined && value > schema.maximum) return `must be at most ${schema.maximum}`;
       break;
     case "string":
       if (typeof value !== "string") return "must be a string";
