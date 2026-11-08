@@ -30,6 +30,7 @@ import { OAuthError } from './oauth.js';
 import type { Runtime, TestResult } from './runtime.js';
 import { SETTING_DEFS, STARTUP_KEYS, effectiveSettings, isSettingKey, normaliseSetting, settingDef, validatePublicUrl } from './settings.js';
 import { stats, CallEvent, CallContext, LoginMethod } from './stats.js';
+import { isBlockedServiceHost, urlOrigin } from './security.js';
 
 export interface HttpServerOptions {
   store: ConfigStore;
@@ -68,6 +69,8 @@ class HttpError extends Error {
 const MAX_BODY_BYTES = 1024 * 1024;
 const RATE_WINDOW_MS = 15 * 60 * 1000;
 const RATE_MAX_FAILURES = 10;
+/** Failed password logins per account name (any source address) before it is throttled. */
+const RATE_MAX_ACCOUNT_FAILURES = 20;
 const TEST_TIMEOUT_MS = 10_000;
 const SESSION_COOKIE = '__Host-marr_session';
 const REGISTER_MAX = 20;
@@ -160,10 +163,17 @@ export async function testServiceConnection(
     })(), TEST_TIMEOUT_MS);
     return { ok: true, version };
   } catch (error) {
-    const err = error as Error & { cause?: { code?: string; message?: string } };
-    const detail = err.cause?.code || err.cause?.message;
-    const message = `${err.message}${detail && !err.message.includes(detail) ? ` (${detail})` : ''}`;
-    return { ok: false, error: message.slice(0, 300) };
+    // Never echo the upstream body: the test must not work as a way to read other hosts.
+    const err = error as Error & { cause?: { code?: string } };
+    const status = /API error: (\d{3})/.exec(err.message)?.[1];
+    let message: string;
+    if (status === '401' || status === '403') message = `HTTP ${status} - check the API key`;
+    else if (status) message = `HTTP ${status} - is this the right address?`;
+    else if (err.cause?.code) message = `Could not connect (${String(err.cause.code).slice(0, 40)})`;
+    else if (/^Timed out/.test(err.message)) message = err.message;
+    else if (err.name === 'SyntaxError') message = 'The address answered, but not like this service\'s API';
+    else message = 'Connection failed';
+    return { ok: false, error: message };
   }
 }
 
@@ -197,31 +207,47 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
 
   function clientIp(req: IncomingMessage): string {
     if (rt.trustProxy) {
-      const fwd = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim();
+      // A proxy appends the address it saw to the right of whatever the client sent, so the
+      // left-most entries are client-controlled. Use the right-most one: the address our proxy saw.
+      const fwd = (req.headers['x-forwarded-for'] as string | undefined)?.split(',').map(p => p.trim()).filter(Boolean).pop();
       if (fwd) return fwd;
     }
     return req.socket.remoteAddress ?? 'unknown';
   }
 
-  function rateLimited(req: IncomingMessage): boolean {
-    const f = failures.get(clientIp(req));
-    return Boolean(f && f.count >= RATE_MAX_FAILURES && Date.now() - f.first < RATE_WINDOW_MS);
+  /** Rate-limit buckets: the client address, plus e.g. the account name for password logins. */
+  function rateKeys(req: IncomingMessage, account?: string): Array<{ key: string; max: number }> {
+    const keys = [{ key: clientIp(req), max: RATE_MAX_FAILURES }];
+    const name = account?.trim().toLowerCase();
+    if (name) keys.push({ key: `account:${name}`, max: RATE_MAX_ACCOUNT_FAILURES });
+    return keys;
   }
 
-  function recordFailure(req: IncomingMessage): void {
-    const ip = clientIp(req);
-    const f = failures.get(ip);
-    if (!f || Date.now() - f.first > RATE_WINDOW_MS) failures.set(ip, { count: 1, first: Date.now() });
-    else f.count++;
+  function rateLimited(req: IncomingMessage, account?: string): boolean {
+    return rateKeys(req, account).some(({ key, max }) => {
+      const f = failures.get(key);
+      return Boolean(f && f.count >= max && Date.now() - f.first < RATE_WINDOW_MS);
+    });
   }
 
-  /** Run an auth step; count failures for rate limiting. */
-  async function guarded<T>(req: IncomingMessage, fn: () => Promise<T>): Promise<T> {
-    if (rateLimited(req)) throw new HttpError(429, 'Too many failed attempts - try again later');
+  function recordFailure(req: IncomingMessage, account?: string): void {
+    for (const { key } of rateKeys(req, account)) {
+      const f = failures.get(key);
+      if (!f || Date.now() - f.first > RATE_WINDOW_MS) failures.set(key, { count: 1, first: Date.now() });
+      else f.count++;
+    }
+  }
+
+  /**
+   * Run an auth step; count failures for rate limiting. `account` adds a per-account bucket,
+   * so rotating source addresses does not give unlimited password guesses for one user.
+   */
+  async function guarded<T>(req: IncomingMessage, fn: () => Promise<T>, account?: string): Promise<T> {
+    if (rateLimited(req, account)) throw new HttpError(429, 'Too many failed attempts - try again later');
     try {
       return await fn();
     } catch (error) {
-      if (error instanceof AuthError && (error.status === 401 || error.status === 403)) recordFailure(req);
+      if (error instanceof AuthError && (error.status === 401 || error.status === 403)) recordFailure(req, account);
       throw error;
     }
   }
@@ -259,7 +285,13 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
       return;
     }
     const body = req.method === 'POST' ? await readJson(req) : undefined;
-    const server = opts.createServer({ userId: found.user.id, name: found.user.name, client: found.tokenName });
+    const server = opts.createServer({
+      userId: found.user.id,
+      name: found.user.name,
+      client: found.tokenName,
+      // Only admins may change state through MCP; role user gets read-only tools.
+      readOnly: found.user.role !== 'admin',
+    });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       void transport.close();
@@ -640,7 +672,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
     }
 
     if (setupMode && (path === '/register/options' || path === '/register/verify' || path === '/login/options' || path === '/login/verify')) {
-      throw new HttpError(400, 'Passkeys need a host name: set PUBLIC_URL first (Settings tab). Use a password until then.');
+      throw new HttpError(400, 'Passkeys need a host name: set PUBLIC_URL first (Server → Public address). Use a password until then.');
     }
 
     if (path === '/register/options' && method === 'POST') {
@@ -696,7 +728,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
       const name = str(body.name) ?? '';
       let user: StoredUser;
       try {
-        user = await guarded(req, async () => auth.loginWithPassword(name, typeof body.password === 'string' ? body.password : ''));
+        user = await guarded(req, async () => auth.loginWithPassword(name, typeof body.password === 'string' ? body.password : ''), name);
       } catch (error) {
         // count wrong passwords against an existing account, so its owner can see them
         const target = store.listUsers().find(u => u.name.toLowerCase() === name.trim().toLowerCase());
@@ -850,8 +882,17 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
       if (serviceMatch[2] && method === 'POST') {
         const body = await readJson(req);
         const url = (str(body.url) || effective.url || '').trim();
-        const apiKey = (str(body.apiKey) || effective.apiKey || '').trim();
-        if (!url || !apiKey) throw new HttpError(400, 'URL and API key are required to test');
+        const typedKey = (str(body.apiKey) ?? '').trim();
+        // The saved key only goes to the saved address: testing another host needs the key typed in.
+        const savedKeyAllowed = urlOrigin(url) !== undefined && urlOrigin(url) === urlOrigin(effective.url);
+        const apiKey = typedKey || (savedKeyAllowed ? (effective.apiKey ?? '').trim() : '');
+        if (!url) throw new HttpError(400, 'URL is required to test');
+        if (!apiKey) {
+          throw new HttpError(400, effective.apiKey && !savedKeyAllowed
+            ? 'Enter the API key to test a new address - the saved key is only sent to the saved address'
+            : 'URL and API key are required to test');
+        }
+        if (isBlockedServiceHost(url)) throw new HttpError(400, 'That address is link-local / cloud metadata and cannot be used for a service');
         sendJson(res, 200, await testServiceConnection(id, url, apiKey));
         return;
       }
@@ -862,6 +903,16 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
         if (body.url !== undefined) {
           if (effective.urlSource === 'env') throw new HttpError(409, 'URL is set by an environment variable');
           update.url = str(body.url) ?? '';
+          if (update.url && isBlockedServiceHost(update.url)) {
+            throw new HttpError(400, 'That address is link-local / cloud metadata and cannot be used for a service');
+          }
+          // Moving a saved key to another host needs the key typed in again, so a hijacked
+          // admin session cannot redirect stored keys to a server it controls.
+          const movesKey = update.url && effective.apiKey && effective.apiKeySource === 'file'
+            && urlOrigin(update.url) !== urlOrigin(effective.url);
+          if (movesKey && !(str(body.apiKey) ?? '').trim()) {
+            throw new HttpError(400, 'Enter the API key again when changing the service address');
+          }
         }
         if (body.apiKey !== undefined) {
           if (effective.apiKeySource === 'env') throw new HttpError(409, 'API key is set by an environment variable');
@@ -1123,7 +1174,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
     console.error('  ================================================');
     console.error(`  SETUP MODE: ${opts.setupReason}.`);
     console.error(`  Open ${serverIsHttps ? 'https' : 'http'}://<this server's IP or name>:${opts.port}/admin (accept the temporary certificate),`);
-    console.error('  sign in with a password and set the public address under Settings.');
+    console.error('  sign in with a password and set the public address under Server → Public address.');
     console.error('  Passkeys and OAuth are off until then.');
     console.error('  ================================================');
     console.error('');

@@ -109,6 +109,68 @@ test("HTTP transport serves clients that omit the session header (stateless) and
   assert.doesNotMatch(server.stderr(), /Fatal error/);
 });
 
+test("role user gets read-only MCP tools; admins keep write tools", async () => {
+  const { dir, configPath, token: adminToken } = seedConfig();
+  const store = new ConfigStore({ path: configPath, allowAutoKey: false, env: { CONFIG_ENCRYPTION_KEY: ENCRYPTION_KEY } });
+  store.load();
+  const plain = store.createUser("Viewer", "user", { id: "dmlld2VyLWNyZWQ", publicKey: "AA", counter: 0, name: "viewer" }, "dmlld2VyLWhhbmRsZQ");
+  const { token: userToken } = store.createToken(plain.id, "viewer client");
+  const server = startServer((port) => ({
+    TLS_MODE: "off",
+    PUBLIC_URL: `http://localhost:${port}`,
+    CONFIG_PATH: configPath,
+    SONARR_URL: "http://127.0.0.1:9",
+    SONARR_API_KEY: "dummy",
+  }));
+
+  try {
+    await waitForHealth(server.port);
+    const list = async (token) => (await postMcp(server.port, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }, { token })).text();
+    assert.match(await list(adminToken), /sonarr_delete_series/);
+    const userTools = await list(userToken);
+    assert.match(userTools, /sonarr_get_series/);
+    assert.doesNotMatch(userTools, /sonarr_delete_series/);
+
+    const call = await postMcp(server.port, {
+      jsonrpc: "2.0", id: 3, method: "tools/call",
+      params: { name: "sonarr_delete_series", arguments: { seriesId: 1, confirm: true } },
+    }, { token: userToken });
+    assert.match(await call.text(), /needs an admin account/);
+  } finally {
+    await stopServer(server);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("TRUST_PROXY rate limiting ignores client-supplied X-Forwarded-For entries and throttles per account", async () => {
+  const { dir, configPath } = seedConfig();
+  const server = startServer((port) => ({
+    TLS_MODE: "off",
+    PUBLIC_URL: `http://localhost:${port}`,
+    CONFIG_PATH: configPath,
+    TRUST_PROXY: "true",
+  }));
+  const login = (xff, name = "Test") => fetch(`http://127.0.0.1:${server.port}/admin/api/login/password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: `http://localhost:${server.port}`, "X-Forwarded-For": xff },
+    body: JSON.stringify({ name, password: "wrong-password-123" }),
+  });
+
+  try {
+    await waitForHealth(server.port);
+    // A rotating spoofed left-most entry, same real client appended by the proxy.
+    for (let i = 0; i < 10; i++) assert.notEqual((await login(`10.0.0.${i}, 203.0.113.7`, `nobody${i}`)).status, 429);
+    assert.equal((await login("10.9.9.9, 203.0.113.7", "nobody-x")).status, 429);
+
+    // A single account is throttled even from many different addresses.
+    for (let i = 0; i < 20; i++) assert.notEqual((await login(`198.51.100.${i}`)).status, 429);
+    assert.equal((await login("198.51.100.250")).status, 429);
+  } finally {
+    await stopServer(server);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a malformed request target gets 400 and does not stop the server", async () => {
   const { dir, configPath } = seedConfig();
   const server = startServer((port) => ({

@@ -1872,24 +1872,29 @@ async function getPaginatedQueue(
 // stdio).
 function registerHandlers(server: Server, caller?: CallContext): void {
 // Handle list tools request
+// Non-admin web UI users get read-only tools, whatever ARR_READ_ONLY says.
+const callerReadOnly = caller?.readOnly === true;
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools: readOnly ? TOOLS.filter(t => !isWriteTool(t.name)) : TOOLS };
+  return { tools: readOnly || callerReadOnly ? TOOLS.filter(t => !isWriteTool(t.name)) : TOOLS };
 });
 
 // Handle tool calls
 // Every call is counted for the web UI status board (see stats.ts).
 server.setRequestHandler(CallToolRequestSchema, (request) =>
-  stats.track(request.params.name, caller, () => callTool(request.params))
+  stats.track(request.params.name, caller, () => callTool(request.params, callerReadOnly))
 );
 }
 
-async function callTool(params: { name: string; arguments?: Record<string, unknown> }) {
+async function callTool(params: { name: string; arguments?: Record<string, unknown> }, callerReadOnly = false) {
   const { name } = params;
   const args = params.arguments ?? {};
 
   try {
     if (readOnly && isWriteTool(name)) {
       throw new Error(`${name} is disabled because ARR_READ_ONLY is set`);
+    }
+    if (callerReadOnly && isWriteTool(name)) {
+      throw new Error(`${name} changes state and needs an admin account - your account has the user role (read-only tools)`);
     }
     const tool = TOOLS.find(t => t.name === name);
     if (tool) {
