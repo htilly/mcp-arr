@@ -159,6 +159,34 @@ export function validateServiceUrl(envName: string, url: string): void {
   }
 }
 
+/**
+ * Cloud metadata and link-local addresses. A service URL never needs these, and
+ * pointing one there would hand the response (and the API key) to the metadata API.
+ * Loopback and private LAN ranges stay allowed: reaching them is the point.
+ */
+export function isBlockedServiceHost(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  } catch {
+    return false;
+  }
+  if (/^169\.254\.\d{1,3}\.\d{1,3}$/.test(host)) return true; // IPv4 link-local (AWS/GCP/Azure metadata)
+  if (/^fe[89ab][0-9a-f]?:/.test(host)) return true; // IPv6 link-local
+  if (/^::ffff:(169\.254\.|a9fe:)/.test(host)) return true; // IPv4-mapped link-local
+  if (host === "fd00:ec2::254" || host === "100.100.100.200") return true; // AWS IPv6 / Alibaba metadata
+  return host === "metadata.google.internal" || host === "metadata" || host === "instance-data";
+}
+
+/** Origin of a URL, or undefined when it does not parse. */
+export function urlOrigin(url: string | undefined): string | undefined {
+  try {
+    return url ? new URL(url).origin : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Build a function that removes API keys from text sent back to the client. */
 export function createRedactor(secrets: Array<string | undefined>): (text: string) => string {
   const known = secrets.filter((s): s is string => Boolean(s));

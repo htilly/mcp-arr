@@ -25,6 +25,8 @@ export interface CallContext {
   name: string;
   /** Access token name, e.g. "Claude Desktop" or "OAuth: Claude". */
   client?: string;
+  /** Only read-only tools may be listed and called (non-admin users). */
+  readOnly?: boolean;
 }
 
 export interface CallEvent {

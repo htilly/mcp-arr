@@ -186,7 +186,7 @@ Run mcp-arr **once** on your server (e.g. next to Sonarr/Radarr) and point all M
 
 - **HTTPS without Let's Encrypt** – a built-in certificate authority issues and renews the server certificate offline. You install its root certificate once per device. The CA is *name-constrained* to your server's names, so it cannot be abused to impersonate other websites. You can also bring your own certificate (step-ca, Caddy, your router, …).
 - **Encrypted at rest** – the whole config file (API keys, users, passkeys, token hashes, CA private keys) is AES-256-GCM encrypted.
-- **Per-user login with passkeys or name + password** – roles: *admin* (services, users, invites, certificates) and *user* (own sign-in methods and access tokens). Passwords are scrypt-hashed inside the encrypted config; a user can have a password, passkeys, or both.
+- **Per-user login with passkeys or name + password** – roles: *admin* (services, users, invites, certificates; all tools) and *user* (own sign-in methods and access tokens; read-only tools only). Passwords are scrypt-hashed inside the encrypted config; a user can have a password, passkeys, or both.
 - **Per-user MCP access tokens** – every client gets its own token, revocable at any time.
 
 > **Claude custom connectors** (claude.ai, mobile, Desktop "Connectors") are called from Anthropic's cloud and need a public internet address with OAuth, so they can't reach an offline server. Use **Claude Code** or **Claude Desktop via `mcp-remote`** – both connect from your own machine.
@@ -234,18 +234,18 @@ Clients that can't send headers can use `https://…/mcp?token=<token>`. On an o
 
 #### Status board and brand guide
 
-The *Services* tab shows a live **status board**: calls per connection, success rate, response times, a 24-hour chart and a live feed. Each MCP tool call animates on the service sketch as it happens. Counts are stored in `stats.json` next to the config file (no tool arguments or results). Every user also gets a *My activity* tab with their own calls, apps (access tokens) and recent sign-ins (browser and OS only, no IP addresses). The *Brand* tab documents the UI's look - logo, colours, type, illustrations, components and motion - with a logo download and copyable CSS tokens.
+The web UI menu has two levels: **Media** (services and their configuration), **My account** (activity, connecting a client, access tokens, sign-in), **Users** (admins), **Server** (admins: address, certificates, connectors, security) and **About** (brand guide). The *Services* page shows a live **status board**: calls per connection, success rate, response times, a 24-hour chart and a live feed. Each MCP tool call animates on the service sketch as it happens. Counts are stored in `stats.json` next to the config file (no tool arguments or results). Every user also gets a *My activity* tab with their own calls, apps (access tokens) and recent sign-ins (browser and OS only, no IP addresses). The *Brand* tab documents the UI's look - logo, colours, type, illustrations, components and motion - with a logo download and copyable CSS tokens.
 
-#### Settings tab (no restart)
+#### Server settings (no restart)
 
-Admins can change the certificate mode and every certificate, Let's Encrypt, DNS-provider, OAuth and proxy setting in the web UI (*Settings* tab), instead of in the compose file:
+Admins can change the certificate mode and every certificate, Let's Encrypt, DNS-provider, OAuth and proxy setting in the web UI (*Server* menu: *Public address*, *Certificates & DNS*, *Connectors & proxy*, *Security*), instead of in the compose file. Unsaved changes are kept when you move between these pages and saved together:
 
 - **Test these settings** checks the form without applying anything and shows a live log. For Let's Encrypt it requests a real certificate from **Let's Encrypt staging** (no rate-limit risk, nothing trusted is issued) using the chosen validation - HTTP or DNS via Cloudflare/acme-dns - and throws it away. For acme-dns it shows the CNAME record to create. For own files it checks that certificate and key match, and it says whether a new built-in CA would be generated and whether OAuth would switch on.
 - **Save & apply** stores the values in the encrypted config file and switches immediately: new certificate manager, OAuth on/off, proxy trust. Switching between HTTPS and plain HTTP (`off`) re-opens the listener on the same port and the page reloads. When switching to Let's Encrypt, the current certificate keeps being served until the new one is issued (browsers that remember HSTS would refuse a temporary certificate).
 - Secrets (API tokens, HMAC keys) are never sent back to the browser - leave the field empty to keep the saved value.
 - **Environment variables always win**: a setting set in the environment is shown read-only with the variable's name. Remove it from your compose file to manage it in the UI. If a setting ever locks you out (e.g. `off` without a proxy), set `TLS_MODE` in the environment and restart.
 - **Public address (`PUBLIC_URL`)** can be set here too. Changing it restarts the server on the new address (in-process, a few seconds), after a confirmation that says how many passkeys will stop working - passkeys are bound to the host name - and which users have no password to fall back on. MCP clients and connectors must then use the new URL.
-- **Setup mode:** without a `PUBLIC_URL` (or with an invalid one) the server does not exit. It starts with a temporary self-signed certificate for its own host name and IP addresses (nothing is stored, an existing built-in CA is not touched), password sign-in only (no passkeys, no OAuth), and a banner pointing to *Settings → Public address*. Open `https://<server IP>:<port>/admin`, accept the certificate warning, create the admin with the setup code and a password, and set the address.
+- **Setup mode:** without a `PUBLIC_URL` (or with an invalid one) the server does not exit. It starts with a temporary self-signed certificate for its own host name and IP addresses (nothing is stored, an existing built-in CA is not touched), password sign-in only (no passkeys, no OAuth), and a banner pointing to *Server → Public address*. Open `https://<server IP>:<port>/admin`, accept the certificate warning, create the admin with the setup code and a password, and set the address.
 - Settings saved in the UI that cannot be used at startup (e.g. missing certificate files) no longer stop the server: it starts with a temporary certificate and shows the error in the *Certificates* tab, so you can fix it in the UI.
 - Only in the environment: `PORT`, `HOST`, `MCP_PATH`, the encryption key settings, and `ACME_DNS_HOOK` (a web UI admin must not be able to run programs on the server).
 
@@ -352,7 +352,7 @@ All `TLS_*`, `ACME_*`, DNS-provider and `OAUTH*` variables and `TRUST_PROXY` can
 | `CONFIG_ENCRYPTION_KEY` / `_FILE` / `_PREVIOUS` | – | Encryption key (see above) |
 | `KEY_FILE_PATH` | `/secrets/master.key` (Docker) | Fallback auto-generated key file |
 | `ADMIN_RECOVERY` | `false` | `true` prints a one-time recovery code to register a new admin passkey |
-| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` (only behind your own reverse proxy) |
+| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` (only behind your own reverse proxy). The right-most entry is used, i.e. the address your proxy saw |
 | `OAUTH` | `auto` | OAuth sign-in for Claude/OpenAI connectors: `auto` (only with a publicly trusted certificate setup, see above), `on` (force; you vouch for the certificate), `off` |
 | `OAUTH_ALLOWED_REDIRECT_HOSTS` | – | Extra redirect hosts connectors may use, comma-separated (defaults: claude.ai, claude.com, chatgpt.com, openai.com) |
 
@@ -430,6 +430,7 @@ Use your actual paths and API keys. Only include the services you use.
 
 ## Safety controls
 
+- **Roles (HTTP mode)**: tokens of *user*-role accounts only get read-only tools; tools that change state need an *admin* account.
 - **Read-only mode**: set `ARR_READ_ONLY=true` to hide and block every tool that changes state, including deletes, adds, updates, triggered searches, subtitle downloads, indexer tests and request approvals.
 - **Confirmation**: `sonarr_delete_series`, `sonarr_delete_season`, `sonarr_delete_episode_files`, `radarr_delete_movie`, `radarr_delete_queue_item`, `tautulli_terminate_session`, `overseerr_approve_request`, `overseerr_decline_request` and `maintainerr_handle_collections` fail unless called with `confirm: true`. This stops accidental calls, but a model can still set it, so use read-only mode or your client's tool approval prompts if you need a human in the loop. Tools carry `readOnlyHint` and `destructiveHint` annotations for clients that use them.
 - **File deletion**: `deleteFiles` defaults to `false`.

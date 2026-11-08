@@ -14,9 +14,8 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test",
-    "watch": "tsc --watch",
     "test": "node scripts/test.mjs",
+    "watch": "tsc --watch",
     "test:dummy": "node scripts/dummy_test.mjs",
     "start": "node dist/index.js",
     "sync-server-json": "node scripts/sync-server-json.mjs",
@@ -41,7 +40,7 @@
   "author": "Jim Christian",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@peculiar/asn1-schema": "2.11.1",
     "@peculiar/asn1-x509": "2.11.1",
     "@peculiar/x509": "2.2.0",

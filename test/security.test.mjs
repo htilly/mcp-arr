@@ -213,3 +213,13 @@ test('A-004: API keys are redacted from error text', async () => {
   assert.match(result.text, /\[REDACTED\]/);
   assert.ok(!result.text.includes(DUMMY_KEY));
 });
+
+test("isBlockedServiceHost blocks link-local and cloud metadata, allows LAN and loopback", async () => {
+  const { isBlockedServiceHost } = await import("../dist/security.js");
+  for (const url of ["http://169.254.169.254/latest", "http://[fe80::1]/", "http://metadata.google.internal/", "http://[::ffff:169.254.169.254]/"]) {
+    assert.equal(isBlockedServiceHost(url), true, url);
+  }
+  for (const url of ["http://192.168.1.5:8989", "http://localhost:8989", "http://sonarr:8989", "https://10.0.0.2"]) {
+    assert.equal(isBlockedServiceHost(url), false, url);
+  }
+});

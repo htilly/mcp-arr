@@ -41,6 +41,10 @@ main { max-width: 1100px; margin: 0 auto; padding: 22px 16px 60px; }
 nav.tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
 nav.tabs button { border-radius: 14px 18px 12px 16px / 16px 12px 18px 14px; }
 nav.tabs button.active { background: var(--sea-pale); border-color: var(--sea); box-shadow: 2px 3px 0 var(--sea); transform: translateY(-1px); }
+nav.tabs:has(+ nav.tabs.sub:not(.hidden)) { margin-bottom: 10px; }
+nav.tabs.sub { gap: 6px; padding-left: 14px; border-left: 3px solid var(--sea); }
+nav.tabs.sub button { font-size: 14px; padding: 5px 12px; box-shadow: none; }
+nav.tabs.sub button.active { box-shadow: 2px 2px 0 var(--sea); }
 section { margin-bottom: 28px; }
 h2 { font: 700 22px/1.2 var(--hand); margin: 0 0 12px; }
 h3 { font: 700 16px/1.3 var(--hand); margin: 16px 0 6px; }
@@ -633,7 +637,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
       fields.push(el('h3', { text: 'Passkey (recommended)' }), el('label', { text: 'Name for this passkey' }), keyName, el('div', { class: 'row' }, [pkBtn]));
     } else {
       fields.push(el('div', { class: 'msg warn', text: setupMode
-        ? 'Setup mode: the public address (PUBLIC_URL) is not set yet, so passkeys are not available. Use a password now; after setting the address under Settings you can add a passkey.'
+        ? 'Setup mode: the public address (PUBLIC_URL) is not set yet, so passkeys are not available. Use a password now; after setting the address under Server → Public address you can add a passkey.'
         : 'Passkeys are not available on this page (it needs trusted HTTPS on the configured host name). You can use a password for now.' }));
     }
     fields.push(el('h3', { text: pk ? 'Or use a password' : 'Password' }), el('label', { text: 'Password' }), password, el('label', { text: 'Repeat password' }), password2, el('div', { class: 'row' }, [pwBtn]), msg);
@@ -1022,15 +1026,16 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
       ])])]));
     }
     if (t.lastError) items.push(el('div', { class: 'msg err', text: t.lastError }));
-    if (d.me.role === 'admin') items.push(el('p', { class: 'note' }, ['Change the certificate mode (built-in CA, Let’s Encrypt, own files, reverse proxy) under ', el('button', { class: 'link', text: 'Settings', onclick: function () { currentTab = 'settings'; if (redrawNow) redrawNow(); } }), '.']));
-    return el('section', null, [el('h2', { text: 'Certificates' }), el('div', { class: 'panel' }, items)]);
+    if (d.me.role === 'admin') items.push(el('p', { class: 'note', text: 'Change the certificate mode (built-in CA, Let’s Encrypt, own files, reverse proxy) further down on this page.' }));
+    return el('section', null, [el('h2', { text: 'Certificate in use' }), el('div', { class: 'panel' }, items)]);
   }
 
   // ---------- Settings (admin) ----------
 
   var settingsDraft = null; // unsaved form values, kept across redraws: key -> string | null (null = reset)
 
-  function viewSettings(d, redraw) {
+  // page: 'address' | 'certificates' | 'connectors' | 'startup'. The draft is shared, so changes on one page are saved together with the others.
+  function viewSettings(d, redraw, page) {
     var S = d.settings;
     if (!S) return el('section', null, [el('h2', { text: 'Settings' }), el('div', { class: 'panel' }, [el('p', { text: 'Only admins can change settings.' })])]);
     if (!settingsDraft) settingsDraft = {};
@@ -1172,8 +1177,8 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
       if (fromMode !== toMode) {
         var warn = {
           off: 'The server will switch to PLAIN HTTP on port ' + S.listenPort + '. Only do this behind a reverse proxy that terminates HTTPS for ' + d.publicUrl + ' - otherwise this page will stop working (set TLS_MODE in the environment to recover).',
-          internal: 'The server will use its built-in CA. Devices must trust its root certificate (Certificates tab) - browsers that remember HSTS for this site refuse the page until it is installed.',
-          acme: 'The current certificate stays in use until the CA has issued the new one (see the Certificates tab for progress). Tip: use "Test these settings" first.',
+          internal: 'The server will use its built-in CA. Devices must trust its root certificate (Server → Certificates) - browsers that remember HSTS for this site refuse the page until it is installed.',
+          acme: 'The current certificate stays in use until the CA has issued the new one (see Server → Certificates for progress). Tip: use "Test these settings" first.',
           file: 'The server will use the certificate files. Make sure they are valid (use "Test these settings").'
         }[toMode];
         if (!confirm('Switch certificate mode from ' + fromMode + ' to ' + toMode + '?\n\n' + warn)) return;
@@ -1203,21 +1208,32 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
       }))])])
     ]);
 
+    if (page === 'startup') return el('section', null, [el('h2', { text: 'Startup settings' }), startup]);
+
+    var PAGE_GROUPS = { address: ['server'], certificates: ['tls', 'acme', 'dns'], connectors: ['access'] };
+    var GROUP_PAGE = { server: 'Public address', tls: 'Certificates & DNS', acme: 'Certificates & DNS', dns: 'Certificates & DNS', access: 'Connectors & proxy' };
+    var mine = PAGE_GROUPS[page] || [];
+    var elsewhere = {};
+    Object.keys(settingsDraft).forEach(function (k) { var g = byKey[k] && byKey[k].group; if (g && mine.indexOf(g) < 0) elsewhere[GROUP_PAGE[g]] = true; });
+    var otherNote = Object.keys(elsewhere).length ? el('div', { class: 'msg warn', text: 'Also unsaved changes on: ' + Object.keys(elsewhere).join(', ') + ' - they are saved together with this page.' }) : null;
+    function only(g, node) { return mine.indexOf(g) >= 0 ? node : null; }
+    var canTest = page !== 'connectors';
+    var titles = { address: 'Public address', certificates: 'Certificate settings', connectors: 'Connectors & proxy' };
+
     return el('section', null, [
-      el('h2', { text: 'Settings' }),
+      el('h2', { text: titles[page] || 'Settings' }),
       el('p', { class: 'muted', text: 'Changes are stored in the encrypted config file and applied immediately - no restart. Environment variables always win; those fields are read-only here.' }),
-      group('Public address', d.setup
+      only('server', group('Public address', d.setup
         ? 'Not set yet - the server runs in setup mode. Use the host name you will open in the browser (it must resolve to this server, e.g. a local DNS record).'
-        : 'Changing it restarts the server on the new address. Registered passkeys only work on the address they were created for.', 'server'),
-      group('Certificate', null, 'tls'),
-      group('Let’s Encrypt / ACME', 'A publicly trusted certificate for a domain you own, renewed automatically. The name must resolve to this server (for a LAN-only server: a local DNS record).', 'acme'),
-      group('DNS validation', 'The CA checks a TXT record under _acme-challenge.<name>. Nothing has to be reachable from the internet.', 'dns'),
-      group('Access and connectors', null, 'access'),
+        : 'Changing it restarts the server on the new address. Registered passkeys only work on the address they were created for.', 'server')),
+      only('tls', group('Certificate mode', null, 'tls')),
+      only('acme', group('Let’s Encrypt / ACME', 'A publicly trusted certificate for a domain you own, renewed automatically. The name must resolve to this server (for a LAN-only server: a local DNS record).', 'acme')),
+      only('dns', group('DNS validation', 'The CA checks a TXT record under _acme-challenge.<name>. Nothing has to be reachable from the internet.', 'dns')),
+      only('access', group('Access and connectors', null, 'access')),
       el('div', { class: 'panel' }, [
-        el('div', { class: 'row' }, [saveBtn, testBtn, discard]),
-        msg, logBox
-      ]),
-      startup
+        el('div', { class: 'row' }, [saveBtn, canTest ? testBtn : null, discard]),
+        otherNote, msg, logBox
+      ])
     ]);
   }
 
@@ -1849,19 +1865,38 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     who.classList.remove('hidden');
     whoName.textContent = d.me.name + ' · ' + d.me.role;
     var isAdmin = d.me.role === 'admin';
-    var tabs = [['services', 'Services']];
-    if (isAdmin) tabs.push(['config', 'Service configuration']);
-    tabs.push(['mine', 'My activity'], ['connect', 'Connect'], ['tokens', 'Access tokens'], ['passkeys', 'My sign-in']);
-    if (isAdmin) tabs.push(['users', 'Users'], ['settings', 'Settings'], ['certificates', 'Certificates'], ['security', 'Security']);
-    else tabs.push(['certificates', 'Certificates']);
-    tabs.push(['brand', 'Brand']);
-    if (!tabs.some(function (t) { return t[0] === currentTab; })) currentTab = 'services';
+    // Two-level menu: a group row, then the pages of the active group.
+    var groups = [['media', 'Media', [['services', 'Services']].concat(isAdmin ? [['config', 'Service configuration']] : [])]];
+    groups.push(['account', 'My account', [['mine', 'My activity'], ['connect', 'Connect a client'], ['tokens', 'Access tokens'], ['passkeys', 'My sign-in']]]);
+    if (isAdmin) {
+      groups.push(['people', 'Users', [['users', 'Users & invites']]]);
+      groups.push(['server', 'Server', [['address', 'Public address'], ['certificates', 'Certificates & DNS'], ['connectors', 'Connectors & proxy'], ['security', 'Security']]]);
+    } else {
+      groups.push(['server', 'Server', [['certificates', 'Certificates']]]);
+    }
+    groups.push(['about', 'About', [['brand', 'Brand guide']]]);
+    var lastPage = {};
+    function groupOf(tab) {
+      for (var i = 0; i < groups.length; i++) if (groups[i][2].some(function (t) { return t[0] === tab; })) return groups[i];
+      return null;
+    }
+    if (currentTab === 'settings') currentTab = 'address';
+    if (!groupOf(currentTab)) currentTab = 'services';
     var content = el('div');
-    var nav = el('nav', { class: 'tabs' });
+    var nav = el('nav', { class: 'tabs', 'aria-label': 'Sections' });
+    var subnav = el('nav', { class: 'tabs sub', 'aria-label': 'Pages' });
     function redraw() {
-      nav.replaceChildren.apply(nav, tabs.map(function (t) {
-        return el('button', { class: t[0] === currentTab ? 'active' : '', text: t[1], onclick: function () { currentTab = t[0]; redraw(); } });
+      if (currentTab === 'settings') currentTab = 'address';
+      if (!groupOf(currentTab)) currentTab = 'services';
+      var g = groupOf(currentTab);
+      lastPage[g[0]] = currentTab;
+      nav.replaceChildren.apply(nav, groups.map(function (gr) {
+        return el('button', { class: gr === g ? 'active' : '', text: gr[1], 'aria-current': gr === g ? 'true' : null, onclick: function () { currentTab = lastPage[gr[0]] || gr[2][0][0]; redraw(); } });
       }));
+      subnav.replaceChildren.apply(subnav, g[2].map(function (t) {
+        return el('button', { class: t[0] === currentTab ? 'active' : '', text: t[1], 'aria-current': t[0] === currentTab ? 'page' : null, onclick: function () { currentTab = t[0]; redraw(); } });
+      }));
+      subnav.classList.toggle('hidden', g[2].length < 2);
       var view;
       switch (currentTab) {
         case 'services': view = viewServices(d, redraw); break;
@@ -1870,23 +1905,31 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
         case 'tokens': view = [viewTokens(d, redraw)]; break;
         case 'passkeys': view = [viewPasskeys(d, redraw)]; break;
         case 'users': view = [viewUsers(d, redraw)]; break;
-        case 'settings': view = [viewSettings(d, redraw)]; break;
-        case 'certificates': view = [viewCertificates(d)]; break;
-        case 'security': view = [viewSecurity(d)]; break;
+        case 'address': view = [viewSettings(d, redraw, 'address')]; break;
+        case 'certificates': view = isAdmin ? [viewCertificates(d), viewSettings(d, redraw, 'certificates')] : [viewCertificates(d)]; break;
+        case 'connectors': view = [viewSettings(d, redraw, 'connectors')]; break;
+        case 'security': view = [viewSecurity(d), viewSettings(d, redraw, 'startup')]; break;
         case 'brand': view = viewBrand(d); break;
         case 'mine': view = [viewMine(d)]; break;
       }
       content.replaceChildren.apply(content, view);
       labelTables(content);
       redrawNow = redraw;
+      // On a phone the rows scroll sideways: keep the active button visible.
+      setTimeout(function () {
+        [nav, subnav].forEach(function (n) {
+          var b = n.querySelector('button.active');
+          if (b && n.scrollWidth > n.clientWidth) n.scrollLeft = Math.max(0, b.offsetLeft - n.offsetLeft - 12);
+        });
+      }, 0);
     }
     redraw();
     var banner = d.setup ? el('div', { class: 'panel setup-banner' }, [
       el('strong', { text: 'Setup mode - ' + (d.setup.reason || 'PUBLIC_URL is not set') + '.' }),
-      el('p', { text: 'The server runs with a temporary certificate. Passkeys, OAuth connectors and the built-in CA are off until the public address is set. Set it under Settings → Public address; the server then restarts on that address.' }),
-      isAdmin ? el('div', { class: 'row' }, [el('button', { class: 'primary', text: 'Set the public address', onclick: function () { currentTab = 'settings'; redraw(); } })]) : null
+      el('p', { text: 'The server runs with a temporary certificate. Passkeys, OAuth connectors and the built-in CA are off until the public address is set. Set it under Server → Public address; the server then restarts on that address.' }),
+      isAdmin ? el('div', { class: 'row' }, [el('button', { class: 'primary', text: 'Set the public address', onclick: function () { currentTab = 'address'; redraw(); } })]) : null
     ]) : null;
-    app.replaceChildren.apply(app, [banner, nav, content].filter(Boolean));
+    app.replaceChildren.apply(app, [banner, nav, subnav, content].filter(Boolean));
     startLive();
   }
 

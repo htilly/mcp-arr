@@ -162,7 +162,7 @@ export async function testSettings(ctx: RuntimeContext, env: NodeJS.ProcessEnv, 
     const changes = internalCaWouldChange(ctx.store, names, splitList(env.TLS_CA_NAME_CONSTRAINTS));
     log(`Certificate names: ${names.join(', ')}`);
     result = changes
-      ? { ok: true, message: 'Works offline. A NEW root CA will be generated for these names - install the new root certificate (Certificates tab) on every device afterwards.' }
+      ? { ok: true, message: 'Works offline. A NEW root CA will be generated for these names - install the new root certificate (Server → Certificates) on every device afterwards.' }
       : { ok: true, message: 'Works offline. The installed root certificate stays valid.' };
   } else if (mode === 'file') {
     const tls = tlsManagerFor(ctx, env);
