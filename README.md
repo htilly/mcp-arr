@@ -424,6 +424,14 @@ Use your actual paths and API keys. Only include the services you use.
 
 **TRaSH-only mode**: if you don’t configure any *arr services, the server still starts and exposes the TRaSH Guides reference tools plus generic `search` and `fetch`.
 
+## Safety controls
+
+- **Read-only mode**: set `ARR_READ_ONLY=true` to hide and block every tool that changes state, including deletes, adds, updates, triggered searches, subtitle downloads, indexer tests and request approvals.
+- **Confirmation**: `sonarr_delete_series`, `sonarr_delete_season`, `sonarr_delete_episode_files`, `radarr_delete_movie`, `radarr_delete_queue_item`, `tautulli_terminate_session`, `overseerr_approve_request` and `overseerr_decline_request` fail unless called with `confirm: true`. This stops accidental calls, but a model can still set it, so use read-only mode or your client's tool approval prompts if you need a human in the loop. Tools carry `readOnlyHint` and `destructiveHint` annotations for clients that use them.
+- **File deletion**: `deleteFiles` defaults to `false`.
+- **Argument validation**: arguments are checked against each tool's schema before any request is sent.
+- **Service URLs**: a configured service URL must include `http://` or `https://`, or the server won't start.
+
 ## ChatGPT / Remote MCP
 
 To use `mcp-arr` with ChatGPT, run the server in remote HTTP mode on a reachable host and connect ChatGPT to the `/mcp` endpoint. Note that ChatGPT (like Claude custom connectors) connects from the vendor's cloud, so the server must be reachable from the internet with a publicly trusted certificate, and the client must be able to send the access token (`Authorization: Bearer` or `?token=`).
@@ -524,9 +532,9 @@ The AI will answer from the tool definitions (sortBy, limit, etc.) without needi
 | `sonarr_get_episodes` | List episodes for a series (shows missing vs available; includes episodeFileId for delete) |
 | `sonarr_search_missing` | Trigger search for all missing episodes in a series |
 | `sonarr_search_episode` | Trigger search for specific episode(s) |
-| `sonarr_delete_series` | Delete a whole series (optionally delete files, add import list exclusion) |
-| `sonarr_delete_season` | Delete all episode files for a specific season |
-| `sonarr_delete_episode_files` | Delete specific episode file(s) by episode file ID |
+| `sonarr_delete_series` | Delete a whole series (files stay on disk unless `deleteFiles: true`; can add import list exclusion). Requires `confirm: true` |
+| `sonarr_delete_season` | Delete all episode files for a specific season. Requires `confirm: true` |
+| `sonarr_delete_episode_files` | Delete specific episode file(s) by episode file ID. Requires `confirm: true` |
 | `sonarr_refresh_series` | Trigger a metadata refresh for a specific series in Sonarr |
 
 ### Radarr Tools (Movies)
@@ -543,9 +551,9 @@ The AI will answer from the tool definitions (sortBy, limit, etc.) without needi
 | `radarr_search_movie` | Trigger search to download a movie in your library |
 | `radarr_search_movies` | Bulk-trigger searches for multiple movie IDs at once |
 | `radarr_update_movie` | Update a movie's quality profile, monitored status, minimum availability, tags, or path |
-| `radarr_delete_queue_item` | Remove an item from the download queue (optionally blocklist the release) |
+| `radarr_delete_queue_item` | Remove an item from the download queue (optionally blocklist the release). Requires `confirm: true` |
 | `radarr_refresh_movie` | Trigger a metadata refresh for a specific movie in Radarr |
-| `radarr_delete_movie` | Delete a movie (optionally delete files from disk, add import exclusion) |
+| `radarr_delete_movie` | Delete a movie (files stay on disk unless `deleteFiles: true`; can add import exclusion). Requires `confirm: true` |
 
 ### Lidarr Tools (Music)
 
@@ -586,7 +594,7 @@ When `TAUTULLI_URL` and `TAUTULLI_API_KEY` are set:
 | `tautulli_get_users` | Plex users |
 | `tautulli_get_recently_added` | Recently added media |
 | `tautulli_server_status` | Tautulli/Plex server status |
-| `tautulli_terminate_session` | Terminate a streaming session |
+| `tautulli_terminate_session` | Terminate a streaming session. Requires `confirm: true` |
 
 `arr_status` includes Tautulli connection status when configured.
 
@@ -600,8 +608,8 @@ When `OVERSEERR_URL` and `OVERSEERR_API_KEY` are set:
 | `overseerr_get_request_count` | Get request counts by status (pending, approved, declined, etc.) |
 | `overseerr_get_users` | List Overseerr users with their request counts |
 | `overseerr_get_user_requests` | Get all requests made by a specific user |
-| `overseerr_approve_request` | Approve a pending media request |
-| `overseerr_decline_request` | Decline a pending media request |
+| `overseerr_approve_request` | Approve a pending media request. Requires `confirm: true` |
+| `overseerr_decline_request` | Decline a pending media request. Requires `confirm: true` |
 | `overseerr_search` | Search for movies and TV shows (uses TMDB) |
 | `overseerr_status` | Get Overseerr server status and version |
 

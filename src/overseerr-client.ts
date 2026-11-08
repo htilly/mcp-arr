@@ -5,6 +5,8 @@
  * API: https://api-docs.overseerr.dev/
  */
 
+import { pathId } from "./security.js";
+
 export interface OverseerrConfig {
   url: string;
   apiKey: string;
@@ -202,14 +204,14 @@ export class OverseerrClient {
    * Get a specific request by ID
    */
   async getRequest(requestId: number): Promise<OverseerrRequest> {
-    return this.request<OverseerrRequest>(`/request/${requestId}`);
+    return this.request<OverseerrRequest>(`/request/${pathId(requestId)}`);
   }
 
   /**
    * Approve a request
    */
   async approveRequest(requestId: number): Promise<OverseerrRequest> {
-    return this.request<OverseerrRequest>(`/request/${requestId}/approve`, {
+    return this.request<OverseerrRequest>(`/request/${pathId(requestId)}/approve`, {
       method: 'POST',
     });
   }
@@ -218,7 +220,7 @@ export class OverseerrClient {
    * Decline a request
    */
   async declineRequest(requestId: number): Promise<OverseerrRequest> {
-    return this.request<OverseerrRequest>(`/request/${requestId}/decline`, {
+    return this.request<OverseerrRequest>(`/request/${pathId(requestId)}/decline`, {
       method: 'POST',
     });
   }
@@ -227,7 +229,7 @@ export class OverseerrClient {
    * Delete a request
    */
   async deleteRequest(requestId: number): Promise<void> {
-    await this.request<void>(`/request/${requestId}`, {
+    await this.request<void>(`/request/${pathId(requestId)}`, {
       method: 'DELETE',
     });
   }
@@ -255,7 +257,7 @@ export class OverseerrClient {
    * Get a specific user
    */
   async getUser(userId: number): Promise<OverseerrUser> {
-    return this.request<OverseerrUser>(`/user/${userId}`);
+    return this.request<OverseerrUser>(`/user/${pathId(userId)}`);
   }
 
   /**
@@ -271,7 +273,7 @@ export class OverseerrClient {
 
     const query = searchParams.toString();
     return this.request<OverseerrRequestsResponse>(
-      `/user/${userId}/requests${query ? `?${query}` : ''}`
+      `/user/${pathId(userId)}/requests${query ? `?${query}` : ''}`
     );
   }
 
@@ -279,14 +281,14 @@ export class OverseerrClient {
    * Get movie details from TMDB via Overseerr
    */
   async getMovie(tmdbId: number): Promise<unknown> {
-    return this.request<unknown>(`/movie/${tmdbId}`);
+    return this.request<unknown>(`/movie/${pathId(tmdbId)}`);
   }
 
   /**
    * Get TV show details from TMDB via Overseerr
    */
   async getTv(tmdbId: number): Promise<unknown> {
-    return this.request<unknown>(`/tv/${tmdbId}`);
+    return this.request<unknown>(`/tv/${pathId(tmdbId)}`);
   }
 
   /**

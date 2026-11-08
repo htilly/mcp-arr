@@ -22,6 +22,7 @@ src/
 ├── settings.ts       # Settings editable in the web UI (definitions, env > saved > default, validation)
 ├── runtime.ts        # Builds TLS manager / OAuth / proxy trust from settings; "Test these settings"
 ├── admin-ui.ts       # Web UI page (single self-contained HTML string, no external assets)
+├── security.ts       # Tool argument validation, confirmation, read-only list, URL checks, key redaction
 ├── config-store.ts   # Encrypted config file (AES-256-GCM), env merge, users/tokens/invites
 ├── tools/            # Tool implementations by service
 │   ├── sonarr.ts     # TV show management
@@ -58,6 +59,7 @@ node dist/index.js
 | PROWLARR_API_KEY | For Prowlarr | API key |
 | BAZARR_URL | For Bazarr | Base URL (e.g., http://localhost:6767) |
 | BAZARR_API_KEY | For Bazarr | API key from Bazarr settings |
+| ARR_READ_ONLY | No | `true` hides and blocks tools that change state |
 | MCP_TRANSPORT | No | `stdio` (default) or `http` (HTTPS server + web UI) |
 | PUBLIC_URL | HTTP mode | Browser URL, e.g. https://mcp-arr.home.lan:3000 (host name, not IP - passkeys). Also settable in the web UI (restarts in-process); unset = setup mode (temporary cert, passwords only) |
 | PORT / HOST / MCP_PATH | No | Listen address and MCP path (default 3000 / 0.0.0.0 / /mcp) |
@@ -107,7 +109,7 @@ rules:
 
 ### Adding a New Tool
 
-1. Add tool definition in appropriate `src/tools/{service}.ts`
+1. Add tool definition in appropriate `src/tools/{service}.ts`. If it changes state, add it to `WRITE_TOOLS` in `src/security.ts`
 2. Register in `src/index.ts` tool list
 3. Update README.md "Available Tools" section
 4. Update CHANGELOG.md

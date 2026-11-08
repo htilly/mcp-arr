@@ -85,6 +85,13 @@
           "format": "string",
           "isSecret": true,
           "name": "BAZARR_API_KEY"
+        },
+        {
+          "description": "Set to true to hide and block every tool that changes state",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "ARR_READ_ONLY"
         }
       ]
     }

@@ -5,6 +5,8 @@
  * the same REST API pattern with X-Api-Key header authentication.
  */
 
+import { pathId } from "./security.js";
+
 export type ArrService = 'sonarr' | 'radarr' | 'lidarr' | 'prowlarr';
 
 export interface ArrConfig {
@@ -579,7 +581,7 @@ export class SonarrClient extends ArrClient {
    * Get a specific series
    */
   async getSeriesById(id: number): Promise<Series> {
-    return this['request']<Series>(`/series/${id}`);
+    return this['request']<Series>(`/series/${pathId(id)}`);
   }
 
   /**
@@ -623,9 +625,9 @@ export class SonarrClient extends ArrClient {
    * Get episodes for a series, optionally filtered by season
    */
   async getEpisodes(seriesId: number, seasonNumber?: number): Promise<Episode[]> {
-    let url = `/episode?seriesId=${seriesId}`;
+    let url = `/episode?seriesId=${pathId(seriesId)}`;
     if (seasonNumber !== undefined) {
-      url += `&seasonNumber=${seasonNumber}`;
+      url += `&seasonNumber=${encodeURIComponent(seasonNumber)}`;
     }
     return this['request']<Episode[]>(url);
   }
@@ -647,15 +649,19 @@ export class SonarrClient extends ArrClient {
     id: number,
     options: { deleteFiles?: boolean; addImportListExclusion?: boolean } = {}
   ): Promise<void> {
-    const { deleteFiles = true, addImportListExclusion = false } = options;
+    const { deleteFiles = false, addImportListExclusion = false } = options;
     const params = new URLSearchParams({
       deleteFiles: String(deleteFiles),
       addImportListExclusion: String(addImportListExclusion),
     });
-    await this['request']<void>(`/series/${id}?${params.toString()}`, { method: 'DELETE' });
+    await this['request']<void>(`/series/${pathId(id)}?${params.toString()}`, { method: 'DELETE' });
   }
 
-  async getEpisodeFileIds(seriesId: number, seasonNumber?: number): Promise<number[]> {
+  async getEpisodeFileIds(seriesId: number, seasonNumber: number): Promise<number[]> {
+    // Without a season filter the lookup returns the whole series.
+    if (!Number.isSafeInteger(seasonNumber) || seasonNumber < 0) {
+      throw new Error("seasonNumber must be a non-negative integer");
+    }
     const episodes = await this.getEpisodes(seriesId, seasonNumber);
     return episodes
       .filter((e) => e.hasFile && e.episodeFileId > 0)
@@ -665,7 +671,7 @@ export class SonarrClient extends ArrClient {
   async deleteEpisodeFiles(episodeFileIds: number[]): Promise<void> {
     if (episodeFileIds.length === 0) return;
     if (episodeFileIds.length === 1) {
-      await this['request']<void>(`/episodefile/${episodeFileIds[0]}`, { method: 'DELETE' });
+      await this['request']<void>(`/episodefile/${pathId(episodeFileIds[0])}`, { method: 'DELETE' });
       return;
     }
     await this['request']<void>('/episodefile/bulk', {
@@ -704,7 +710,7 @@ export class RadarrClient extends ArrClient {
    * Get a specific movie
    */
   async getMovieById(id: number): Promise<Movie> {
-    return this['request']<Movie>(`/movie/${id}`);
+    return this['request']<Movie>(`/movie/${pathId(id)}`);
   }
 
   /**
@@ -747,12 +753,12 @@ export class RadarrClient extends ArrClient {
     id: number,
     options: { deleteFiles?: boolean; addImportExclusion?: boolean } = {}
   ): Promise<void> {
-    const { deleteFiles = true, addImportExclusion = false } = options;
+    const { deleteFiles = false, addImportExclusion = false } = options;
     const params = new URLSearchParams({
       deleteFiles: String(deleteFiles),
       addImportExclusion: String(addImportExclusion),
     });
-    await this['request']<void>(`/movie/${id}?${params.toString()}`, { method: 'DELETE' });
+    await this['request']<void>(`/movie/${pathId(id)}?${params.toString()}`, { method: 'DELETE' });
   }
 
   /**
@@ -772,7 +778,7 @@ export class RadarrClient extends ArrClient {
    * Update a movie (PUT). Used to change qualityProfileId, monitored, tags, etc.
    */
   async updateMovie(movie: Movie): Promise<Movie> {
-    return this['request']<Movie>(`/movie/${movie.id}`, {
+    return this['request']<Movie>(`/movie/${pathId(movie.id)}`, {
       method: 'PUT',
       body: JSON.stringify(movie),
     });
@@ -786,7 +792,7 @@ export class RadarrClient extends ArrClient {
     if (options.removeFromClient) params.append('removeFromClient', 'true');
     if (options.blocklist) params.append('blocklist', 'true');
     const query = params.toString() ? `?${params.toString()}` : '';
-    await this['request']<void>(`/queue/${queueId}${query}`, {
+    await this['request']<void>(`/queue/${pathId(queueId)}${query}`, {
       method: 'DELETE',
     });
   }
@@ -822,7 +828,7 @@ export class LidarrClient extends ArrClient {
    * Get a specific artist
    */
   async getArtistById(id: number): Promise<Artist> {
-    return this['request']<Artist>(`/artist/${id}`);
+    return this['request']<Artist>(`/artist/${pathId(id)}`);
   }
 
   /**
@@ -852,7 +858,7 @@ export class LidarrClient extends ArrClient {
    * Get all albums, optionally filtered by artist
    */
   async getAlbums(artistId?: number): Promise<Album[]> {
-    const url = artistId ? `/album?artistId=${artistId}` : '/album';
+    const url = artistId ? `/album?artistId=${pathId(artistId)}` : '/album';
     return this['request']<Album[]>(url);
   }
 
@@ -860,7 +866,7 @@ export class LidarrClient extends ArrClient {
    * Get a specific album
    */
   async getAlbumById(id: number): Promise<Album> {
-    return this['request']<Album>(`/album/${id}`);
+    return this['request']<Album>(`/album/${pathId(id)}`);
   }
 
   /**
@@ -947,7 +953,7 @@ export class ProwlarrClient extends ArrClient {
    * Test a specific indexer
    */
   async testIndexer(indexerId: number): Promise<{ id: number; isValid: boolean; validationFailures: Array<{ propertyName: string; errorMessage: string }> }> {
-    return this['request']<{ id: number; isValid: boolean; validationFailures: Array<{ propertyName: string; errorMessage: string }> }>(`/indexer/${indexerId}/test`, { method: 'POST' });
+    return this['request']<{ id: number; isValid: boolean; validationFailures: Array<{ propertyName: string; errorMessage: string }> }>(`/indexer/${pathId(indexerId)}/test`, { method: 'POST' });
   }
 
   /**

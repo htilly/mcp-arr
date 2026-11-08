@@ -263,7 +263,7 @@ export class TrashClient {
 
     try {
       const profile = await fetchJSON<TrashQualityProfile>(
-        `${TRASH_BASE_URL}/${service}/quality-profiles/${profileName}.json`
+        `${TRASH_BASE_URL}/${service}/quality-profiles/${encodeURIComponent(profileName)}.json`
       );
       cache.setProfile(key, profile);
       return profile;
@@ -323,7 +323,7 @@ export class TrashClient {
 
     try {
       const cf = await fetchJSON<TrashCustomFormat>(
-        `${TRASH_BASE_URL}/${service}/cf/${cfName}.json`
+        `${TRASH_BASE_URL}/${service}/cf/${encodeURIComponent(cfName)}.json`
       );
       cache.setCustomFormat(key, cf);
       return cf;
@@ -367,7 +367,7 @@ export class TrashClient {
       if (!size) {
         try {
           size = await fetchJSON<TrashQualitySize>(
-            `${TRASH_BASE_URL}/${service}/quality-size/${sizeType}.json`
+            `${TRASH_BASE_URL}/${service}/quality-size/${encodeURIComponent(sizeType)}.json`
           );
           cache.setQualitySize(key, size);
         } catch {
@@ -400,7 +400,7 @@ export class TrashClient {
 
     try {
       const group = await fetchJSON<TrashCFGroup>(
-        `${TRASH_BASE_URL}/${service}/cf-groups/${groupName}.json`
+        `${TRASH_BASE_URL}/${service}/cf-groups/${encodeURIComponent(groupName)}.json`
       );
       cache.setCFGroup(key, group);
       return group;
