@@ -22,6 +22,7 @@ import { SonarrClient, RadarrClient, LidarrClient, ProwlarrClient } from './arr-
 import { TautulliClient } from './tautulli-client.js';
 import { OverseerrClient } from './overseerr-client.js';
 import { BazarrClient } from './bazarr-client.js';
+import { MaintainerrClient } from './maintainerr-client.js';
 import { renderAdminPage } from './admin-ui.js';
 import { Auth, AuthError } from './auth.js';
 import type { TlsMaterial } from './tls.js';
@@ -154,6 +155,7 @@ export async function testServiceConnection(
         }
         case 'overseerr': return (await new OverseerrClient(cfg).getStatus()).version;
         case 'bazarr': return (await new BazarrClient(cfg).getStatus()).bazarr_version;
+        case 'maintainerr': return (await new MaintainerrClient(cfg).getAppStatus()).version;
       }
     })(), TEST_TIMEOUT_MS);
     return { ok: true, version };

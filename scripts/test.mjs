@@ -239,6 +239,30 @@ async function testBazarr() {
   }
 }
 
+async function testMaintainerr() {
+  const baseUrl = get('MAINTAINERR_URL')?.replace(/\/$/, '');
+  const apiKey = get('MAINTAINERR_API_KEY');
+  if (!baseUrl || !apiKey) return null;
+  try {
+    const res = await fetchWithTimeout(`${baseUrl}/api/app/status`, {
+      method: 'GET',
+      headers: { 'X-Api-Key': apiKey },
+    });
+    if (!res.ok) return { ok: false, error: `${res.status} ${res.statusText}` };
+    const json = await res.json();
+    return { ok: true, version: json.version ?? 'OK' };
+  } catch (err) {
+    const cause = err.cause?.message ?? err.cause?.code ?? err.message;
+    if (cause === 'This operation was aborted') {
+      return { ok: false, error: `Connection timeout (${FETCH_TIMEOUT_MS}ms) - check if Maintainerr is reachable at ${baseUrl}` };
+    }
+    if (cause === 'ECONNREFUSED' || cause?.includes('ECONNREFUSED')) {
+      return { ok: false, error: `Connection refused - Maintainerr not running at ${baseUrl}` };
+    }
+    return { ok: false, error: `${cause} (URL: ${baseUrl})` };
+  }
+}
+
 async function testBazarrFunctional(baseUrl, apiKey) {
   try {
     const res = await fetchWithTimeout(`${baseUrl}/api/badges`, {
@@ -303,6 +327,9 @@ async function main() {
 
   const bazarrResult = await testBazarr();
   summary.push({ name: 'Bazarr (Subtitles)', result: bazarrResult });
+
+  const maintainerrResult = await testMaintainerr();
+  summary.push({ name: 'Maintainerr (Cleanup)', result: maintainerrResult });
 
   const configuredCount = summary.filter((s) => s.result !== null).length;
   if (configuredCount === 0) {

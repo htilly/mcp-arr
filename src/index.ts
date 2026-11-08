@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * MCP Server for *arr Media Management Suite + Tautulli + Overseerr + Bazarr
+ * MCP Server for *arr Media Management Suite + Tautulli + Overseerr + Bazarr + Maintainerr
  *
  * Provides tools for managing Sonarr (TV), Radarr (Movies), Lidarr (Music),
  * and Prowlarr (Indexers) through Claude Code, plus optional Tautulli (Plex),
- * Overseerr (requests) and Bazarr (subtitles).
+ * Overseerr (requests), Bazarr (subtitles) and Maintainerr (library cleanup).
  *
  * Environment variables:
  * - SONARR_URL, SONARR_API_KEY, RADARR_URL, RADARR_API_KEY, etc.
@@ -13,6 +13,7 @@
  * - TAUTULLI_URL, TAUTULLI_API_KEY
  * - OVERSEERR_URL, OVERSEERR_API_KEY
  * - BAZARR_URL, BAZARR_API_KEY
+ * - MAINTAINERR_URL, MAINTAINERR_API_KEY
  *
  * Remote / Docker mode (HTTPS + web UI with passkey login), see README:
  * - MCP_TRANSPORT=http (default: stdio), PUBLIC_URL, PORT, HOST
@@ -41,6 +42,7 @@ import { trashClient, TrashService } from "./trash-client.js";
 import { TautulliClient } from "./tautulli-client.js";
 import { OverseerrClient } from "./overseerr-client.js";
 import { BazarrClient, BazarrSubtitle } from "./bazarr-client.js";
+import { MaintainerrClient } from "./maintainerr-client.js";
 import { ConfigStore, EffectiveConfig, SERVICE_DEFS } from "./config-store.js";
 import { resolve as resolvePath, dirname, join as joinPath } from "node:path";
 import { hostname as osHostname, networkInterfaces } from "node:os";
@@ -90,6 +92,7 @@ let configuredServices: ServiceConfig[] = [];
 let tautulliConfigured = false;
 let overseerrConfigured = false;
 let bazarrConfigured = false;
+let maintainerrConfigured = false;
 
 const clients: {
   sonarr?: SonarrClient;
@@ -101,6 +104,7 @@ const clients: {
 let tautulliClient: TautulliClient | undefined;
 let overseerrClient: OverseerrClient | undefined;
 let bazarrClient: BazarrClient | undefined;
+let maintainerrClient: MaintainerrClient | undefined;
 let statusParts: string[] = [];
 
 const TOOLS: Tool[] = [];
@@ -122,7 +126,7 @@ function validateServiceUrls(config: EffectiveConfig): void {
 
 /** True when at least one service has both a URL and an API key. */
 function anyServiceConfigured(): boolean {
-  return configuredServices.length > 0 || tautulliConfigured || overseerrConfigured || bazarrConfigured;
+  return configuredServices.length > 0 || tautulliConfigured || overseerrConfigured || bazarrConfigured || maintainerrConfigured;
 }
 
 /**
@@ -150,18 +154,21 @@ function applyConfig(config: EffectiveConfig): void {
     }
   }
 
-  const t = config.tautulli, o = config.overseerr, b = config.bazarr;
+  const t = config.tautulli, o = config.overseerr, b = config.bazarr, m = config.maintainerr;
   tautulliConfigured = Boolean(t.url && t.apiKey);
   overseerrConfigured = Boolean(o.url && o.apiKey);
   bazarrConfigured = Boolean(b.url && b.apiKey);
+  maintainerrConfigured = Boolean(m.url && m.apiKey);
   tautulliClient = tautulliConfigured ? new TautulliClient({ url: t.url!, apiKey: t.apiKey! }) : undefined;
   overseerrClient = overseerrConfigured ? new OverseerrClient({ url: o.url!, apiKey: o.apiKey! }) : undefined;
   bazarrClient = bazarrConfigured ? new BazarrClient({ url: b.url!, apiKey: b.apiKey! }) : undefined;
+  maintainerrClient = maintainerrConfigured ? new MaintainerrClient({ url: m.url!, apiKey: m.apiKey! }) : undefined;
 
   statusParts = configuredServices.map(s => s.displayName);
   if (tautulliConfigured) statusParts.push('Tautulli (Plex)');
   if (overseerrConfigured) statusParts.push('Overseerr (Requests)');
   if (bazarrConfigured) statusParts.push('Bazarr (Subtitles)');
+  if (maintainerrConfigured) statusParts.push('Maintainerr (Cleanup)');
 
   buildTools();
 }
@@ -1309,6 +1316,148 @@ if (bazarrClient) {
   );
 }
 
+// Maintainerr tools (rule-based library cleanup)
+if (maintainerrClient) {
+  const mediaIdProp = {
+    mediaId: { type: "string", description: "Media server item id (Plex rating key or Jellyfin/Emby id). Find it with maintainerr_search_media or maintainerr_get_collection_media" },
+  };
+  const pageProps = {
+    page: { type: "integer", minimum: 1, description: "Page number (default: 1)" },
+    size: { type: "integer", minimum: 1, maximum: 100, description: "Items per page (default: 25, max: 100)" },
+  };
+  TOOLS.push(
+    {
+      name: "maintainerr_status",
+      description: "Get Maintainerr version, health and whether rules are running right now",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    },
+    {
+      name: "maintainerr_get_collections",
+      description: "Get Maintainerr collections (media marked for removal): item count, size, days until deletion and the Sonarr/Radarr action taken when the grace period ends",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    },
+    {
+      name: "maintainerr_get_collection_media",
+      description: "Get the items in a Maintainerr collection with size, date added and the date each will be deleted",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          collectionId: { type: "integer", minimum: 1, description: "Collection id from maintainerr_get_collections" },
+          ...pageProps,
+        },
+        required: ["collectionId"],
+      },
+    },
+    {
+      name: "maintainerr_get_collection_logs",
+      description: "Get the activity log of a Maintainerr collection (items added, removed, handled/deleted, postponed), newest first",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          collectionId: { type: "integer", minimum: 1, description: "Collection id from maintainerr_get_collections" },
+          search: { type: "string", description: "Only log lines containing this text, e.g. a title" },
+          ...pageProps,
+        },
+        required: ["collectionId"],
+      },
+    },
+    {
+      name: "maintainerr_get_rules",
+      description: "Get Maintainerr rule groups: name, description, library, media type, active state, collection and number of rules",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    },
+    {
+      name: "maintainerr_get_exclusions",
+      description: "Get items excluded from Maintainerr rules (never added to a collection). Global exclusions have no ruleGroupId",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          ruleGroupId: { type: "integer", minimum: 1, description: "Only exclusions for this rule group" },
+          mediaId: { type: "string", description: "Only exclusions for this media server item id" },
+        },
+        required: [],
+      },
+    },
+    {
+      name: "maintainerr_search_media",
+      description: "Search the media server through Maintainerr by title. Returns the media server item id (mediaId) and which Maintainerr collections the item is in",
+      inputSchema: {
+        type: "object" as const,
+        properties: { query: { type: "string", description: "Title to search for" } },
+        required: ["query"],
+      },
+    },
+    {
+      name: "maintainerr_get_media_status",
+      description: "Get the Maintainerr status of one item: which rule groups it is excluded from and which collections it was added to manually",
+      inputSchema: { type: "object" as const, properties: { ...mediaIdProp }, required: ["mediaId"] },
+    },
+    {
+      name: "maintainerr_run_rules",
+      description: "Run Maintainerr rules now to update collections (adds/removes items; does not delete anything). Without ruleGroupId all active rule groups run",
+      inputSchema: {
+        type: "object" as const,
+        properties: { ruleGroupId: { type: "integer", minimum: 1, description: "Run only this rule group" } },
+        required: [],
+      },
+    },
+    {
+      name: "maintainerr_postpone_deletion",
+      description: "Postpone the deletion of an item in a Maintainerr collection. Without days the full grace period restarts from today; with days the deletion date moves out by that many days",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          collectionId: { type: "integer", minimum: 1, description: "Collection id" },
+          ...mediaIdProp,
+          days: { type: "integer", minimum: 1, maximum: 3650, description: "Days to push the deletion out (default: restart the grace period)" },
+        },
+        required: ["collectionId", "mediaId"],
+      },
+    },
+    {
+      name: "maintainerr_exclude_media",
+      description: "Exclude an item from Maintainerr rules so it is never deleted (removes it from collections). Without collectionId the exclusion is global; with it, only that collection's rule group",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          ...mediaIdProp,
+          collectionId: { type: "integer", minimum: 1, description: "Only exclude from this collection's rule group" },
+        },
+        required: ["mediaId"],
+      },
+    },
+    {
+      name: "maintainerr_remove_exclusion",
+      description: "Remove a Maintainerr exclusion so rules apply to the item again. Use the same collectionId as when it was excluded (omit for a global exclusion)",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          ...mediaIdProp,
+          collectionId: { type: "integer", minimum: 1, description: "Collection whose rule group the exclusion belongs to" },
+        },
+        required: ["mediaId"],
+      },
+    },
+    {
+      name: "maintainerr_remove_from_collection",
+      description: "Remove an item from a Maintainerr collection. The next rule run can add it again; use maintainerr_exclude_media to keep it out for good",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          collectionId: { type: "integer", minimum: 1, description: "Collection id" },
+          ...mediaIdProp,
+        },
+        required: ["collectionId", "mediaId"],
+      },
+    },
+    {
+      name: "maintainerr_handle_collections",
+      description: "Run the Maintainerr collection handler now: every item whose grace period is over gets its collection's Sonarr/Radarr action, which usually DELETES the media and its files. Check maintainerr_get_collection_media first",
+      inputSchema: { type: "object" as const, properties: {}, required: [] },
+    }
+  );
+}
+
 // Cross-service search tool
 TOOLS.push({
   name: "arr_search_all",
@@ -1854,6 +2003,28 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
           }
         } else {
           statuses.bazarr = { configured: false };
+        }
+        if (maintainerrConfigured) {
+          try {
+            if (maintainerrClient) {
+              const status = await maintainerrClient.getAppStatus();
+              statuses.maintainerr = {
+                configured: true,
+                connected: true,
+                version: status.version,
+              };
+            } else {
+              statuses.maintainerr = { configured: true, connected: false };
+            }
+          } catch (error) {
+            statuses.maintainerr = {
+              configured: true,
+              connected: false,
+              error: errorText(error),
+            };
+          }
+        } else {
+          statuses.maintainerr = { configured: false };
         }
         return jsonText(statuses);
       }
@@ -3831,6 +4002,204 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
         };
       }
 
+      // Maintainerr handlers
+      case "maintainerr_status": {
+        if (!maintainerrClient) throw new Error("Maintainerr not configured");
+        const [app, health, execution] = await Promise.all([
+          maintainerrClient.getAppStatus(),
+          maintainerrClient.getHealth(),
+          maintainerrClient.getExecutionStatus(),
+        ]);
+        return jsonText({
+          version: app.version,
+          updateAvailable: app.updateAvailable,
+          health: health.status,
+          database: health.database,
+          uptimeSeconds: health.uptimeSeconds,
+          rulesRunning: Boolean(execution.processingQueue || execution.executingRuleGroupId),
+          executingRuleGroupId: execution.executingRuleGroupId ?? null,
+          pendingRuleGroupIds: execution.pendingRuleGroupIds ?? [],
+        });
+      }
+      case "maintainerr_get_collections": {
+        if (!maintainerrClient) throw new Error("Maintainerr not configured");
+        const collections = await maintainerrClient.getCollections();
+        return jsonText({
+          count: collections.length,
+          collections: collections.map(c => ({
+            id: c.id,
+            title: c.title,
+            description: c.description,
+            type: c.type,
+            libraryId: c.libraryId,
+            isActive: c.isActive,
+            mediaCount: c.mediaCount ?? c.media?.length ?? 0,
+            totalSize: c.totalSizeBytes ? formatBytes(c.totalSizeBytes) : undefined,
+            deleteAfterDays: c.deleteAfterDays,
+            arrAction: MaintainerrClient.arrActionName(c.arrAction),
+            tagInArr: c.tagInArr,
+            listExclusions: c.listExclusions,
+            manualCollection: c.manualCollection,
+            handledMediaAmount: c.handledMediaAmount,
+            handledMediaSize: c.handledMediaSizeBytes ? formatBytes(c.handledMediaSizeBytes) : undefined,
+          })),
+        });
+      }
+      case "maintainerr_get_collection_media": {
+        if (!maintainerrClient) throw new Error("Maintainerr not configured");
+        const a = args as { collectionId: number; page?: number; size?: number };
+        const { page, size } = maintainerrPaging(a);
+        const [res, collections] = await Promise.all([
+          maintainerrClient.getCollectionMedia(a.collectionId, page, size),
+          maintainerrClient.getCollections(),
+        ]);
+        const collection = collections.find(c => c.id === a.collectionId);
+        const days = collection?.deleteAfterDays;
+        return jsonText({
+          collection: collection?.title,
+          deleteAfterDays: days,
+          total: res.totalSize,
+          page,
+          returned: res.items.length,
+          hasMore: page * size < res.totalSize,
+          items: res.items.map(i => {
+            const added = i.addDate ? new Date(i.addDate) : undefined;
+            const deletionDate = added && days ? new Date(added.getTime() + days * 86_400_000) : undefined;
+            return {
+              mediaId: i.mediaServerId,
+              title: maintainerrTitle(i.mediaData),
+              year: i.mediaData?.year,
+              type: i.mediaData?.type,
+              size: i.sizeBytes ? formatBytes(i.sizeBytes) : undefined,
+              addedToCollection: i.addDate,
+              deletionDate: deletionDate?.toISOString(),
+              manual: i.isManual,
+              ruleEvaluationFailed: i.ruleEvaluationFailed || undefined,
+              tmdbId: i.tmdbId ?? undefined,
+              tvdbId: i.tvdbId ?? undefined,
+            };
+          }),
+        });
+      }
+      case "maintainerr_get_collection_logs": {
+        if (!maintainerrClient) throw new Error("Maintainerr not configured");
+        const a = args as { collectionId: number; page?: number; size?: number; search?: string };
+        const { page, size } = maintainerrPaging(a);
+        const res = await maintainerrClient.getCollectionLogs(a.collectionId, page, size, a.search || undefined);
+        return jsonText({
+          total: res.totalSize,
+          page,
+          returned: res.items.length,
+          hasMore: page * size < res.totalSize,
+          logs: res.items.map(l => ({
+            timestamp: l.timestamp,
+            message: l.message,
+            event: l.meta?.type,
+          })),
+        });
+      }
+      case "maintainerr_get_rules": {
+        if (!maintainerrClient) throw new Error("Maintainerr not configured");
+        const groups = await maintainerrClient.getRuleGroups();
+        return jsonText({
+          count: groups.length,
+          ruleGroups: groups.map(g => ({
+            id: g.id,
+            name: g.name,
+            description: g.description,
+            libraryId: g.libraryId,
+            dataType: g.dataType,
+            isActive: g.isActive,
+            collectionId: g.collectionId,
+            useRules: g.useRules,
+            ruleCount: g.rules?.length ?? 0,
+            cronSchedule: g.ruleHandlerCronSchedule ?? undefined,
+          })),
+        });
+      }
+      case "maintainerr_get_exclusions": {
+        if (!maintainerrClient) throw new Error("Maintainerr not configured");
+        const a = args as { ruleGroupId?: number; mediaId?: string };
+        const exclusions = await maintainerrClient.getExclusions(a);
+        return jsonText({
+          count: exclusions.length,
+          exclusions: exclusions.map(e => ({
+            id: e.id,
+            mediaId: e.mediaServerId,
+            ruleGroupId: e.ruleGroupId ?? null,
+            scope: e.ruleGroupId ? 'rule group' : 'global',
+            parent: e.parent ?? undefined,
+            type: e.type ?? undefined,
+          })),
+        });
+      }
+      case "maintainerr_search_media": {
+        if (!maintainerrClient) throw new Error("Maintainerr not configured");
+        const { query } = args as { query: string };
+        const results = await maintainerrClient.searchMedia(query);
+        return jsonText({
+          count: results.length,
+          results: results.slice(0, 25).map(r => ({
+            mediaId: r.id,
+            title: maintainerrTitle(r),
+            year: r.year,
+            type: r.type,
+            library: r.library?.title,
+            maintainerrCollections: r.maintainerrCollections ?? [],
+          })),
+        });
+      }
+      case "maintainerr_get_media_status": {
+        if (!maintainerrClient) throw new Error("Maintainerr not configured");
+        const { mediaId } = args as { mediaId: string };
+        return jsonText(await maintainerrClient.getItemStatus(mediaId));
+      }
+      case "maintainerr_run_rules": {
+        if (!maintainerrClient) throw new Error("Maintainerr not configured");
+        const { ruleGroupId } = args as { ruleGroupId?: number };
+        await maintainerrClient.executeRules(ruleGroupId);
+        return jsonText({
+          success: true,
+          message: ruleGroupId === undefined
+            ? 'All active rule groups queued. Check maintainerr_status for progress.'
+            : `Rule group ${ruleGroupId} queued. Check maintainerr_status for progress.`,
+        });
+      }
+      case "maintainerr_postpone_deletion": {
+        if (!maintainerrClient) throw new Error("Maintainerr not configured");
+        const a = args as { collectionId: number; mediaId: string; days?: number };
+        const result = await maintainerrClient.postponeMedia(a.collectionId, a.mediaId, a.days);
+        return jsonText({ success: true, ...result });
+      }
+      case "maintainerr_exclude_media":
+      case "maintainerr_remove_exclusion": {
+        if (!maintainerrClient) throw new Error("Maintainerr not configured");
+        const a = args as { mediaId: string; collectionId?: number };
+        const remove = name === "maintainerr_remove_exclusion";
+        await maintainerrClient.setExclusion({ ...a, remove });
+        const scope = a.collectionId === undefined ? 'all rule groups' : `the rule group of collection ${a.collectionId}`;
+        return jsonText({
+          success: true,
+          message: remove
+            ? `Exclusion of ${a.mediaId} from ${scope} removed`
+            : `${a.mediaId} is now excluded from ${scope}`,
+        });
+      }
+      case "maintainerr_remove_from_collection": {
+        if (!maintainerrClient) throw new Error("Maintainerr not configured");
+        const a = args as { collectionId: number; mediaId: string };
+        await maintainerrClient.removeFromCollection(a.collectionId, a.mediaId);
+        return jsonText({ success: true, message: `${a.mediaId} removed from collection ${a.collectionId}` });
+      }
+      case "maintainerr_handle_collections": {
+        if (!maintainerrClient) throw new Error("Maintainerr not configured");
+        await maintainerrClient.handleCollections();
+        return jsonText({
+          success: true,
+          message: 'Collection handler started. Items past their grace period get their collection action. See maintainerr_get_collection_logs for the result.',
+        });
+      }
+
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
@@ -3851,6 +4220,23 @@ function bazarrPaging(a: { start?: number; length?: number }): { start: number; 
 
 function formatBazarrSubs(subs?: BazarrSubtitle[]): string[] {
   return (subs ?? []).map(BazarrClient.formatSubtitle);
+}
+
+// Maintainerr helpers
+function maintainerrPaging(a: { page?: number; size?: number }): { page: number; size: number } {
+  return { page: Math.max(1, a.page ?? 1), size: Math.min(Math.max(1, a.size ?? 25), 100) };
+}
+
+function maintainerrTitle(m?: { title?: string; parentTitle?: string; grandparentTitle?: string; type?: string; index?: number; parentIndex?: number }): string | undefined {
+  if (!m) return undefined;
+  if (m.type === 'season' && m.parentTitle) return `${m.parentTitle} - ${m.title ?? `Season ${m.index}`}`;
+  if (m.type === 'episode' && m.grandparentTitle) {
+    const code = m.parentIndex !== undefined && m.index !== undefined
+      ? ` S${String(m.parentIndex).padStart(2, '0')}E${String(m.index).padStart(2, '0')}`
+      : '';
+    return `${m.grandparentTitle}${code} - ${m.title ?? ''}`.trim();
+  }
+  return m.title;
 }
 
 // Helper function to format bytes

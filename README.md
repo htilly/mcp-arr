@@ -12,7 +12,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io)
 
-MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, and Prowlarr, plus [Tautulli](https://tautulli.com/) for Plex statistics, [Overseerr](https://overseerr.dev/) for request management and [Bazarr](https://www.bazarr.media/) for subtitles.
+MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, and Prowlarr, plus [Tautulli](https://tautulli.com/) for Plex statistics, [Overseerr](https://overseerr.dev/) for request management, [Bazarr](https://www.bazarr.media/) for subtitles and [Maintainerr](https://maintainerr.info/) for rule-based library cleanup.
 
 Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP mode for hosted MCP clients such as ChatGPT connectors.
 
@@ -37,6 +37,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
 | **Tautulli (Plex)** | Activity, history, libraries, users, recently added, server status, terminate session |
 | **Overseerr (Requests)** | List requests, approve/decline, view users, search media, request management |
 | **Bazarr (Subtitles)** | Missing subtitles, series/episode/movie subtitle status, search & download subtitles, history, providers, languages |
+| **Maintainerr (Cleanup)** | Collections marked for deletion with deletion dates, rules, logs, exclusions, postpone deletion, run rules |
 | **Remote server** | Optional HTTPS server with web UI: passkey login per user, encrypted config, offline certificates |
 | **Cross-Service** | Status check, unified search across all configured services |
 | **Configuration** | Quality profiles, download clients, naming conventions, health checks, storage info |
@@ -50,6 +51,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
   - [Tautulli](https://tautulli.com/) (Plex monitoring and statistics)
   - [Overseerr](https://overseerr.dev/) (request management for Plex)
   - [Bazarr](https://www.bazarr.media/) (subtitle management for Sonarr/Radarr)
+  - [Maintainerr](https://maintainerr.info/) (rule-based cleanup of Plex/Jellyfin/Emby libraries)
 
 ## Installation
 
@@ -146,7 +148,9 @@ Add to your Claude Desktop config file:
         "OVERSEERR_URL": "http://localhost:5055",
         "OVERSEERR_API_KEY": "your-overseerr-api-key",
         "BAZARR_URL": "http://localhost:6767",
-        "BAZARR_API_KEY": "your-bazarr-api-key"
+        "BAZARR_API_KEY": "your-bazarr-api-key",
+        "MAINTAINERR_URL": "http://localhost:6246",
+        "MAINTAINERR_API_KEY": "your-maintainerr-api-key"
       }
     }
   }
@@ -427,7 +431,7 @@ Use your actual paths and API keys. Only include the services you use.
 ## Safety controls
 
 - **Read-only mode**: set `ARR_READ_ONLY=true` to hide and block every tool that changes state, including deletes, adds, updates, triggered searches, subtitle downloads, indexer tests and request approvals.
-- **Confirmation**: `sonarr_delete_series`, `sonarr_delete_season`, `sonarr_delete_episode_files`, `radarr_delete_movie`, `radarr_delete_queue_item`, `tautulli_terminate_session`, `overseerr_approve_request` and `overseerr_decline_request` fail unless called with `confirm: true`. This stops accidental calls, but a model can still set it, so use read-only mode or your client's tool approval prompts if you need a human in the loop. Tools carry `readOnlyHint` and `destructiveHint` annotations for clients that use them.
+- **Confirmation**: `sonarr_delete_series`, `sonarr_delete_season`, `sonarr_delete_episode_files`, `radarr_delete_movie`, `radarr_delete_queue_item`, `tautulli_terminate_session`, `overseerr_approve_request`, `overseerr_decline_request` and `maintainerr_handle_collections` fail unless called with `confirm: true`. This stops accidental calls, but a model can still set it, so use read-only mode or your client's tool approval prompts if you need a human in the loop. Tools carry `readOnlyHint` and `destructiveHint` annotations for clients that use them.
 - **File deletion**: `deleteFiles` defaults to `false`.
 - **Argument validation**: arguments are checked against each tool's schema before any request is sent.
 - **Service URLs**: a configured service URL must include `http://` or `https://`, or the server won't start.
@@ -640,6 +644,29 @@ When `BAZARR_URL` and `BAZARR_API_KEY` are set (API key: Bazarr → Settings →
 
 Series and episode IDs are Sonarr IDs; movie IDs are Radarr IDs. `arr_status` includes Bazarr connection status when configured.
 
+### Maintainerr Tools (Library cleanup)
+
+When `MAINTAINERR_URL` and `MAINTAINERR_API_KEY` are set (API key: Maintainerr → Settings → General):
+
+| Tool | Description |
+|------|-------------|
+| `maintainerr_status` | Version, health and whether rules are running |
+| `maintainerr_get_collections` | Collections marked for removal: item count, size, days until deletion, Sonarr/Radarr action |
+| `maintainerr_get_collection_media` | Items in a collection with size and deletion date |
+| `maintainerr_get_collection_logs` | Collection activity log (added, removed, handled, postponed) |
+| `maintainerr_get_rules` | Rule groups with library, media type and active state |
+| `maintainerr_get_exclusions` | Items excluded from rules (global or per rule group) |
+| `maintainerr_search_media` | Find a media server item id by title, and which collections it is in |
+| `maintainerr_get_media_status` | Which rule groups an item is excluded from / manually added to |
+| `maintainerr_run_rules` | Run all active rule groups, or one, to update collections |
+| `maintainerr_postpone_deletion` | Restart an item's grace period, or push its deletion out by N days |
+| `maintainerr_exclude_media` | Exclude an item from all rules or one collection's rules |
+| `maintainerr_remove_exclusion` | Remove an exclusion |
+| `maintainerr_remove_from_collection` | Remove an item from a collection (rules may add it again) |
+| `maintainerr_handle_collections` | Run the collection handler now - deletes items past their grace period. Requires `confirm: true` |
+
+Media ids are media server ids (Plex rating key or Jellyfin/Emby id); get them from `maintainerr_search_media` or `maintainerr_get_collection_media`. `arr_status` includes Maintainerr connection status when configured.
+
 ### Configuration Review Tools
 
 These tools are available for Sonarr, Radarr, and Lidarr. Replace `{service}` with the service name (e.g., `sonarr_get_quality_profiles`).
@@ -697,7 +724,7 @@ npm run test
 SONARR_URL="http://localhost:8989" SONARR_API_KEY="your-key" node dist/index.js
 ```
 
-For `npm run test`, set URL and API key in `test-config.txt` (project root, .env-style) or as environment variables. The script tests Sonarr, Radarr, Lidarr, Readarr, Prowlarr, Tautulli, Overseerr, and Bazarr; Tautulli gets a detailed output (recent history, users) when configured.
+For `npm run test`, set URL and API key in `test-config.txt` (project root, .env-style) or as environment variables. The script tests Sonarr, Radarr, Lidarr, Readarr, Prowlarr, Tautulli, Overseerr, Bazarr and Maintainerr; Tautulli gets a detailed output (recent history, users) when configured.
 
 ## Troubleshooting
 
