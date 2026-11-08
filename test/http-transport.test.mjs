@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { request as httpsRequestRaw } from "node:https";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -107,6 +108,39 @@ test("HTTP transport serves clients that omit the session header (stateless) and
 
   assert.doesNotMatch(server.stderr(), /Fatal error/);
 });
+
+test("a malformed request target gets 400 and does not stop the server", async () => {
+  const { dir, configPath } = seedConfig();
+  const server = startServer((port) => ({
+    TLS_MODE: "off",
+    PUBLIC_URL: `http://localhost:${port}`,
+    CONFIG_PATH: configPath,
+  }));
+
+  try {
+    await waitForHealth(server.port);
+    const response = await rawRequest(server.port, "GET //[ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    assert.match(response, /^HTTP\/1\.1 400 /);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(server.child.exitCode, null, "server process exited");
+    const health = await fetch(`http://127.0.0.1:${server.port}/health`);
+    assert.equal(health.status, 200);
+  } finally {
+    await stopServer(server);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function rawRequest(port, text) {
+  return new Promise((resolve, reject) => {
+    const socket = connect(Number(port), "127.0.0.1", () => socket.write(text));
+    let data = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => { data += chunk; });
+    socket.on("end", () => resolve(data));
+    socket.on("error", reject);
+  });
+}
 
 test("HTTP mode refuses to start without PUBLIC_URL", async () => {
   const { dir, configPath } = seedConfig();

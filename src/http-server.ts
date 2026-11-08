@@ -925,9 +925,11 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
   // ----- router -----
 
   async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const url = new URL(req.url ?? '/', 'http://localhost');
-    const path = url.pathname;
     try {
+      // Node accepts request targets such as "//[" that URL cannot parse.
+      if (!URL.canParse(req.url ?? '/', 'http://localhost')) throw new HttpError(400, 'Invalid request URL');
+      const url = new URL(req.url ?? '/', 'http://localhost');
+      const path = url.pathname;
       if (rt.tls.mode !== 'off') {
         res.setHeader('Strict-Transport-Security', 'max-age=31536000');
       }
@@ -991,9 +993,18 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<void> {
   type AnyServer = ReturnType<typeof createHttpServer> | ReturnType<typeof createHttpsServer>;
   const secure = (m: TlsMaterial) => ({ cert: m.cert, key: m.key, minVersion: 'TLSv1.2' as const });
 
+  // An async handler's rejection is unhandled and would stop the process, so none may escape.
+  function safeHandler(req: IncomingMessage, res: ServerResponse): void {
+    handler(req, res).catch((error) => {
+      console.error('HTTP request error:', error);
+      if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end();
+    });
+  }
+
   function createListener(): AnyServer {
     const m = rt.tls.current();
-    return m ? createHttpsServer(secure(m), handler) : createHttpServer(handler);
+    return m ? createHttpsServer(secure(m), safeHandler) : createHttpServer(safeHandler);
   }
   function listen(srv: AnyServer): Promise<void> {
     return new Promise<void>((resolve, reject) => {

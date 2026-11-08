@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Security
+- **HTTP mode:** a request with an unparseable target such as `//[` crashed the whole server before authentication. It now gets `400`, and no error from a request handler can stop the process.
 - **BREAKING:** `sonarr_delete_series` and `radarr_delete_movie` now default `deleteFiles` to `false`. Pass `deleteFiles: true` to remove files from disk.
 - **BREAKING:** delete tools, `radarr_delete_queue_item`, `tautulli_terminate_session`, `overseerr_approve_request` and `overseerr_decline_request` now require `confirm: true`.
 - **BREAKING:** the server won't start if a configured service URL isn't a full `http://` or `https://` URL.
