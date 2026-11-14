@@ -10,6 +10,7 @@
  * - RADARR_URL, RADARR_API_KEY
  * - LIDARR_URL, LIDARR_API_KEY
  * - PROWLARR_URL, PROWLARR_API_KEY
+ * - ARR_READ_ONLY=true to hide and refuse tools that change state
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -91,6 +92,8 @@ const TRANSPORT_MODE = (process.env.MCP_TRANSPORT || "stdio").toLowerCase();
 const HTTP_HOST = process.env.HOST || "127.0.0.1";
 const HTTP_PORT = Number(process.env.PORT || "3000");
 const HTTP_PATH = process.env.MCP_PATH || "/mcp";
+// ARR_READ_ONLY=true hides and refuses every tool that changes state.
+const READ_ONLY_MODE = /^(true|1)$/i.test(process.env.ARR_READ_ONLY ?? "");
 
 // Configuration from environment
 interface ServiceConfig {
@@ -1278,6 +1281,12 @@ function jsonText(data: unknown) {
   };
 }
 
+// Derived from the annotations, so a new write tool cannot be missed. A tool
+// without an explicit readOnlyHint: true counts as a write tool.
+function isReadOnlyTool(tool: Tool): boolean {
+  return tool.annotations?.readOnlyHint === true;
+}
+
 function textError(message: string) {
   return {
     content: [{ type: "text" as const, text: message }],
@@ -1496,7 +1505,7 @@ async function getPaginatedQueue(
 function registerHandlers(server: Server): void {
 // Handle list tools request
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools: TOOLS };
+  return { tools: READ_ONLY_MODE ? TOOLS.filter(isReadOnlyTool) : TOOLS };
 });
 
 // Handle tool calls
@@ -1510,6 +1519,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ErrorCode.InvalidParams,
       `Invalid arguments for tool ${name}: arguments contain more than the maximum of ${MAX_TOOL_INPUT_ELEMENTS} elements`,
     );
+  }
+
+  const tool = TOOLS.find(t => t.name === name);
+  if (READ_ONLY_MODE && tool && !isReadOnlyTool(tool)) {
+    return textError(`${name} changes state and is disabled because ARR_READ_ONLY is set`);
   }
 
   try {

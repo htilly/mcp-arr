@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `ARR_READ_ONLY=true` hides tools that change state from `tools/list` and refuses calls to them. Write tools are identified by their `readOnlyHint` annotation, so newly annotated tools are covered automatically.
+
 ## [1.8.0] - 2026-11-12
 
 ### Added
