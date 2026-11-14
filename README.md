@@ -12,7 +12,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io)
 
-MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, and Prowlarr.
+MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, and Prowlarr - plus optional [Overseerr](https://overseerr.dev/) for media requests.
 
 Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP mode for hosted MCP clients such as ChatGPT connectors.
 
@@ -34,6 +34,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
 | **Radarr (Movies)** | List movies, search films, trigger downloads, check queue, view releases, review setup |
 | **Lidarr (Music)** | List artists, view albums, search musicians, trigger downloads, check queue, view calendar, review setup |
 | **Prowlarr (Indexers)** | List indexers, search across all trackers, test health, view statistics |
+| **Overseerr (Requests)** | List and count requests, per-user requests, users, TMDB search, approve or decline requests |
 | **Cross-Service** | Status check, unified search across all configured services |
 | **Configuration** | Quality profiles, download clients, naming conventions, health checks, storage info |
 | **TRaSH Guides** | Reference quality profiles, custom formats, naming conventions, compare against recommendations |
@@ -46,6 +47,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
   - [Radarr](https://radarr.video/) for movies
   - [Lidarr](https://lidarr.audio/) for music
   - [Prowlarr](https://prowlarr.com/) for indexer management
+- Optional: [Overseerr](https://overseerr.dev/) for media request management
 
 ## Installation
 
@@ -149,6 +151,8 @@ Each *arr application has an API key in Settings > General > Security:
 3. Find the **API Key** under the Security section
 4. Copy the API key for use in configuration
 
+Overseerr's API key is under **Settings** > **General** > **API Key**.
+
 ### For Claude Desktop
 
 Add to your Claude Desktop config file:
@@ -171,7 +175,9 @@ Add to your Claude Desktop config file:
         "LIDARR_URL": "http://localhost:8686",
         "LIDARR_API_KEY": "your-lidarr-api-key",
         "PROWLARR_URL": "http://localhost:9696",
-        "PROWLARR_API_KEY": "your-prowlarr-api-key"
+        "PROWLARR_API_KEY": "your-prowlarr-api-key",
+        "OVERSEERR_URL": "http://localhost:5055",
+        "OVERSEERR_API_KEY": "your-overseerr-api-key"
       }
     }
   }
@@ -359,6 +365,21 @@ Inspect existing episode and movie files with paginated summary or full MediaInf
 | `prowlarr_search` | Search across all indexers |
 | `prowlarr_test_indexers` | Test all indexers and return health status |
 | `prowlarr_get_stats` | Get indexer statistics (queries, grabs, failures) |
+
+### Overseerr Tools (Requests)
+
+Available when `OVERSEERR_URL` and `OVERSEERR_API_KEY` are set.
+
+| Tool | Description |
+|------|-------------|
+| `overseerr_get_requests` | List requests (newest first) with requester, request status and media status |
+| `overseerr_get_request_count` | Request counts by type and status |
+| `overseerr_get_users` | Users with their request counts |
+| `overseerr_get_user_requests` | Requests made by one user |
+| `overseerr_search` | Search movies and TV shows (TMDB) with their request/availability status |
+| `overseerr_status` | Overseerr version and update status |
+| `overseerr_approve_request` | Approve a pending request; Overseerr then sends it to Sonarr/Radarr. Requires `confirmed=true` |
+| `overseerr_decline_request` | Decline a pending request. Requires `confirmed=true` |
 
 ### Configuration Review Tools
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Optional Overseerr (media requests) integration via `OVERSEERR_URL` and `OVERSEERR_API_KEY`: requests, request counts, users, per-user requests, TMDB search and status. `overseerr_approve_request` and `overseerr_decline_request` require `confirmed=true`. `arr_status` and `/health` report Overseerr.
+
+### Documentation
+- Synchronize both registry tool catalogues with the 81 tools advertised when every service is configured.
+
 ## [1.8.0] - 2026-11-12
 
 ### Added

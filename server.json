@@ -71,6 +71,20 @@
           "format": "string",
           "isSecret": true,
           "name": "PROWLARR_API_KEY"
+        },
+        {
+          "description": "Overseerr server URL (optional, media requests)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "OVERSEERR_URL"
+        },
+        {
+          "description": "Overseerr API key",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "OVERSEERR_API_KEY"
         }
       ]
     }

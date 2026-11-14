@@ -24,6 +24,8 @@ for (const configured of configurations) {
       env[`${prefix}_URL`] = configured.includes(service) ? "http://127.0.0.1:1" : "";
       env[`${prefix}_API_KEY`] = configured.includes(service) ? "test-key" : "";
     }
+    env.OVERSEERR_URL = "";
+    env.OVERSEERR_API_KEY = "";
 
     const child = spawn(process.execPath, ["dist/index.js"], {
       cwd: new URL("..", import.meta.url),
