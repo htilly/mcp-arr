@@ -4,9 +4,15 @@ import { once } from "node:events";
 import test from "node:test";
 
 // Every tool must declare annotations.readOnlyHint so clients can tell lookups
-// apart from tools that change state. All four services are configured (with
+// apart from tools that change state. All services are configured (with
 // unreachable URLs; listing tools makes no API calls) so every tool is listed.
 const WRITE_TOOLS = [
+  "maintainerr_run_rules",
+  "maintainerr_postpone_deletion",
+  "maintainerr_exclude_media",
+  "maintainerr_remove_exclusion",
+  "maintainerr_remove_from_collection",
+  "maintainerr_handle_collections",
   "radarr_manual_import",
   "sonarr_grab_release",
   "radarr_grab_release",
@@ -53,7 +59,7 @@ test("every tool declares an explicit readOnlyHint", async () => {
     assert.equal(tools.find(tool => tool.name === name).annotations.idempotentHint, false);
   }
 
-  for (const name of ["sonarr_grab_release", "radarr_grab_release", "radarr_manual_import"]) {
+  for (const name of ["sonarr_grab_release", "radarr_grab_release", "radarr_manual_import", "maintainerr_handle_collections"]) {
     const annotations = tools.find(tool => tool.name === name)?.annotations;
     if (annotations) {
       assert.equal(annotations.destructiveHint, true);
@@ -70,7 +76,7 @@ test("every tool declares an explicit readOnlyHint", async () => {
 
 async function listTools() {
   const env = { ...process.env, MCP_TRANSPORT: "stdio" };
-  for (const service of ["SONARR", "RADARR", "LIDARR", "PROWLARR"]) {
+  for (const service of ["SONARR", "RADARR", "LIDARR", "PROWLARR", "MAINTAINERR"]) {
     env[`${service}_URL`] = "http://127.0.0.1:9";
     env[`${service}_API_KEY`] = "test";
   }

@@ -34,6 +34,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
 | **Radarr (Movies)** | List movies, search films, trigger downloads, check queue, view releases, review setup |
 | **Lidarr (Music)** | List artists, view albums, search musicians, trigger downloads, check queue, view calendar, review setup |
 | **Prowlarr (Indexers)** | List indexers, search across all trackers, test health, view statistics |
+| **Maintainerr (Cleanup)** | See what rule-based cleanup will delete and when, postpone or exclude items, run rules |
 | **Cross-Service** | Status check, unified search across all configured services |
 | **Configuration** | Quality profiles, download clients, naming conventions, health checks, storage info |
 | **TRaSH Guides** | Reference quality profiles, custom formats, naming conventions, compare against recommendations |
@@ -46,6 +47,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
   - [Radarr](https://radarr.video/) for movies
   - [Lidarr](https://lidarr.audio/) for music
   - [Prowlarr](https://prowlarr.com/) for indexer management
+- Optional: [Maintainerr](https://maintainerr.info/) for rule-based library cleanup
 
 ## Installation
 
@@ -149,6 +151,18 @@ Each *arr application has an API key in Settings > General > Security:
 3. Find the **API Key** under the Security section
 4. Copy the API key for use in configuration
 
+Maintainerr's API key is in **Settings** > **General**.
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `SONARR_URL` / `SONARR_API_KEY` | Sonarr base URL (e.g. `http://localhost:8989`) and API key |
+| `RADARR_URL` / `RADARR_API_KEY` | Radarr base URL (e.g. `http://localhost:7878`) and API key |
+| `LIDARR_URL` / `LIDARR_API_KEY` | Lidarr base URL (e.g. `http://localhost:8686`) and API key |
+| `PROWLARR_URL` / `PROWLARR_API_KEY` | Prowlarr base URL (e.g. `http://localhost:9696`) and API key |
+| `MAINTAINERR_URL` / `MAINTAINERR_API_KEY` | Maintainerr base URL (e.g. `http://localhost:6246`) and API key |
+
 ### For Claude Desktop
 
 Add to your Claude Desktop config file:
@@ -171,7 +185,9 @@ Add to your Claude Desktop config file:
         "LIDARR_URL": "http://localhost:8686",
         "LIDARR_API_KEY": "your-lidarr-api-key",
         "PROWLARR_URL": "http://localhost:9696",
-        "PROWLARR_API_KEY": "your-prowlarr-api-key"
+        "PROWLARR_API_KEY": "your-prowlarr-api-key",
+        "MAINTAINERR_URL": "http://localhost:6246",
+        "MAINTAINERR_API_KEY": "your-maintainerr-api-key"
       }
     }
   }
@@ -250,6 +266,11 @@ The existing service-specific tools remain available for richer local or power-u
 - "Are my indexers healthy?"
 - "How are my indexers performing?"
 - "Test all my Prowlarr indexers"
+
+### Library Cleanup (Maintainerr)
+- "What is Maintainerr going to delete this week?"
+- "Keep Love Me out of the Leaving Soon collection for good"
+- "Postpone the deletion of that movie by 30 days"
 
 ### Configuration Review
 - "Review my Sonarr setup and suggest improvements"
@@ -359,6 +380,25 @@ Inspect existing episode and movie files with paginated summary or full MediaInf
 | `prowlarr_search` | Search across all indexers |
 | `prowlarr_test_indexers` | Test all indexers and return health status |
 | `prowlarr_get_stats` | Get indexer statistics (queries, grabs, failures) |
+
+### Maintainerr Tools (Library Cleanup)
+
+| Tool | Description |
+|------|-------------|
+| `maintainerr_status` | Version, health and whether rules are running |
+| `maintainerr_get_collections` | Collections of media marked for removal, with size, grace period and Sonarr/Radarr action |
+| `maintainerr_get_collection_media` | Items in a collection with the date each will be deleted (paginated) |
+| `maintainerr_get_collection_logs` | Activity log of a collection, newest first (paginated) |
+| `maintainerr_get_rules` | Rule groups with library, media type, active state and collection |
+| `maintainerr_get_exclusions` | Items excluded from rules (global or per rule group) |
+| `maintainerr_search_media` | Search the media server by title to find a `mediaId` |
+| `maintainerr_get_media_status` | Which rule groups an item is excluded from and which collections it was added to manually |
+| `maintainerr_run_rules` | Run all or one rule group now (updates collections; deletes nothing) |
+| `maintainerr_postpone_deletion` | Restart an item's grace period or push its deletion out by a number of days |
+| `maintainerr_exclude_media` | Exclude an item from rules so it is never deleted |
+| `maintainerr_remove_exclusion` | Remove an exclusion so rules apply to the item again |
+| `maintainerr_remove_from_collection` | Remove an item from a collection (a later rule run may add it again) |
+| `maintainerr_handle_collections` | Run the collection handler now; items past their grace period get their action, usually deletion. Requires `confirmed: true` |
 
 ### Configuration Review Tools
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Maintainerr (rule-based library cleanup) support via `MAINTAINERR_URL` and `MAINTAINERR_API_KEY`: 14 `maintainerr_*` tools to see what will be deleted and when, postpone deletions, manage exclusions, run rules and run the collection handler. `maintainerr_handle_collections` deletes media past its grace period and requires `confirmed: true`. `arr_status` reports Maintainerr.
+
+### Documentation
+- Both registry tool catalogues include the 14 Maintainerr tools.
+
 ## [1.8.0] - 2026-11-12
 
 ### Added

@@ -15,7 +15,7 @@ export async function fixture(service, respond) {
   });
   await new Promise(resolve => api.listen(0, '127.0.0.1', resolve));
   const env = { ...process.env, MCP_TRANSPORT: 'stdio' };
-  for (const name of ['SONARR', 'RADARR', 'LIDARR', 'PROWLARR']) {
+  for (const name of ['SONARR', 'RADARR', 'LIDARR', 'PROWLARR', 'MAINTAINERR']) {
     env[name + '_URL'] = '';
     env[name + '_API_KEY'] = '';
   }

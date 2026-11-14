@@ -47,6 +47,8 @@ node dist/index.js
 | LIDARR_API_KEY | For Lidarr | API key |
 | PROWLARR_URL | For Prowlarr | Base URL |
 | PROWLARR_API_KEY | For Prowlarr | API key |
+| MAINTAINERR_URL | For Maintainerr | Base URL (e.g., http://localhost:6246) |
+| MAINTAINERR_API_KEY | For Maintainerr | API key from Maintainerr Settings → General |
 
 ## Constraints
 

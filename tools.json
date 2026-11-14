@@ -1,7 +1,7 @@
 [
   {
     "name": "arr_status",
-    "description": "Get status of all configured *arr services. Currently configured: Sonarr (TV), Radarr (Movies), Lidarr (Music), Prowlarr (Indexers)",
+    "description": "Get status of all configured *arr services. Currently configured: Sonarr (TV), Radarr (Movies), Lidarr (Music), Prowlarr (Indexers), Maintainerr (Cleanup)",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -1464,6 +1464,344 @@
     },
     "annotations": {
       "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "maintainerr_status",
+    "description": "Get Maintainerr version, health and whether rules are running right now",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "maintainerr_get_collections",
+    "description": "Get Maintainerr collections (media marked for removal): item count, size, days until deletion and the Sonarr/Radarr action taken when the grace period ends",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "maintainerr_get_collection_media",
+    "description": "Get the items in a Maintainerr collection with size, date added and the date each will be deleted",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "collectionId": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Collection id from maintainerr_get_collections"
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Page number (default: 1)"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Items per page (default: 25, max: 100)"
+        }
+      },
+      "required": [
+        "collectionId"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "maintainerr_get_collection_logs",
+    "description": "Get the activity log of a Maintainerr collection (items added, removed, handled/deleted, postponed), newest first",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "collectionId": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Collection id from maintainerr_get_collections"
+        },
+        "search": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Only log lines containing this text, e.g. a title"
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Page number (default: 1)"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Items per page (default: 25, max: 100)"
+        }
+      },
+      "required": [
+        "collectionId"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "maintainerr_get_rules",
+    "description": "Get Maintainerr rule groups: name, description, library, media type, active state, collection and number of rules",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "maintainerr_get_exclusions",
+    "description": "Get items excluded from Maintainerr rules (never added to a collection). Global exclusions have no ruleGroupId",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ruleGroupId": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Only exclusions for this rule group"
+        },
+        "mediaId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]{1,64}$",
+          "description": "Only exclusions for this media server item id"
+        }
+      },
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "maintainerr_search_media",
+    "description": "Search the media server through Maintainerr by title. Returns the media server item id (mediaId) and which Maintainerr collections the item is in",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Title to search for"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "maintainerr_get_media_status",
+    "description": "Get the Maintainerr status of one item: which rule groups it is excluded from and which collections it was added to manually",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mediaId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]{1,64}$",
+          "description": "Media server item id (Plex rating key or Jellyfin/Emby id). Find it with maintainerr_search_media or maintainerr_get_collection_media"
+        }
+      },
+      "required": [
+        "mediaId"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "maintainerr_run_rules",
+    "description": "Run Maintainerr rules now to update collections (adds/removes items; does not delete anything). Without ruleGroupId all active rule groups run",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ruleGroupId": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Run only this rule group"
+        }
+      },
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "maintainerr_postpone_deletion",
+    "description": "Postpone the deletion of an item in a Maintainerr collection. Without days the full grace period restarts from today; with days the deletion date moves out by that many days",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "collectionId": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Collection id"
+        },
+        "mediaId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]{1,64}$",
+          "description": "Media server item id (Plex rating key or Jellyfin/Emby id). Find it with maintainerr_search_media or maintainerr_get_collection_media"
+        },
+        "days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650,
+          "description": "Days to push the deletion out (default: restart the grace period)"
+        }
+      },
+      "required": [
+        "collectionId",
+        "mediaId"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "maintainerr_exclude_media",
+    "description": "Exclude an item from Maintainerr rules so it is never deleted (removes it from collections). Without collectionId the exclusion is global; with it, only that collection's rule group",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mediaId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]{1,64}$",
+          "description": "Media server item id (Plex rating key or Jellyfin/Emby id). Find it with maintainerr_search_media or maintainerr_get_collection_media"
+        },
+        "collectionId": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Only exclude from this collection's rule group"
+        }
+      },
+      "required": [
+        "mediaId"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "maintainerr_remove_exclusion",
+    "description": "Remove a Maintainerr exclusion so rules apply to the item again (it can then be scheduled for deletion). Use the same collectionId as when it was excluded (omit for a global exclusion)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mediaId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]{1,64}$",
+          "description": "Media server item id (Plex rating key or Jellyfin/Emby id). Find it with maintainerr_search_media or maintainerr_get_collection_media"
+        },
+        "collectionId": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Collection whose rule group the exclusion belongs to"
+        }
+      },
+      "required": [
+        "mediaId"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "maintainerr_remove_from_collection",
+    "description": "Remove an item from a Maintainerr collection. The next rule run can add it again; use maintainerr_exclude_media to keep it out for good",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "collectionId": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Collection id"
+        },
+        "mediaId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]{1,64}$",
+          "description": "Media server item id (Plex rating key or Jellyfin/Emby id). Find it with maintainerr_search_media or maintainerr_get_collection_media"
+        }
+      },
+      "required": [
+        "collectionId",
+        "mediaId"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "maintainerr_handle_collections",
+    "description": "Run the Maintainerr collection handler now: every item whose grace period is over gets its collection's Sonarr/Radarr action, which usually DELETES the media and its files. Check maintainerr_get_collection_media first. Requires confirmed=true; call only after the user explicitly approves",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "confirmed": {
+          "type": "boolean",
+          "description": "True only after the user approves deleting the media whose grace period is over"
+        }
+      },
+      "required": [
+        "confirmed"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
       "openWorldHint": true
     }
   },

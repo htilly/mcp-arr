@@ -34,3 +34,6 @@ services:
       # Prowlarr
       PROWLARR_URL: ${PROWLARR_URL:-}
       PROWLARR_API_KEY: ${PROWLARR_API_KEY:-}
+      # Maintainerr (library cleanup)
+      MAINTAINERR_URL: ${MAINTAINERR_URL:-}
+      MAINTAINERR_API_KEY: ${MAINTAINERR_API_KEY:-}

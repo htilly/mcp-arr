@@ -71,6 +71,20 @@
           "format": "string",
           "isSecret": true,
           "name": "PROWLARR_API_KEY"
+        },
+        {
+          "description": "Maintainerr server URL",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "MAINTAINERR_URL"
+        },
+        {
+          "description": "Maintainerr API key",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "MAINTAINERR_API_KEY"
         }
       ]
     }

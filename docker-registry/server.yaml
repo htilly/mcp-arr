@@ -37,6 +37,9 @@ config:
     - name: PROWLARR_URL
       description: "Prowlarr base URL (e.g., http://localhost:9696 or http://prowlarr:9696)"
       example: "http://localhost:9696"
+    - name: MAINTAINERR_URL
+      description: "Maintainerr base URL (e.g., http://localhost:6246 or http://maintainerr:6246)"
+      example: "http://localhost:6246"
   secrets:
     - name: arr.sonarr-api-key
       env: SONARR_API_KEY
@@ -54,3 +57,7 @@ config:
       env: PROWLARR_API_KEY
       description: "Prowlarr API key from Settings > General > Security"
       example: "<your-prowlarr-api-key>"
+    - name: arr.maintainerr-api-key
+      env: MAINTAINERR_API_KEY
+      description: "Maintainerr API key from Settings > General"
+      example: "<your-maintainerr-api-key>"
