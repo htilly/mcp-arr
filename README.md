@@ -12,7 +12,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io)
 
-MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, and Prowlarr.
+MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, and Prowlarr, plus optional [Bazarr](https://www.bazarr.media/) for subtitles.
 
 Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP mode for hosted MCP clients such as ChatGPT connectors.
 
@@ -34,6 +34,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
 | **Radarr (Movies)** | List movies, search films, trigger downloads, check queue, view releases, review setup |
 | **Lidarr (Music)** | List artists, view albums, search musicians, trigger downloads, check queue, view calendar, review setup |
 | **Prowlarr (Indexers)** | List indexers, search across all trackers, test health, view statistics |
+| **Bazarr (Subtitles)** | Missing subtitles, subtitle status per series/episode/movie, search and download subtitles, history, providers, languages |
 | **Cross-Service** | Status check, unified search across all configured services |
 | **Configuration** | Quality profiles, download clients, naming conventions, health checks, storage info |
 | **TRaSH Guides** | Reference quality profiles, custom formats, naming conventions, compare against recommendations |
@@ -46,6 +47,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
   - [Radarr](https://radarr.video/) for movies
   - [Lidarr](https://lidarr.audio/) for music
   - [Prowlarr](https://prowlarr.com/) for indexer management
+- Optional: [Bazarr](https://www.bazarr.media/) for subtitle management (`BAZARR_URL` and `BAZARR_API_KEY`)
 
 ## Installation
 
@@ -149,6 +151,8 @@ Each *arr application has an API key in Settings > General > Security:
 3. Find the **API Key** under the Security section
 4. Copy the API key for use in configuration
 
+Bazarr also shows its API key under **Settings** > **General** > **Security**. Set `BAZARR_URL` (for example `http://localhost:6767`) and `BAZARR_API_KEY` to enable the Bazarr tools.
+
 ### For Claude Desktop
 
 Add to your Claude Desktop config file:
@@ -171,7 +175,9 @@ Add to your Claude Desktop config file:
         "LIDARR_URL": "http://localhost:8686",
         "LIDARR_API_KEY": "your-lidarr-api-key",
         "PROWLARR_URL": "http://localhost:9696",
-        "PROWLARR_API_KEY": "your-prowlarr-api-key"
+        "PROWLARR_API_KEY": "your-prowlarr-api-key",
+        "BAZARR_URL": "http://localhost:6767",
+        "BAZARR_API_KEY": "your-bazarr-api-key"
       }
     }
   }
@@ -297,7 +303,7 @@ Inspect existing episode and movie files with paginated summary or full MediaInf
 
 | Tool | Description |
 |------|-------------|
-| `arr_status` | Get connection status for all configured *arr services |
+| `arr_status` | Get connection status for all configured *arr services and Bazarr |
 | `arr_search_all` | Search across all configured services simultaneously |
 | `search` | Generic discovery tool for remote MCP clients such as ChatGPT |
 | `fetch` | Generic detail-fetch tool for items returned by `search` |
@@ -359,6 +365,29 @@ Inspect existing episode and movie files with paginated summary or full MediaInf
 | `prowlarr_search` | Search across all indexers |
 | `prowlarr_test_indexers` | Test all indexers and return health status |
 | `prowlarr_get_stats` | Get indexer statistics (queries, grabs, failures) |
+
+### Bazarr Tools (Subtitles)
+
+Available when `BAZARR_URL` and `BAZARR_API_KEY` are set. Series and episode IDs are Sonarr IDs; movie IDs are Radarr IDs.
+
+| Tool | Description |
+|------|-------------|
+| `bazarr_status` | Bazarr system status (Bazarr, Sonarr and Radarr versions) |
+| `bazarr_get_health` | Health check issues |
+| `bazarr_get_badges` | Counts of episodes and movies missing subtitles, provider and health issues |
+| `bazarr_get_series` | Series with language profile and missing-subtitle counts |
+| `bazarr_get_episodes` | Episodes of a series with existing and missing subtitles (optional season filter) |
+| `bazarr_get_movies` | Movies with existing and missing subtitles |
+| `bazarr_get_wanted_episodes` | Episodes missing subtitles |
+| `bazarr_get_wanted_movies` | Movies missing subtitles |
+| `bazarr_get_history` | Subtitle history for episodes or movies |
+| `bazarr_search_series` | Search for all missing subtitles of a series |
+| `bazarr_search_movie` | Search for all missing subtitles of a movie |
+| `bazarr_download_episode_subtitle` | Download a subtitle in one language for an episode (optional forced/HI); replaces an existing subtitle in that language |
+| `bazarr_download_movie_subtitle` | Download a subtitle in one language for a movie (optional forced/HI); replaces an existing subtitle in that language |
+| `bazarr_get_providers` | Subtitle provider status (throttled providers) |
+| `bazarr_reset_providers` | Reset throttled providers so Bazarr retries them |
+| `bazarr_get_languages` | Enabled languages and language profiles |
 
 ### Configuration Review Tools
 

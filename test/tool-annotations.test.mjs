@@ -4,7 +4,7 @@ import { once } from "node:events";
 import test from "node:test";
 
 // Every tool must declare annotations.readOnlyHint so clients can tell lookups
-// apart from tools that change state. All four services are configured (with
+// apart from tools that change state. All five services are configured (with
 // unreachable URLs; listing tools makes no API calls) so every tool is listed.
 const WRITE_TOOLS = [
   "radarr_manual_import",
@@ -24,6 +24,11 @@ const WRITE_TOOLS = [
   "lidarr_search_missing",
   "lidarr_add_artist",
   "prowlarr_test_indexers",
+  "bazarr_search_series",
+  "bazarr_search_movie",
+  "bazarr_download_episode_subtitle",
+  "bazarr_download_movie_subtitle",
+  "bazarr_reset_providers",
 ];
 
 test("every tool declares an explicit readOnlyHint", async () => {
@@ -53,7 +58,7 @@ test("every tool declares an explicit readOnlyHint", async () => {
     assert.equal(tools.find(tool => tool.name === name).annotations.idempotentHint, false);
   }
 
-  for (const name of ["sonarr_grab_release", "radarr_grab_release", "radarr_manual_import"]) {
+  for (const name of ["sonarr_grab_release", "radarr_grab_release", "radarr_manual_import", "bazarr_download_episode_subtitle", "bazarr_download_movie_subtitle"]) {
     const annotations = tools.find(tool => tool.name === name)?.annotations;
     if (annotations) {
       assert.equal(annotations.destructiveHint, true);
@@ -70,7 +75,7 @@ test("every tool declares an explicit readOnlyHint", async () => {
 
 async function listTools() {
   const env = { ...process.env, MCP_TRANSPORT: "stdio" };
-  for (const service of ["SONARR", "RADARR", "LIDARR", "PROWLARR"]) {
+  for (const service of ["SONARR", "RADARR", "LIDARR", "PROWLARR", "BAZARR"]) {
     env[`${service}_URL`] = "http://127.0.0.1:9";
     env[`${service}_API_KEY`] = "test";
   }

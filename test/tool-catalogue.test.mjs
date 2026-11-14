@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import test from "node:test";
 
-const services = ["sonarr", "radarr", "lidarr", "prowlarr"];
+const services = ["sonarr", "radarr", "lidarr", "prowlarr", "bazarr"];
 const configurations = [[], ...services.map((service) => [service]), services];
 
 for (const configured of configurations) {
@@ -81,6 +81,11 @@ for (const configured of configurations) {
         names.filter((name) => name === "lidarr_get_metadata_profiles").length,
         configured.includes("lidarr") ? 1 : 0,
         "lidarr_get_metadata_profiles",
+      );
+      assert.equal(
+        names.filter((name) => name.startsWith("bazarr_")).length,
+        configured.includes("bazarr") ? 16 : 0,
+        "bazarr_* tools",
       );
     } finally {
       child.kill("SIGTERM");

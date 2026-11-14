@@ -1,7 +1,7 @@
 [
   {
     "name": "arr_status",
-    "description": "Get status of all configured *arr services. Currently configured: Sonarr (TV), Radarr (Movies), Lidarr (Music), Prowlarr (Indexers)",
+    "description": "Get status of all configured *arr services. Currently configured: Sonarr (TV), Radarr (Movies), Lidarr (Music), Prowlarr (Indexers), Bazarr (Subtitles)",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -1457,6 +1457,391 @@
   {
     "name": "prowlarr_get_stats",
     "description": "Get indexer statistics (queries, grabs, failures)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_status",
+    "description": "Get Bazarr system status (Bazarr, Sonarr and Radarr versions, OS, etc.)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_get_health",
+    "description": "Get Bazarr health check issues",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_get_badges",
+    "description": "Get Bazarr summary counts: episodes and movies with missing subtitles, provider issues, health issues, Sonarr/Radarr connection state",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_get_series",
+    "description": "Get TV series known to Bazarr with subtitle language profile and missing-subtitle episode counts. Use the returned sonarrSeriesId with other bazarr_* tools.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items to skip (default: 0)"
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum number of items to return (default: 50, max: 200)"
+        },
+        "seriesIds": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minItems": 1,
+          "maxItems": 100,
+          "description": "Only return these Sonarr series IDs"
+        }
+      },
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_get_episodes",
+    "description": "Get episodes of a series with existing and missing subtitles",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Sonarr series ID"
+        },
+        "season": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Only return this season"
+        }
+      },
+      "required": [
+        "seriesId"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_get_movies",
+    "description": "Get movies known to Bazarr with existing and missing subtitles. Use the returned radarrId with other bazarr_* tools.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items to skip (default: 0)"
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum number of items to return (default: 50, max: 200)"
+        },
+        "radarrIds": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minItems": 1,
+          "maxItems": 100,
+          "description": "Only return these Radarr movie IDs"
+        }
+      },
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_get_wanted_episodes",
+    "description": "Get episodes that are missing subtitles",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items to skip (default: 0)"
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum number of items to return (default: 50, max: 200)"
+        }
+      },
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_get_wanted_movies",
+    "description": "Get movies that are missing subtitles",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items to skip (default: 0)"
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum number of items to return (default: 50, max: 200)"
+        }
+      },
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_get_history",
+    "description": "Get Bazarr subtitle history (downloads, upgrades, manual actions)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "episodes",
+            "movies"
+          ],
+          "description": "History type (default: episodes)"
+        },
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of items to skip (default: 0)"
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum number of items to return (default: 50, max: 200)"
+        }
+      },
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_search_series",
+    "description": "Trigger Bazarr to search for and download all missing subtitles of a series",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Sonarr series ID"
+        }
+      },
+      "required": [
+        "seriesId"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_search_movie",
+    "description": "Trigger Bazarr to search for and download all missing subtitles of a movie",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "radarrId": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Radarr movie ID"
+        }
+      },
+      "required": [
+        "radarrId"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_download_episode_subtitle",
+    "description": "Search and download a subtitle in a specific language for one episode. Replaces an existing subtitle for that language.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "seriesId": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Sonarr series ID"
+        },
+        "episodeId": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Sonarr episode ID"
+        },
+        "language": {
+          "type": "string",
+          "pattern": "^[A-Za-z]{2,3}(-[A-Za-z]{2,4})?$",
+          "description": "Language code (ISO 639-1, e.g. 'en', 'sv'). Must be enabled in Bazarr (see bazarr_get_languages)"
+        },
+        "forced": {
+          "type": "boolean",
+          "description": "Download a forced subtitle (default: false)"
+        },
+        "hi": {
+          "type": "boolean",
+          "description": "Download a hearing-impaired subtitle (default: false)"
+        }
+      },
+      "required": [
+        "seriesId",
+        "episodeId",
+        "language"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_download_movie_subtitle",
+    "description": "Search and download a subtitle in a specific language for one movie. Replaces an existing subtitle for that language.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "radarrId": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Radarr movie ID"
+        },
+        "language": {
+          "type": "string",
+          "pattern": "^[A-Za-z]{2,3}(-[A-Za-z]{2,4})?$",
+          "description": "Language code (ISO 639-1, e.g. 'en', 'sv'). Must be enabled in Bazarr (see bazarr_get_languages)"
+        },
+        "forced": {
+          "type": "boolean",
+          "description": "Download a forced subtitle (default: false)"
+        },
+        "hi": {
+          "type": "boolean",
+          "description": "Download a hearing-impaired subtitle (default: false)"
+        }
+      },
+      "required": [
+        "radarrId",
+        "language"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_get_providers",
+    "description": "Get subtitle provider status (throttled providers and when they will be retried)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_reset_providers",
+    "description": "Reset throttled subtitle providers so Bazarr retries them immediately",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "bazarr_get_languages",
+    "description": "Get enabled subtitle languages and language profiles configured in Bazarr",
     "inputSchema": {
       "type": "object",
       "properties": {},

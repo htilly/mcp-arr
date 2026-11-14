@@ -37,6 +37,9 @@ config:
     - name: PROWLARR_URL
       description: "Prowlarr base URL (e.g., http://localhost:9696 or http://prowlarr:9696)"
       example: "http://localhost:9696"
+    - name: BAZARR_URL
+      description: "Optional Bazarr base URL for subtitle tools (e.g., http://localhost:6767 or http://bazarr:6767)"
+      example: "http://localhost:6767"
   secrets:
     - name: arr.sonarr-api-key
       env: SONARR_API_KEY
@@ -54,3 +57,7 @@ config:
       env: PROWLARR_API_KEY
       description: "Prowlarr API key from Settings > General > Security"
       example: "<your-prowlarr-api-key>"
+    - name: arr.bazarr-api-key
+      env: BAZARR_API_KEY
+      description: "Bazarr API key from Settings > General > Security"
+      example: "<your-bazarr-api-key>"

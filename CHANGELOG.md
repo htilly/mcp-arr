@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Optional Bazarr (subtitles) integration, enabled with `BAZARR_URL` and `BAZARR_API_KEY`. Adds 16 `bazarr_*` tools for status, health, badges, series/episode/movie subtitle status, wanted lists, history, missing-subtitle searches, single-language subtitle downloads, provider status and reset, and languages. Arguments are validated before any request. `arr_status`, `/health` and the startup log include Bazarr when configured.
+
+### Documentation
+- Add Bazarr to the README, `server.json` and Docker registry configuration. Both registry tool catalogues list the 89 tools advertised with every service configured.
+
 ## [1.8.0] - 2026-11-12
 
 ### Added
