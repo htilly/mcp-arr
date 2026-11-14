@@ -1,7 +1,7 @@
 [
   {
     "name": "arr_status",
-    "description": "Get status of all configured *arr services. Currently configured: Sonarr (TV), Radarr (Movies), Lidarr (Music), Prowlarr (Indexers)",
+    "description": "Get status of all configured *arr services. Currently configured: Sonarr (TV), Radarr (Movies), Lidarr (Music), Prowlarr (Indexers), Tautulli (Plex)",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -1464,6 +1464,205 @@
     },
     "annotations": {
       "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "tautulli_get_activity",
+    "description": "Get current Plex activity (active streams, with session_key/session_id) from Tautulli",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "tautulli_get_history",
+    "description": "Get Plex watch history from Tautulli. With title: report whether the title exists in the Plex library, how many plays match, and who watched it when. Without title: most recent history records.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Title to look up (e.g. 'Dune: Prophecy')"
+        },
+        "user_id": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Filter by Tautulli user ID (0 is the local Plex user)"
+        },
+        "media_type": {
+          "type": "string",
+          "enum": [
+            "movie",
+            "episode",
+            "track",
+            "live"
+          ],
+          "description": "Filter by media type"
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of records to return (default 25)"
+        },
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Record offset for pagination (default 0)"
+        }
+      },
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "tautulli_get_libraries",
+    "description": "Get Plex libraries (section IDs, names, item counts) from Tautulli",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "tautulli_get_server_info",
+    "description": "Get Plex server info (name, version, platform) from Tautulli",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "tautulli_get_home_stats",
+    "description": "Get Tautulli home statistics (most watched, most active users, platforms)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "time_range": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650,
+          "description": "Days to look back (default 30)"
+        },
+        "stats_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Items per statistic (default 10)"
+        }
+      },
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "tautulli_get_users",
+    "description": "Get Plex users known to Tautulli",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "tautulli_get_recently_added",
+    "description": "Get recently added Plex media from Tautulli",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Number of items (default 25)"
+        },
+        "section_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Limit to one library section ID"
+        }
+      },
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "tautulli_server_status",
+    "description": "Check whether Tautulli can reach the Plex server",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "openWorldHint": true
+    }
+  },
+  {
+    "name": "tautulli_terminate_session",
+    "description": "Stop an active Plex stream via Tautulli. Requires confirmed=true after the user approves stopping this exact stream. Identify it with session_key or session_id from tautulli_get_activity.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "session_key": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Session key from tautulli_get_activity"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Session ID from tautulli_get_activity"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional message shown to the viewer"
+        },
+        "confirmed": {
+          "type": "boolean",
+          "description": "True only after the user approves stopping this stream"
+        }
+      },
+      "required": [
+        "confirmed"
+      ]
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
       "openWorldHint": true
     }
   },

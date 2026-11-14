@@ -71,6 +71,20 @@
           "format": "string",
           "isSecret": true,
           "name": "PROWLARR_API_KEY"
+        },
+        {
+          "description": "Tautulli server URL (optional, Plex monitoring)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "TAUTULLI_URL"
+        },
+        {
+          "description": "Tautulli API key",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "TAUTULLI_API_KEY"
         }
       ]
     }

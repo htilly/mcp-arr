@@ -37,6 +37,9 @@ config:
     - name: PROWLARR_URL
       description: "Prowlarr base URL (e.g., http://localhost:9696 or http://prowlarr:9696)"
       example: "http://localhost:9696"
+    - name: TAUTULLI_URL
+      description: "Optional Tautulli base URL for Plex monitoring (e.g., http://localhost:8181 or http://tautulli:8181)"
+      example: "http://localhost:8181"
   secrets:
     - name: arr.sonarr-api-key
       env: SONARR_API_KEY
@@ -54,3 +57,7 @@ config:
       env: PROWLARR_API_KEY
       description: "Prowlarr API key from Settings > General > Security"
       example: "<your-prowlarr-api-key>"
+    - name: arr.tautulli-api-key
+      env: TAUTULLI_API_KEY
+      description: "Tautulli API key from Settings > Web Interface > API"
+      example: "<your-tautulli-api-key>"

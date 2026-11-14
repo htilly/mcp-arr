@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Optional Tautulli (Plex monitoring) integration via `TAUTULLI_URL` and `TAUTULLI_API_KEY`: activity, watch history with title lookup, libraries, server info, home stats, users, recently added and server status. `tautulli_terminate_session` requires `confirmed=true`. `arr_status` and `/health` report Tautulli.
+
+### Documentation
+- Synchronize both registry tool catalogues with the 82 tools advertised when every service is configured.
+
 ## [1.8.0] - 2026-11-12
 
 ### Added
