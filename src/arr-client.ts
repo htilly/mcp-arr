@@ -403,6 +403,75 @@ export interface SearchResult {
   disambiguation?: string;
 }
 
+export interface SonarrEpisodeFile {
+  id: number;
+  seriesId: number;
+  seasonNumber: number;
+  relativePath: string;
+  size: number;
+  sceneName?: string;
+  releaseGroup?: string;
+  quality?: { quality?: { name?: string; resolution?: number } };
+  mediaInfo?: Record<string, unknown>;
+}
+
+export interface RadarrMovieFile {
+  id: number; movieId: number; relativePath: string; size: number;
+  sceneName?: string; releaseGroup?: string;
+  quality?: { quality?: { name?: string; resolution?: number } };
+  mediaInfo?: Record<string, unknown>;
+}
+
+export interface SonarrRelease {
+  guid?: string;
+  indexerId?: number;
+  title?: string;
+  size?: number;
+  indexer?: string;
+  protocol?: string;
+  quality?: { quality?: { name?: string; resolution?: number } };
+  languages?: Array<{ name?: string }>;
+  rejected?: boolean;
+  rejections?: string[];
+  customFormatScore?: number;
+  seeders?: number;
+  leechers?: number;
+  age?: number;
+  downloadAllowed?: boolean;
+}
+
+export interface RadarrRelease extends SonarrRelease { }
+
+export interface ManualImportCandidate {
+  path: string;
+  folderName?: string;
+  size: number;
+  movie?: { id: number };
+  quality: { quality: { id: number };[key: string]: unknown };
+  languages: Array<{ id: number; name: string }>;
+  releaseGroup?: string;
+  indexerFlags?: number;
+  downloadId?: string;
+  rejections?: Array<{ reason: string; type?: string }>;
+}
+
+export interface ManualImportSelection {
+  path: string;
+  movieId: number;
+  expectedSizeBytes: number;
+  acknowledgedRejections?: string[];
+}
+
+export interface ManualImportScope { folder?: string; downloadId?: string }
+
+export class ArrValidationError extends Error {}
+
+// Unknown rejection wording must be reviewed rather than treated as a preference.
+function isPreferenceRejection(reason: string): boolean {
+  return reason === "Not an upgrade" || reason === "Existing file meets cutoff" ||
+    /^Existing file meets cutoff: (?:Remux|Bluray|WEBDL|WEBRip|HDTV)-(?:720p|1080p|2160p)$/.test(reason);
+}
+
 export class ArrClient {
   private config: ArrConfig;
   private serviceName: ArrService;
@@ -566,6 +635,36 @@ export class ArrClient {
 // Service-specific clients
 
 export class SonarrClient extends ArrClient {
+  async grabEpisodeRelease(episodeId: number, indexerId: number, guid: string, acknowledgedRejections: string[] = []): Promise<unknown> {
+    const releases = await this.request<Array<{ indexerId?: number; guid?: string; downloadAllowed?: boolean; rejected?: boolean; rejections?: string[] }>>(`/release?episodeId=${episodeId}`);
+    const matches = releases.filter(r => r.indexerId === indexerId && r.guid === guid);
+    if (matches.length !== 1) throw new ArrValidationError("Selected release is missing or ambiguous; inspect current results");
+    const release = matches[0];
+    if (!release) throw new ArrValidationError("Selected release is no longer available for this episode");
+    const reasons = release.rejections ?? [];
+    if (!Array.isArray(reasons) || reasons.some(reason => typeof reason !== "string")) {
+      throw new ArrValidationError("Release rejection metadata is invalid; inspect current results");
+    }
+    if ((release.rejected && reasons.length === 0) ||
+      reasons.some(reason => !isPreferenceRejection(reason) || !acknowledgedRejections.includes(reason)) ||
+      acknowledgedRejections.some(reason => !reasons.includes(reason))) {
+      throw new ArrValidationError("Release rejections are substantive, unacknowledged, or changed; inspect current results");
+    }
+    if (release.downloadAllowed !== true) throw new ArrValidationError("Sonarr reports that this release cannot be downloaded");
+    return this['request']<unknown>('/release', {
+      method: 'POST',
+      body: JSON.stringify({ guid, indexerId }),
+    });
+  }
+
+  async getEpisodeReleases(episodeId: number): Promise<SonarrRelease[]> {
+    return this['request']<SonarrRelease[]>(`/release?episodeId=${episodeId}`);
+  }
+
+  async getEpisodeFiles(seriesId: number): Promise<SonarrEpisodeFile[]> {
+    return this['request']<SonarrEpisodeFile[]>(`/episodefile?seriesId=${seriesId}`);
+  }
+
   constructor(config: ArrConfig) {
     super('sonarr', config);
   }
@@ -695,6 +794,106 @@ export class SonarrClient extends ArrClient {
 }
 
 export class RadarrClient extends ArrClient {
+  async getManualImportCandidates(scope: ManualImportScope): Promise<ManualImportCandidate[]> {
+    if (!scope || (!scope.folder && !scope.downloadId)) {
+      throw new ArrValidationError('Provide a folder or downloadId to inspect');
+    }
+    const params = new URLSearchParams({ filterExistingFiles: 'true' });
+    for (const key of ['folder', 'downloadId'] as const) {
+      if (scope[key] !== undefined) {
+        if (typeof scope[key] !== 'string' || !scope[key]!.trim() || scope[key]!.length > 4096) {
+          throw new ArrValidationError(`Invalid ${key}`);
+        }
+        params.set(key, scope[key]!);
+      }
+    }
+    return this.request<ManualImportCandidate[]>(`/manualimport?${params}`);
+  }
+
+  async manualImport(scope: ManualImportScope, files: ManualImportSelection[], importMode: string, confirmed: boolean): Promise<unknown> {
+    if (confirmed !== true) throw new ArrValidationError('Explicit confirmation is required for manual import');
+    if (!['auto', 'copy', 'move'].includes(importMode)) throw new ArrValidationError('Invalid importMode');
+    if (!Array.isArray(files) || files.length < 1 || files.length > 25) throw new ArrValidationError('Select 1 to 25 files');
+    const paths = new Set<string>();
+    const movieIds = new Set<number>();
+    for (const file of files) {
+      if (!file || typeof file.path !== 'string' || !file.path.trim() || file.path.length > 4096 || paths.has(file.path) || movieIds.has(file.movieId) ||
+        !Number.isSafeInteger(file.movieId) || file.movieId <= 0 ||
+        !Number.isSafeInteger(file.expectedSizeBytes) || file.expectedSizeBytes <= 0 ||
+        (file.acknowledgedRejections !== undefined && (!Array.isArray(file.acknowledgedRejections) ||
+          file.acknowledgedRejections.some(r => typeof r !== 'string')))) {
+        throw new ArrValidationError('Invalid or duplicate file selection');
+      }
+      paths.add(file.path);
+      movieIds.add(file.movieId);
+    }
+    // Re-scan immediately before submission; never accept caller-supplied quality or language claims.
+    const candidates = await this.getManualImportCandidates(scope);
+    const selected = files.map(file => {
+      const matches = candidates.filter(c => c.path === file.path);
+      if (matches.length !== 1) throw new ArrValidationError("Selected import path is missing or ambiguous; inspect candidates again");
+      const candidate = matches[0];
+      if (!candidate || candidate.movie?.id !== file.movieId || candidate.size !== file.expectedSizeBytes) {
+        throw new ArrValidationError('Selected file changed or movie mapping is unresolved; inspect candidates again');
+      }
+      if (!Number.isSafeInteger(candidate.quality?.quality?.id) || candidate.quality.quality.id <= 0 ||
+        !Array.isArray(candidate.languages) || !candidate.languages.length ||
+        candidate.languages.some(l => !Number.isSafeInteger(l?.id) || l.id <= 0)) {
+        throw new ArrValidationError('Resolve unknown quality or languages before importing');
+      }
+      if (scope.downloadId && candidate.downloadId && scope.downloadId !== candidate.downloadId) {
+        throw new ArrValidationError("Candidate download ID changed; inspect candidates again");
+      }
+      if (!Array.isArray(candidate.rejections ?? []) || (candidate.rejections ?? []).some(r => typeof r?.reason !== "string")) {
+        throw new ArrValidationError("Import rejection metadata is invalid; inspect candidates again");
+      }
+      const reasons = (candidate.rejections ?? []).map(r => r.reason);
+      const acknowledged = file.acknowledgedRejections ?? [];
+      if (reasons.some(r => !isPreferenceRejection(r) || !acknowledged.includes(r)) || acknowledged.some(r => !reasons.includes(r))) {
+        throw new ArrValidationError('Import rejections are substantive, changed or not explicitly acknowledged; inspect candidates again');
+      }
+      return {
+        path: candidate.path, folderName: candidate.folderName, movieId: file.movieId,
+        quality: candidate.quality, languages: candidate.languages,
+        releaseGroup: candidate.releaseGroup, indexerFlags: candidate.indexerFlags,
+        downloadId: candidate.downloadId || scope.downloadId,
+      };
+    });
+    return this.request('/command', { method: 'POST', body: JSON.stringify({ name: 'ManualImport', files: selected, importMode }) });
+  }
+
+  async getCommand(commandId: number): Promise<unknown> {
+    if (!Number.isSafeInteger(commandId) || commandId <= 0) throw new ArrValidationError('Invalid commandId');
+    return this.request(`/command/${commandId}`);
+  }
+
+  async grabMovieRelease(movieId: number, indexerId: number, guid: string, acknowledgedRejections: string[] = []): Promise<unknown> {
+    const releases = await this.request<Array<{ indexerId?: number; guid?: string; downloadAllowed?: boolean; rejected?: boolean; rejections?: string[] }>>(`/release?movieId=${movieId}`);
+    const matches = releases.filter(r => r.indexerId === indexerId && r.guid === guid);
+    if (matches.length !== 1) throw new ArrValidationError("Selected release is missing or ambiguous; inspect current results");
+    const release = matches[0];
+    if (!release) throw new ArrValidationError("Selected release is no longer available for this movie");
+    const reasons = release.rejections ?? [];
+    if (!Array.isArray(reasons) || reasons.some(reason => typeof reason !== "string")) {
+      throw new ArrValidationError("Release rejection metadata is invalid; inspect current results");
+    }
+    if ((release.rejected && reasons.length === 0) ||
+      reasons.some(reason => !isPreferenceRejection(reason) || !acknowledgedRejections.includes(reason)) ||
+      acknowledgedRejections.some(reason => !reasons.includes(reason))) {
+      throw new ArrValidationError("Release rejections are substantive, unacknowledged, or changed; inspect current results");
+    }
+    if (release.downloadAllowed !== true) throw new ArrValidationError("Radarr reports that this release cannot be downloaded");
+    return this['request']<unknown>('/release', { method: 'POST', body: JSON.stringify({ guid, indexerId }) });
+  }
+
+  async getMovieReleases(movieId: number): Promise<RadarrRelease[]> {
+    return this['request']<RadarrRelease[]>(`/release?movieId=${movieId}`);
+  }
+
+  async getMovieFiles(movieId: number): Promise<RadarrMovieFile[]> {
+    return this['request']<RadarrMovieFile[]>(`/moviefile?movieId=${movieId}`);
+  }
+
   constructor(config: ArrConfig) {
     super('radarr', config);
   }

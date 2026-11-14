@@ -512,6 +512,33 @@ The AI will answer from the tool definitions (sortBy, limit, etc.) without needi
 
 ## Available Tools
 
+### Radarr manual import
+
+Use `radarr_get_manual_import_candidates` to inspect a completed download folder or download ID. Review exact paths, movie mappings, sizes, quality, languages and rejection reasons before calling `radarr_manual_import`. Import requires `confirmed=true`, 1–25 selected files with expected sizes, and an explicit `auto`, `copy` or `move` mode. A fresh scan must still match each selection. Duplicate paths or movie selections, unknown metadata, changed download IDs and substantive rejections are refused. Preference overrides use the same narrow recognized reasons as exact release grabs and require exact current acknowledgements.
+
+Radarr may replace existing library files. `copy` preserves the download source; `move` can remove it; `auto` follows Radarr download-client rules. A response with `submitted=true` and `imported=false` means only that Radarr accepted a command. Use `radarr_get_command` and inspect the resulting movie files and queue before treating the import as complete or retrying.
+
+### Exact release grabs
+
+Use `sonarr_grab_release` or `radarr_grab_release` only after the user approves the exact media ID, indexer ID and GUID. Both require `confirmed=true` and re-query current releases before submitting one download. Missing, ambiguous or download-disallowed candidates are refused.
+
+Rejection overrides require exact current `acknowledgedRejections` strings. Supported preference reasons are `Not an upgrade`, `Existing file meets cutoff`, and cutoff reasons naming a Remux/Bluray/WEBDL/WEBRip/HDTV quality at 720p, 1080p or 2160p. Unknown wording and substantive rejections are refused. After an ambiguous submission, inspect the queue and library before retrying.
+
+### Release inspection
+
+Use `sonarr_get_episode_releases` or `radarr_get_movie_releases` to inspect interactive indexer results without starting downloads. Responses include exact GUID/indexer IDs, sizes, languages, quality, availability and rejection reasons. Pagination limits the response, not the underlying indexer search.
+
+### Queue diagnostics
+
+Paginated queue responses include `statusMessages`, `downloadId`, `outputPath`, `sizeBytes` and `sizeLeftBytes`. These fields help distinguish failed downloads from completed downloads awaiting import. Queue absence alone does not establish success or failure. Output paths refer to the configured server filesystem.
+
+### Add Sonarr and Radarr file metadata tools
+
+Inspect existing episode and movie files with paginated summary or full MediaInfo responses. Defaults to 25 records; limit is capped at 100. No media files are opened or changed.
+
+- `sonarr_get_episode_files`
+- `radarr_get_movie_files`
+
 ### General Tools
 
 | Tool | Description |
@@ -767,6 +794,10 @@ The config file was encrypted with a different key. Start with the original `CON
 ## Need help building or securing MCP servers?
 
 I build and maintain MCP servers like this one, and I review AI and agent setups for security. If your team needs a custom server, an integration, or a security review of one you already run, see [jimchristian.net/work](https://jimchristian.net/work/) or book a [discovery session](https://jimchristian.net/discovery/).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks, and tool changes.
 
 ## License
 

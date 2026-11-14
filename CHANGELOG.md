@@ -25,10 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Web UI menu:** the flat row of twelve tabs is now a two-level menu: *Media*, *My account*, *Users*, *Server* and *About*, each with its own pages. The old *Settings* tab is split across *Server → Public address*, *Certificates & DNS* (certificate status and settings on one page), *Connectors & proxy* and *Security* (encryption and startup settings). Unsaved settings changes are kept across those pages and saved together.
 - **BREAKING (HTTP mode):** `MCP_TRANSPORT=http` now serves **HTTPS with authentication**. It requires `PUBLIC_URL` and a writable `CONFIG_PATH`, and every MCP request needs a per-user access token created in the web UI. Existing unauthenticated plain-HTTP setups (e.g. n8n pointing at `http://host:3000/mcp`) must be updated - see README "Remote server". `TLS_MODE=off` keeps plain HTTP for use behind a TLS-terminating reverse proxy, but tokens are still required. stdio mode is unchanged.
 - **Deploy workflow** (`deploy.yml`): the post-deploy check now works with the authenticated HTTPS server. It accepts `200` (older unauthenticated image, e.g. after a rollback) or `401` + `WWW-Authenticate: Bearer` (auth enforced), and, when `MCP_CHECK_TOKEN` is set on the runner, also runs an authenticated `initialize` over verified HTTPS (`MCP_ARR_CA_FILE`). An untrusted certificate falls back to an unverified liveness check with a warning (the token is never sent over it), and the rollback step also accepts a plain-HTTP older image behind an `https://` `APP_URL`. When the check fails it names the likely cause from curl's exit code (host does not resolve, connection refused, timeout, http/https scheme mismatch, untrusted certificate) without printing any host name. Responses and the token are never printed. The host compose file must run the HTTPS mode - see README "Self-hosted deploy".
-- **Synced with upstream `aplaceforallmystuff/mcp-arr` v1.7.3.** Fork-only features are kept; where both sides changed the same tool, the result is a superset:
+- **Synced with upstream `aplaceforallmystuff/mcp-arr` v1.8.0 (previously v1.7.3).** Fork-only features are kept; where both sides changed the same tool, the result is a superset:
   - `sonarr_get_series` and `radarr_get_movies` accept upstream's `limit` / `offset` / `search` **and** the fork's `sortBy` / `sortDir`. Sorting is applied before pagination. **Behaviour change for fork users:** `limit` now defaults to 25 (max 100) instead of returning everything, and the response uses upstream's pagination fields (`total`, `returned`, `hasMore`, `nextOffset`, ...) instead of `totalCount` / `count` / `limitedTo`.
   - The server starts in TRaSH-only mode when nothing is configured, instead of exiting.
   - Readarr support is gone (removed upstream in 1.6.1); the Readarr tools no longer exist.
+  - From v1.8.0: `sonarr_grab_release`, `radarr_grab_release` and `radarr_manual_import` keep upstream's `confirmed: true` guard and are also write tools here, so `ARR_READ_ONLY` and the *user* role block them. ID arguments of the new file/release tools must be positive integers and `limit` is capped at 100 (rejected above, not clamped). Fork-only tools get `openWorldHint: true`, and write tools without their own hint `idempotentHint: false`.
 
 ### Added
 - **Maintainerr (library cleanup) integration** - optional, enabled with `MAINTAINERR_URL` + `MAINTAINERR_API_KEY` (env or the web UI's Services tab):
@@ -105,6 +106,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - `overseerr_decline_request` – Decline a pending media request
   - `overseerr_search` – Search for movies and TV shows (uses TMDB)
   - `overseerr_status` – Get Overseerr server status and version
+
+## [1.8.0] - 2026-11-12
+
+### Added
+- Explicit read-only, destructive, idempotent and open-world annotations for all tools. Annotations describe behavior; guarded writes still require confirmation.
+- Guarded Radarr manual import with fresh exact file selection, explicit confirmation/mode, narrow acknowledged preference overrides, and separate command status inspection.
+- Confirmed exact Sonarr/Radarr release grabs with a fresh unique candidate, explicit download eligibility and narrow rejection overrides.
+- Sonarr and Radarr interactive release inspection with exact identifiers, language/quality metadata, and rejection reasons.
+- Queue responses include warning messages, download IDs, server output paths, and byte counts.
+- Sonarr and Radarr file metadata tools with paginated summary or full MediaInfo responses.
+
+### Documentation
+- Synchronize both registry tool catalogues with the 73 tools advertised by the server.
+
+## [1.7.4] - 2026-11-08
+
+### Security
+- Update `@modelcontextprotocol/sdk` to 1.32.2 and refresh compatible locked dependencies. The approved candidate reports zero findings with `npm audit --audit-level=high`.
+- Reject tool arguments containing more than 1008 elements before walking the input. Advertised array inputs are limited to 1000 items.
+
+### Documentation
+- Add contribution instructions and document the verified Node.js 18 HTTP 400 limitation. Use Node.js 20 or newer for HTTP mode.
 
 ### Fixed
 - Duplicate registrations for `lidarr_get_quality_profiles` and `lidarr_get_root_folders` in `tools/list`, which caused clients that require unique tool names to reject the server ([#52](https://github.com/aplaceforallmystuff/mcp-arr/issues/52)). The shared configuration tools and their existing handlers remain in place.

@@ -49,6 +49,10 @@ const WRITE_TOOLS = new Set([
   "maintainerr_exclude_media",
   "maintainerr_remove_exclusion",
   "maintainerr_remove_from_collection",
+  // These use their own `confirmed: true` argument (upstream guard).
+  "sonarr_grab_release",
+  "radarr_grab_release",
+  "radarr_manual_import",
 ]);
 
 export function isWriteTool(name: string): boolean {
@@ -58,10 +62,16 @@ export function isWriteTool(name: string): boolean {
 /** Add MCP annotations and, where required, the `confirm` argument. */
 export function applyToolPolicy(tool: Tool): void {
   const needsConfirm = CONFIRM_REQUIRED_TOOLS.has(tool.name);
+  const writes = WRITE_TOOLS.has(tool.name);
   tool.annotations = {
+    // Every tool talks to an outside service. A write tool without its own
+    // hint is assumed not idempotent (the safe default for clients).
+    openWorldHint: true,
+    ...(writes ? { idempotentHint: false } : {}),
     ...tool.annotations,
-    readOnlyHint: !WRITE_TOOLS.has(tool.name),
-    destructiveHint: needsConfirm,
+    readOnlyHint: !writes,
+    // Keep a tool's own destructive hint (e.g. grabs that replace files).
+    destructiveHint: needsConfirm || (writes && tool.annotations?.destructiveHint === true),
   };
   if (needsConfirm) {
     tool.inputSchema.properties = {

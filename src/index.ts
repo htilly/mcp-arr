@@ -27,8 +27,11 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   CallToolRequestSchema,
+  ErrorCode,
   ListToolsRequestSchema,
+  McpError,
   Tool,
+  ToolAnnotations,
 } from "@modelcontextprotocol/sdk/types.js";
 import { readFileSync } from "node:fs";
 import {
@@ -37,6 +40,7 @@ import {
   LidarrClient,
   ProwlarrClient,
   ArrService,
+  ArrValidationError,
 } from "./arr-client.js";
 import { trashClient, TrashService } from "./trash-client.js";
 import { TautulliClient } from "./tautulli-client.js";
@@ -74,6 +78,37 @@ function readServerVersion(): string {
   }
   return "0.0.0-unknown";
 }
+
+// Copied verbatim from @modelcontextprotocol/sdk@1.32.2
+// dist/esm/server/mcp.js, where it is module-private and unexported. The
+// tool-call handlers below walk the arguments array themselves, so the same
+// bound is applied here before that walk. The early exit is part of the copy.
+function toolInputElementCount(value: unknown, max: number): number {
+  let count = 0;
+  const stack: unknown[] = [value];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node === null || typeof node !== "object") continue;
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        if (++count > max) return count;
+        if (child !== null && typeof child === "object") stack.push(child);
+      }
+    } else {
+      for (const key in node) {
+        if (!Object.prototype.hasOwnProperty.call(node, key)) continue;
+        if (++count > max) return count;
+        const child = (node as Record<string, unknown>)[key];
+        if (child !== null && typeof child === "object") stack.push(child);
+      }
+    }
+  }
+  return count;
+}
+
+// Largest schema-bounded array (1000) + widest tool envelope (7 keys) + 1,
+// so every call the schemas advertise is accepted by this bound.
+const MAX_TOOL_INPUT_ELEMENTS = 1008;
 
 const SERVER_VERSION = readServerVersion();
 
@@ -173,11 +208,28 @@ function applyConfig(config: EffectiveConfig): void {
   buildTools();
 }
 
+// Tool annotations (MCP ToolAnnotations hints). Every tool declares one of
+// these so clients can tell lookups apart from tools that change state, e.g.
+// to auto-approve read-only calls. All tools talk to the *arr services or
+// TRaSH Guides, so openWorldHint is always true.
+const READ_ONLY: ToolAnnotations = { readOnlyHint: true, openWorldHint: true };
+// Queues an indexer search command; may grab and download releases.
+const TRIGGERS_SEARCH: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+// Each metadata refresh or indexer test submits a new command.
+const TRIGGERS_REFRESH: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+// Adds new media to the library (optionally starting a search).
+const ADDS_MEDIA: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+// Overwrites existing settings on a library item.
+const OVERWRITES: ToolAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true };
+// Removes an item (and optionally blocklists the release).
+const DELETES: ToolAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true };
+
 function buildTools(): void {
 TOOLS.length = 0;
 TOOLS.push(
   {
     name: "arr_status",
+    annotations: READ_ONLY,
     description: statusParts.length > 0
       ? `Get status of all configured services. Currently configured: ${statusParts.join(', ')}`
       : "Get status of all supported services. No local services are currently configured, but TRaSH reference tools remain available.",
@@ -189,6 +241,7 @@ TOOLS.push(
   },
   {
     name: "search",
+    annotations: READ_ONLY,
     description: "Search across configured *arr libraries plus TRaSH Guides reference profiles. This is the primary discovery tool for remote MCP clients such as ChatGPT.",
     inputSchema: {
       type: "object" as const,
@@ -203,6 +256,7 @@ TOOLS.push(
   },
   {
     name: "fetch",
+    annotations: READ_ONLY,
     description: "Fetch a specific item returned by search. Accepts an opaque item id from the search tool.",
     inputSchema: {
       type: "object" as const,
@@ -225,6 +279,7 @@ function addConfigTools(serviceName: string, displayName: string) {
   TOOLS.push(
     {
       name: `${serviceName}_get_quality_profiles`,
+      annotations: READ_ONLY,
       description: `Get detailed quality profiles from ${displayName}. Shows allowed qualities, upgrade settings, and custom format scores.`,
       inputSchema: {
         type: "object" as const,
@@ -234,6 +289,7 @@ function addConfigTools(serviceName: string, displayName: string) {
     },
     {
       name: `${serviceName}_get_health`,
+      annotations: READ_ONLY,
       description: `Get health check warnings and issues from ${displayName}. Shows any problems detected by the application.`,
       inputSchema: {
         type: "object" as const,
@@ -243,6 +299,7 @@ function addConfigTools(serviceName: string, displayName: string) {
     },
     {
       name: `${serviceName}_get_root_folders`,
+      annotations: READ_ONLY,
       description: `Get root folders and storage info from ${displayName}. Shows paths, free space, and unmapped folders.`,
       inputSchema: {
         type: "object" as const,
@@ -252,6 +309,7 @@ function addConfigTools(serviceName: string, displayName: string) {
     },
     {
       name: `${serviceName}_get_download_clients`,
+      annotations: READ_ONLY,
       description: `Get download client configurations from ${displayName}. Shows configured clients and their settings.`,
       inputSchema: {
         type: "object" as const,
@@ -261,6 +319,7 @@ function addConfigTools(serviceName: string, displayName: string) {
     },
     {
       name: `${serviceName}_get_naming`,
+      annotations: READ_ONLY,
       description: `Get file naming configuration from ${displayName}. Shows naming patterns for files and folders.`,
       inputSchema: {
         type: "object" as const,
@@ -270,6 +329,7 @@ function addConfigTools(serviceName: string, displayName: string) {
     },
     {
       name: `${serviceName}_get_tags`,
+      annotations: READ_ONLY,
       description: `Get all tags defined in ${displayName}. Tags can be used to organize and filter content.`,
       inputSchema: {
         type: "object" as const,
@@ -279,6 +339,7 @@ function addConfigTools(serviceName: string, displayName: string) {
     },
     {
       name: `${serviceName}_review_setup`,
+      annotations: READ_ONLY,
       description: `Get comprehensive configuration review for ${displayName}. Returns all settings for analysis: quality profiles, download clients, naming, storage, indexers, health warnings, and more. Use this to analyze the setup and suggest improvements.`,
       inputSchema: {
         type: "object" as const,
@@ -294,11 +355,174 @@ if (clients.sonarr) addConfigTools('sonarr', 'Sonarr (TV)');
 if (clients.radarr) addConfigTools('radarr', 'Radarr (Movies)');
 if (clients.lidarr) addConfigTools('lidarr', 'Lidarr (Music)');
 
+if (clients.sonarr) {
+  TOOLS.push({
+    name: "sonarr_get_episode_files",
+    annotations: READ_ONLY,
+    description: "Get paginated Sonarr episode-file metadata. fields=summary (default) gives compact codec and size data; fields=full returns all available MediaInfo. Read-only.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        seriesId: { type: "integer", minimum: 1, description: "Sonarr series ID" },
+        limit: { type: "integer", minimum: 1, maximum: 100, description: "Maximum records (default 25, max 100)" },
+        offset: { type: "integer", minimum: 0, description: "Records to skip (default 0)" },
+        fields: { type: "string", enum: ["summary", "full"], description: "Response detail (default summary)" },
+      },
+      required: ["seriesId"],
+    },
+  });
+}
+
+if (clients.radarr) {
+  TOOLS.push({
+    name: "radarr_get_movie_files",
+    annotations: READ_ONLY,
+    description: "Get paginated Radarr movie file sizes and MediaInfo. fields=summary (default) returns compact metadata; fields=full includes scene names and all available MediaInfo.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        movieId: { type: "integer", minimum: 1, description: "Radarr movie ID" },
+        limit: { type: "integer", minimum: 1, maximum: 100, description: "Maximum records (default 25, max 100)" },
+        offset: { type: "integer", minimum: 0, description: "Records to skip (default 0)" },
+        fields: { type: "string", enum: ["summary", "full"] },
+      },
+      required: ["movieId"],
+    },
+  });
+}
+
+if (clients.sonarr) {
+  TOOLS.push({
+    name: "sonarr_get_episode_releases",
+    annotations: READ_ONLY,
+    description: "Read-only interactive Sonarr indexer search for alternative releases of an episode; does not grab or download. Returns compact release details and rejection reasons.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        episodeId: { type: "integer", minimum: 1, description: "Sonarr episode ID (not episode-file ID)" },
+        limit: { type: "integer", minimum: 1, maximum: 100, description: "Maximum results (default 25, max 100)" },
+        offset: { type: "integer", minimum: 0, description: "Results to skip (default 0)" },
+      },
+      required: ["episodeId"],
+    },
+  });
+}
+
+if (clients.radarr) {
+  TOOLS.push({
+    name: "radarr_get_movie_releases",
+    annotations: READ_ONLY,
+    description: "Read-only interactive Radarr indexer search for movie releases; does not grab or download. Returns release details and rejection reasons.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        movieId: { type: "integer", minimum: 1, description: "Radarr movie ID" },
+        limit: { type: "integer", minimum: 1, maximum: 100, description: "Maximum results (default 25, max 100)" },
+        offset: { type: "integer", minimum: 0, description: "Results to skip (default 0)" },
+      },
+      required: ["movieId"],
+    },
+  });
+}
+
+if (clients.sonarr) {
+  TOOLS.push({
+    name: "sonarr_grab_release",
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    description: "Manually grab one specifically approved Sonarr release, with exact acknowledgement required to override cutoff/not-an-upgrade rejections. Causes a download; call only after user explicitly approves the exact release. Revalidates release against current interactive search.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        episodeId: { type: "integer", minimum: 1, description: "Sonarr episode ID" },
+        indexerId: { type: "integer", minimum: 1, description: "Indexer ID returned by sonarr_get_episode_releases" },
+        guid: { type: "string", description: "Exact release GUID returned by sonarr_get_episode_releases" },
+        acknowledgedRejections: { type: "array", maxItems: 1000, items: { type: "string" }, description: "Exact current cutoff/not-an-upgrade reasons explicitly approved for override" },
+        confirmed: { type: "boolean", description: "True only after the user approves grabbing this exact release" },
+      },
+      required: ["episodeId", "indexerId", "guid", "confirmed"],
+    },
+  });
+}
+
+if (clients.radarr) {
+  TOOLS.push({
+    name: "radarr_grab_release",
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    description: "Manually grab one specifically approved Radarr release, with exact acknowledgement required to override cutoff/not-an-upgrade rejections. Causes a download; call only after user explicitly approves the exact release. Revalidates release against current interactive search.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        movieId: { type: "integer", minimum: 1, description: "Radarr movie ID" },
+        indexerId: { type: "integer", minimum: 1, description: "Indexer ID returned by radarr_get_movie_releases" },
+        guid: { type: "string", description: "Exact release GUID returned by radarr_get_movie_releases" },
+        acknowledgedRejections: { type: "array", maxItems: 1000, items: { type: "string" }, description: "Exact current cutoff/not-an-upgrade reasons explicitly approved for override" },
+        confirmed: { type: "boolean", description: "True only after the user approves grabbing this exact release" },
+      },
+      required: ["movieId", "indexerId", "guid", "confirmed"],
+    },
+  });
+}
+
+if (clients.radarr) {
+  TOOLS.push(
+    {
+      name: "radarr_get_manual_import_candidates",
+      annotations: READ_ONLY,
+      description: "Inspect a completed download folder or downloadId for manual import. Returns exact paths, sizes, parsed movie/quality/languages and rejection reasons. Does not import. Review edition and media quality separately.",
+      inputSchema: {
+        type: "object",
+        properties: { folder: { type: "string" }, downloadId: { type: "string" } },
+        anyOf: [{ required: ["folder"] }, { required: ["downloadId"] }],
+      },
+    },
+    {
+      name: "radarr_manual_import",
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+      description: "Submit selected inspected files to Radarr ManualImport. May replace existing library files. Requires confirmed=true, exact paths/movie IDs/sizes, and exact acknowledged preference rejection reasons. Re-scans before submission. Substantive quality/language/edition problems are refused. Returns a command, not proof of import; check command and movie files before retrying. Copy preserves the source; move can remove it; auto follows Radarr download-client rules.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          folder: { type: "string" },
+          downloadId: { type: "string" },
+          confirmed: { type: "boolean" },
+          importMode: { type: "string", enum: ["auto", "copy", "move"] },
+          files: {
+            type: "array", minItems: 1, maxItems: 25,
+            items: {
+              type: "object",
+              properties: {
+                path: { type: "string" },
+                movieId: { type: "integer", minimum: 1 },
+                expectedSizeBytes: { type: "integer", minimum: 1 },
+                acknowledgedRejections: { type: "array", maxItems: 1000, items: { type: "string" } },
+              },
+              required: ["path", "movieId", "expectedSizeBytes"],
+            },
+          },
+        },
+        required: ["files", "importMode", "confirmed"],
+        anyOf: [{ required: ["folder"] }, { required: ["downloadId"] }],
+      },
+    },
+    {
+      name: "radarr_get_command",
+      annotations: READ_ONLY,
+      description: "Read Radarr command status by ID, including manual-import completion or failure. Verify actual movie files after completion.",
+      inputSchema: {
+        type: "object",
+        properties: { commandId: { type: "integer", minimum: 1 } },
+        required: ["commandId"],
+      },
+    },
+  );
+}
+
 // Sonarr tools
 if (clients.sonarr) {
   TOOLS.push(
     {
       name: "sonarr_get_series",
+      annotations: READ_ONLY,
       description: "Get TV series from Sonarr library with optional pagination, title filtering and sorting. Defaults to limit=25 to avoid very large responses. Use offset to fetch additional pages. Optional sortBy: 'dateAdded' or 'sizeOnDisk' (applied before pagination). Optional sortDir: 'asc' or 'desc'.",
       inputSchema: {
         type: "object" as const,
@@ -333,6 +557,7 @@ if (clients.sonarr) {
     },
     {
       name: "sonarr_search",
+      annotations: READ_ONLY,
       description: "Search for TV series by name. Returns results with tvdbId needed for sonarr_add_series.",
       inputSchema: {
         type: "object" as const,
@@ -347,6 +572,7 @@ if (clients.sonarr) {
     },
     {
       name: "sonarr_get_queue",
+      annotations: READ_ONLY,
       description: "Get Sonarr download queue. Supports pagination with limit and offset.",
       inputSchema: {
         type: "object" as const,
@@ -367,6 +593,7 @@ if (clients.sonarr) {
     },
     {
       name: "sonarr_get_calendar",
+      annotations: READ_ONLY,
       description: "Get upcoming TV episodes from Sonarr",
       inputSchema: {
         type: "object" as const,
@@ -382,6 +609,7 @@ if (clients.sonarr) {
     },
     {
       name: "sonarr_get_episodes",
+      annotations: READ_ONLY,
       description: "Get episodes for a TV series. Shows which episodes are available and which are missing.",
       inputSchema: {
         type: "object" as const,
@@ -402,6 +630,7 @@ if (clients.sonarr) {
     },
     {
       name: "sonarr_search_missing",
+      annotations: TRIGGERS_SEARCH,
       description: "Trigger a search for all missing episodes in a series",
       inputSchema: {
         type: "object" as const,
@@ -417,12 +646,14 @@ if (clients.sonarr) {
     },
     {
       name: "sonarr_search_episode",
+      annotations: TRIGGERS_SEARCH,
       description: "Trigger a search for specific episode(s)",
       inputSchema: {
         type: "object" as const,
         properties: {
           episodeIds: {
             type: "array",
+            maxItems: 1000,
             items: { type: "integer", minimum: 1 },
             description: "Episode ID(s) to search for",
           },
@@ -445,6 +676,7 @@ if (clients.sonarr) {
     },
     {
       name: "sonarr_refresh_series",
+      annotations: TRIGGERS_REFRESH,
       description: "Trigger a metadata refresh for a specific series in Sonarr",
       inputSchema: {
         type: "object" as const,
@@ -487,6 +719,7 @@ if (clients.sonarr) {
     },
     {
       name: "sonarr_add_series",
+      annotations: ADDS_MEDIA,
       description: "Add a TV series to Sonarr. Use sonarr_search first to find the tvdbId, and sonarr_get_root_folders / sonarr_get_quality_profiles to get valid values for rootFolderPath and qualityProfileId. Use sonarr_get_tags to get valid tag IDs.",
       inputSchema: {
         type: "object" as const,
@@ -519,6 +752,7 @@ if (clients.sonarr) {
           },
           tags: {
             type: "array",
+            maxItems: 1000,
             items: { type: "integer", minimum: 1 },
             description: "Array of tag IDs from sonarr_get_tags (optional)",
           },
@@ -534,6 +768,7 @@ if (clients.radarr) {
   TOOLS.push(
     {
       name: "radarr_get_movies",
+      annotations: READ_ONLY,
       description: "Get movies from Radarr library with optional pagination, title filtering and sorting. Defaults to limit=25 to avoid very large responses. Use offset to fetch additional pages. Optional sortBy: 'dateAdded' or 'sizeOnDisk' (applied before pagination). Optional sortDir: 'asc' or 'desc'.",
       inputSchema: {
         type: "object" as const,
@@ -568,6 +803,7 @@ if (clients.radarr) {
     },
     {
       name: "radarr_search",
+      annotations: READ_ONLY,
       description: "Search for movies by name. Returns results with tmdbId needed for radarr_add_movie.",
       inputSchema: {
         type: "object" as const,
@@ -582,6 +818,7 @@ if (clients.radarr) {
     },
     {
       name: "radarr_get_queue",
+      annotations: READ_ONLY,
       description: "Get Radarr download queue. Supports pagination with limit and offset.",
       inputSchema: {
         type: "object" as const,
@@ -602,6 +839,7 @@ if (clients.radarr) {
     },
     {
       name: "radarr_get_calendar",
+      annotations: READ_ONLY,
       description: "Get upcoming movie releases from Radarr",
       inputSchema: {
         type: "object" as const,
@@ -617,6 +855,7 @@ if (clients.radarr) {
     },
     {
       name: "radarr_search_movie",
+      annotations: TRIGGERS_SEARCH,
       description: "Trigger a search to download a movie that's already in your library",
       inputSchema: {
         type: "object" as const,
@@ -632,6 +871,7 @@ if (clients.radarr) {
     },
     {
       name: "radarr_refresh_movie",
+      annotations: TRIGGERS_REFRESH,
       description: "Trigger a metadata refresh for a specific movie in Radarr",
       inputSchema: {
         type: "object" as const,
@@ -647,6 +887,7 @@ if (clients.radarr) {
     },
     {
       name: "radarr_add_movie",
+      annotations: ADDS_MEDIA,
       description: "Add a movie to Radarr. Use radarr_search first to find the tmdbId, and radarr_get_root_folders / radarr_get_quality_profiles to get valid values. Use radarr_get_tags to get valid tag IDs.",
       inputSchema: {
         type: "object" as const,
@@ -680,6 +921,7 @@ if (clients.radarr) {
           },
           tags: {
             type: "array",
+            maxItems: 1000,
             items: { type: "integer", minimum: 1 },
             description: "Array of tag IDs from radarr_get_tags (optional)",
           },
@@ -689,6 +931,7 @@ if (clients.radarr) {
     },
     {
       name: "radarr_update_movie",
+      annotations: OVERWRITES,
       description: "Update a movie in Radarr. Can change qualityProfileId, monitored status, minimumAvailability, tags, and path. Fetches the full movie object, applies your changes, and PUTs it back.",
       inputSchema: {
         type: "object" as const,
@@ -714,6 +957,7 @@ if (clients.radarr) {
           },
           tags: {
             type: "array",
+            maxItems: 1000,
             items: { type: "integer", minimum: 1 },
             description: "Replace all tags with this list of tag IDs",
           },
@@ -727,6 +971,7 @@ if (clients.radarr) {
     },
     {
       name: "radarr_delete_queue_item",
+      annotations: DELETES,
       description: "Remove an item from the Radarr download queue. Use radarr_get_queue to find queue item IDs. Can optionally blocklist the release to prevent re-grabbing. Requires confirm: true.",
       inputSchema: {
         type: "object" as const,
@@ -750,12 +995,14 @@ if (clients.radarr) {
     },
     {
       name: "radarr_search_movies",
+      annotations: TRIGGERS_SEARCH,
       description: "Trigger a search for multiple movies at once. Accepts an array of movie IDs. Use this for bulk upgrade requests instead of calling radarr_search_movie one at a time.",
       inputSchema: {
         type: "object" as const,
         properties: {
           movieIds: {
             type: "array",
+            maxItems: 1000,
             items: { type: "integer", minimum: 1 },
             description: "Array of movie IDs to search for",
           },
@@ -784,6 +1031,7 @@ if (clients.lidarr) {
   TOOLS.push(
     {
       name: "lidarr_get_artists",
+      annotations: READ_ONLY,
       description: "Get all artists in Lidarr library",
       inputSchema: {
         type: "object" as const,
@@ -793,6 +1041,7 @@ if (clients.lidarr) {
     },
     {
       name: "lidarr_search",
+      annotations: READ_ONLY,
       description: "Search for artists by name. Returns results with foreignArtistId needed for lidarr_add_artist.",
       inputSchema: {
         type: "object" as const,
@@ -807,6 +1056,7 @@ if (clients.lidarr) {
     },
     {
       name: "lidarr_get_queue",
+      annotations: READ_ONLY,
       description: "Get Lidarr download queue. Supports pagination with limit and offset.",
       inputSchema: {
         type: "object" as const,
@@ -827,6 +1077,7 @@ if (clients.lidarr) {
     },
     {
       name: "lidarr_get_albums",
+      annotations: READ_ONLY,
       description: "Get albums for an artist in Lidarr. Shows which albums are available and which are missing.",
       inputSchema: {
         type: "object" as const,
@@ -842,6 +1093,7 @@ if (clients.lidarr) {
     },
     {
       name: "lidarr_search_album",
+      annotations: TRIGGERS_SEARCH,
       description: "Trigger a search for a specific album to download",
       inputSchema: {
         type: "object" as const,
@@ -857,6 +1109,7 @@ if (clients.lidarr) {
     },
     {
       name: "lidarr_search_missing",
+      annotations: TRIGGERS_SEARCH,
       description: "Trigger a search for all missing albums for an artist",
       inputSchema: {
         type: "object" as const,
@@ -872,6 +1125,7 @@ if (clients.lidarr) {
     },
     {
       name: "lidarr_get_calendar",
+      annotations: READ_ONLY,
       description: "Get upcoming album releases from Lidarr",
       inputSchema: {
         type: "object" as const,
@@ -887,6 +1141,7 @@ if (clients.lidarr) {
     },
     {
       name: "lidarr_add_artist",
+      annotations: ADDS_MEDIA,
       description: "Add an artist to Lidarr. Use lidarr_search first to find the foreignArtistId, and lidarr_get_root_folders / lidarr_get_quality_profiles / lidarr_get_metadata_profiles to get valid values. Use lidarr_get_tags to get valid tag IDs.",
       inputSchema: {
         type: "object" as const,
@@ -919,6 +1174,7 @@ if (clients.lidarr) {
           },
           tags: {
             type: "array",
+            maxItems: 1000,
             items: { type: "integer", minimum: 1 },
             description: "Array of tag IDs from lidarr_get_tags (optional)",
           },
@@ -928,6 +1184,7 @@ if (clients.lidarr) {
     },
     {
       name: "lidarr_get_metadata_profiles",
+      annotations: READ_ONLY,
       description: "Get available metadata profiles for Lidarr. Use this to find valid metadataProfileId values when adding an artist.",
       inputSchema: {
         type: "object" as const,
@@ -943,6 +1200,7 @@ if (clients.prowlarr) {
   TOOLS.push(
     {
       name: "prowlarr_get_indexers",
+      annotations: READ_ONLY,
       description: "Get all configured indexers in Prowlarr",
       inputSchema: {
         type: "object" as const,
@@ -952,6 +1210,7 @@ if (clients.prowlarr) {
     },
     {
       name: "prowlarr_search",
+      annotations: READ_ONLY,
       description: "Search across all Prowlarr indexers",
       inputSchema: {
         type: "object" as const,
@@ -966,6 +1225,7 @@ if (clients.prowlarr) {
     },
     {
       name: "prowlarr_test_indexers",
+      annotations: TRIGGERS_REFRESH,
       description: "Test all indexers and return their health status",
       inputSchema: {
         type: "object" as const,
@@ -975,6 +1235,7 @@ if (clients.prowlarr) {
     },
     {
       name: "prowlarr_get_stats",
+      annotations: READ_ONLY,
       description: "Get indexer statistics (queries, grabs, failures)",
       inputSchema: {
         type: "object" as const,
@@ -1461,6 +1722,7 @@ if (maintainerrClient) {
 // Cross-service search tool
 TOOLS.push({
   name: "arr_search_all",
+  annotations: READ_ONLY,
   description: "Search across all configured *arr services for any media",
   inputSchema: {
     type: "object" as const,
@@ -1478,6 +1740,7 @@ TOOLS.push({
 TOOLS.push(
   {
     name: "trash_list_profiles",
+    annotations: READ_ONLY,
     description: "List available TRaSH Guides quality profiles for Radarr or Sonarr. Shows recommended profiles for different use cases (1080p, 4K, Remux, etc.)",
     inputSchema: {
       type: "object" as const,
@@ -1493,6 +1756,7 @@ TOOLS.push(
   },
   {
     name: "trash_get_profile",
+    annotations: READ_ONLY,
     description: "Get a specific TRaSH Guides quality profile with all custom format scores, quality settings, and implementation details",
     inputSchema: {
       type: "object" as const,
@@ -1512,6 +1776,7 @@ TOOLS.push(
   },
   {
     name: "trash_list_custom_formats",
+    annotations: READ_ONLY,
     description: "List available TRaSH Guides custom formats. Can filter by category: hdr, audio, resolution, source, streaming, anime, unwanted, release, language",
     inputSchema: {
       type: "object" as const,
@@ -1531,6 +1796,7 @@ TOOLS.push(
   },
   {
     name: "trash_get_naming",
+    annotations: READ_ONLY,
     description: "Get TRaSH Guides recommended naming conventions for your media server (Plex, Emby, Jellyfin, or standard)",
     inputSchema: {
       type: "object" as const,
@@ -1551,6 +1817,7 @@ TOOLS.push(
   },
   {
     name: "trash_get_quality_sizes",
+    annotations: READ_ONLY,
     description: "Get TRaSH Guides recommended min/max/preferred sizes for each quality level",
     inputSchema: {
       type: "object" as const,
@@ -1570,6 +1837,7 @@ TOOLS.push(
   },
   {
     name: "trash_compare_profile",
+    annotations: READ_ONLY,
     description: "Compare your quality profile against TRaSH Guides recommendations. Shows missing custom formats, scoring differences, and quality settings. Requires the corresponding *arr service to be configured.",
     inputSchema: {
       type: "object" as const,
@@ -1594,6 +1862,7 @@ TOOLS.push(
   },
   {
     name: "trash_compare_naming",
+    annotations: READ_ONLY,
     description: "Compare your naming configuration against TRaSH Guides recommendations. Requires the corresponding *arr service to be configured.",
     inputSchema: {
       type: "object" as const,
@@ -1854,6 +2123,11 @@ async function getPaginatedQueue(
     protocol: q.protocol,
     trackedDownloadStatus: q.trackedDownloadStatus,
     trackedDownloadState: q.trackedDownloadState,
+    statusMessages: q.statusMessages ?? [],
+    downloadId: q.downloadId,
+    outputPath: q.outputPath,
+    sizeBytes: q.size,
+    sizeLeftBytes: q.sizeleft,
   }));
 
   return {
@@ -1888,6 +2162,15 @@ server.setRequestHandler(CallToolRequestSchema, (request) =>
 async function callTool(params: { name: string; arguments?: Record<string, unknown> }, callerReadOnly = false) {
   const { name } = params;
   const args = params.arguments ?? {};
+
+  if (
+    toolInputElementCount(args, MAX_TOOL_INPUT_ELEMENTS) > MAX_TOOL_INPUT_ELEMENTS
+  ) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Invalid arguments for tool ${name}: arguments contain more than the maximum of ${MAX_TOOL_INPUT_ELEMENTS} elements`,
+    );
+  }
 
   try {
     if (readOnly && isWriteTool(name)) {
@@ -2305,6 +2588,228 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
       }
 
       // Sonarr handlers
+      case 'radarr_get_manual_import_candidates': {
+        if (!clients.radarr) throw new Error('Radarr not configured');
+        return jsonText(await clients.radarr.getManualImportCandidates((args ?? {}) as Parameters<typeof clients.radarr.getManualImportCandidates>[0]));
+      }
+      case 'radarr_manual_import': {
+        if (!clients.radarr) throw new Error('Radarr not configured');
+        const v = (args ?? {}) as { folder?: string; downloadId?: string; files: Parameters<typeof clients.radarr.manualImport>[1]; importMode: string; confirmed: boolean };
+        const command = await clients.radarr.manualImport(v, v.files, v.importMode, v.confirmed);
+        return jsonText({ submitted: true, imported: false, command, nextStep: 'Check radarr_get_command, queue and movie files before considering the import complete or retrying.' });
+      }
+      case 'radarr_get_command': {
+        if (!clients.radarr) throw new Error('Radarr not configured');
+        return jsonText(await clients.radarr.getCommand((args as { commandId: number })?.commandId));
+      }
+      case "sonarr_grab_release": {
+        if (!clients.sonarr) throw new Error("Sonarr not configured");
+        const input = args as { episodeId: number; indexerId: number; guid: string; confirmed: boolean; acknowledgedRejections?: string[] };
+        if (!Number.isSafeInteger(input?.episodeId) || input.episodeId <= 0 ||
+          !Number.isSafeInteger(input?.indexerId) || input.indexerId <= 0 ||
+          typeof input?.guid !== "string" || !input.guid.trim() || input.guid.length > 2048) {
+          return textError("Valid episodeId, indexerId and release guid are required");
+        }
+        if (input.acknowledgedRejections !== undefined && (!Array.isArray(input.acknowledgedRejections) || input.acknowledgedRejections.some(r => typeof r !== 'string'))) return textError('Invalid acknowledgedRejections');
+        if (input.confirmed !== true) {
+          return textError("Explicit user approval is required before grabbing a release");
+        }
+        const result = await clients.sonarr.grabEpisodeRelease(input.episodeId, input.indexerId, input.guid, input.acknowledgedRejections);
+        return jsonText({ grabbed: true, episodeId: input.episodeId, result });
+      }
+      case "radarr_grab_release": {
+        if (!clients.radarr) throw new Error("Radarr not configured");
+        const input = args as { movieId: number; indexerId: number; guid: string; confirmed: boolean; acknowledgedRejections?: string[] };
+        if (!Number.isSafeInteger(input?.movieId) || input.movieId <= 0 ||
+          !Number.isSafeInteger(input?.indexerId) || input.indexerId <= 0 ||
+          typeof input?.guid !== "string" || !input.guid.trim() || input.guid.length > 2048) {
+          return textError("Valid movieId, indexerId and release guid are required");
+        }
+        if (input.acknowledgedRejections !== undefined && (!Array.isArray(input.acknowledgedRejections) || input.acknowledgedRejections.some(r => typeof r !== 'string'))) return textError('Invalid acknowledgedRejections');
+        if (input.confirmed !== true) {
+          return textError("Explicit user approval is required before grabbing a release");
+        }
+        const result = await clients.radarr.grabMovieRelease(input.movieId, input.indexerId, input.guid, input.acknowledgedRejections);
+        return jsonText({ grabbed: true, movieId: input.movieId, result });
+      }
+      case "sonarr_get_episode_releases": {
+        if (!clients.sonarr) throw new Error("Sonarr not configured");
+        const input = args as { episodeId: number; limit?: number; offset?: number };
+        if (!Number.isSafeInteger(input?.episodeId) || input.episodeId <= 0) {
+          return textError("episodeId must be a positive integer");
+        }
+        const limit = input.limit ?? 25;
+        const offset = input.offset ?? 0;
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+          !Number.isSafeInteger(offset) || offset < 0) {
+          return textError("limit must be 1-100 and offset must be a non-negative integer");
+        }
+        const releases = await clients.sonarr.getEpisodeReleases(input.episodeId);
+        const page = releases.slice(offset, offset + limit);
+        return jsonText({
+          episodeId: input.episodeId,
+          total: releases.length,
+          returned: page.length,
+          offset,
+          hasMore: offset + page.length < releases.length,
+          nextOffset: offset + page.length < releases.length ? offset + page.length : null,
+          releases: page.map(release => ({
+            title: release.title ?? null,
+            guid: release.guid ?? null,
+            indexerId: release.indexerId ?? null,
+            sizeBytes: release.size ?? null,
+            quality: release.quality?.quality?.name ?? null,
+            resolution: release.quality?.quality?.resolution ?? null,
+            indexer: release.indexer ?? null,
+            protocol: release.protocol ?? null,
+            languages: release.languages?.map(l => l.name).filter(Boolean) ?? [],
+            rejected: release.rejected ?? false,
+            rejections: release.rejections ?? [],
+            customFormatScore: release.customFormatScore ?? null,
+            seeders: release.seeders ?? null,
+            leechers: release.leechers ?? null,
+            ageDays: release.age ?? null,
+            downloadAllowed: release.downloadAllowed ?? null,
+          })),
+        });
+      }
+      case "radarr_get_movie_releases": {
+        if (!clients.radarr) throw new Error("Radarr not configured");
+        const input = args as { movieId: number; limit?: number; offset?: number };
+        if (!Number.isSafeInteger(input?.movieId) || input.movieId <= 0) {
+          return textError("movieId must be a positive integer");
+        }
+        const limit = input.limit ?? 25;
+        const offset = input.offset ?? 0;
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+          !Number.isSafeInteger(offset) || offset < 0) {
+          return textError("limit must be 1-100 and offset must be a non-negative integer");
+        }
+        const releases = await clients.radarr.getMovieReleases(input.movieId);
+        const page = releases.slice(offset, offset + limit);
+        return jsonText({
+          movieId: input.movieId,
+          total: releases.length,
+          returned: page.length,
+          offset,
+          hasMore: offset + page.length < releases.length,
+          nextOffset: offset + page.length < releases.length ? offset + page.length : null,
+          releases: page.map(release => ({
+            title: release.title ?? null,
+            guid: release.guid ?? null,
+            indexerId: release.indexerId ?? null,
+            sizeBytes: release.size ?? null,
+            quality: release.quality?.quality?.name ?? null,
+            resolution: release.quality?.quality?.resolution ?? null,
+            indexer: release.indexer ?? null,
+            protocol: release.protocol ?? null,
+            languages: release.languages?.map(l => l.name).filter(Boolean) ?? [],
+            rejected: release.rejected ?? false,
+            rejections: release.rejections ?? [],
+            customFormatScore: release.customFormatScore ?? null,
+            seeders: release.seeders ?? null,
+            leechers: release.leechers ?? null,
+            ageDays: release.age ?? null,
+            downloadAllowed: release.downloadAllowed ?? null,
+          })),
+        });
+      }
+      case "sonarr_get_episode_files": {
+        if (!clients.sonarr) throw new Error("Sonarr not configured");
+        const input = args as { seriesId: number; limit?: number; offset?: number; fields?: "summary" | "full" };
+        if (!Number.isSafeInteger(input?.seriesId) || input.seriesId <= 0) {
+          return textError("seriesId must be a positive integer");
+        }
+        const limit = input.limit === undefined ? 25 : input.limit;
+        const offset = input.offset === undefined ? 0 : input.offset;
+        const fields = input.fields ?? "summary";
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+          !Number.isSafeInteger(offset) || offset < 0) {
+          return textError("limit must be 1-100 and offset must be a non-negative integer");
+        }
+        if (fields !== "summary" && fields !== "full") {
+          return textError("fields must be summary or full");
+        }
+        const files = await clients.sonarr.getEpisodeFiles(input.seriesId);
+        const page = files.slice(offset, offset + limit);
+        return jsonText({
+          seriesId: input.seriesId,
+          fields,
+          total: files.length,
+          returned: page.length,
+          offset,
+          limit,
+          hasMore: offset + page.length < files.length,
+          nextOffset: offset + page.length < files.length ? offset + page.length : null,
+          files: page.map(f => fields === "summary" ? ({
+            id: f.id,
+            sizeBytes: f.size,
+            videoCodec: f.mediaInfo?.videoCodec ?? null,
+            videoBitrate: f.mediaInfo?.videoBitrate ?? null,
+            audioCodec: f.mediaInfo?.audioCodec ?? null,
+            resolution: f.mediaInfo?.resolution ?? null,
+            quality: f.quality?.quality?.name ?? null,
+            mediaInfoAvailable: f.mediaInfo != null,
+          }) : ({
+            id: f.id,
+            seasonNumber: f.seasonNumber,
+            relativePath: f.relativePath,
+            sizeBytes: f.size,
+            sceneName: f.sceneName,
+            releaseGroup: f.releaseGroup,
+            quality: f.quality?.quality?.name,
+            resolution: f.quality?.quality?.resolution,
+            mediaInfo: f.mediaInfo ?? null,
+          })),
+        });
+      }
+      case "radarr_get_movie_files": {
+        if (!clients.radarr) throw new Error("Radarr not configured");
+        const input = args as { movieId: number; limit?: number; offset?: number; fields?: "summary" | "full" };
+        if (!Number.isSafeInteger(input?.movieId) || input.movieId <= 0) {
+          return textError("movieId must be a positive integer");
+        }
+        const limit = input.limit === undefined ? 25 : input.limit;
+        const offset = input.offset === undefined ? 0 : input.offset;
+        const fields = input.fields ?? "summary";
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+          !Number.isSafeInteger(offset) || offset < 0) {
+          return textError("limit must be 1-100 and offset must be a non-negative integer");
+        }
+        if (fields !== "summary" && fields !== "full") {
+          return textError("fields must be summary or full");
+        }
+        const files = await clients.radarr.getMovieFiles(input.movieId);
+        const page = files.slice(offset, offset + limit);
+        return jsonText({
+          movieId: input.movieId,
+          fields,
+          total: files.length,
+          returned: page.length,
+          offset,
+          limit,
+          hasMore: offset + page.length < files.length,
+          nextOffset: offset + page.length < files.length ? offset + page.length : null,
+          files: page.map(f => fields === "full" ? ({
+            id: f.id,
+            movieId: f.movieId,
+            relativePath: f.relativePath,
+            sizeBytes: f.size,
+            sceneName: f.sceneName,
+            releaseGroup: f.releaseGroup,
+            quality: f.quality?.quality?.name,
+            mediaInfo: f.mediaInfo ?? null,
+          }) : ({
+            id: f.id,
+            sizeBytes: f.size,
+            quality: f.quality?.quality?.name,
+            videoCodec: f.mediaInfo?.videoCodec ?? null,
+            audioCodec: f.mediaInfo?.audioCodec ?? null,
+            audioChannels: f.mediaInfo?.audioChannels ?? null,
+            resolution: f.mediaInfo?.resolution ?? null,
+          })),
+        });
+      }
       case "sonarr_get_series": {
         if (!clients.sonarr) throw new Error("Sonarr not configured");
         const { limit = 25, offset = 0, search, sortBy: sortByArg, sortDir: sortDirArg } = args as {
@@ -4209,8 +4714,11 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
         throw new Error(`Unknown tool: ${name}`);
     }
   } catch (error) {
+    const newTools = ["radarr_get_manual_import_candidates", "radarr_manual_import", "radarr_get_command", "sonarr_grab_release", "radarr_grab_release", "sonarr_get_episode_files", "radarr_get_movie_files", "sonarr_get_episode_releases", "radarr_get_movie_releases"];
+    const errorMessage = newTools.includes(name) && !(error instanceof ArrValidationError)
+      ? 'Service request failed; check the service logs and current state before retrying' : errorText(error);
     return {
-      content: [{ type: "text", text: `Error: ${errorText(error)}` }],
+      content: [{ type: "text", text: `Error: ${errorMessage}` }],
       isError: true,
     };
   }
