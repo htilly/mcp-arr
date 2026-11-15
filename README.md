@@ -431,7 +431,7 @@ Use your actual paths and API keys. Only include the services you use.
 ## Safety controls
 
 - **Roles (HTTP mode)**: tokens of *user*-role accounts only get read-only tools; tools that change state need an *admin* account.
-- **Read-only mode**: set `ARR_READ_ONLY=true` to hide and block every tool that changes state, including deletes, adds, updates, triggered searches, subtitle downloads, indexer tests and request approvals.
+- **Read-only mode**: set `ARR_READ_ONLY=true` to hide and block every tool that changes state, including deletes, adds, updates, triggered searches, release grabs, manual imports, subtitle downloads, indexer tests and request approvals.
 - **Confirmation**: `sonarr_delete_series`, `sonarr_delete_season`, `sonarr_delete_episode_files`, `radarr_delete_movie`, `radarr_delete_queue_item`, `tautulli_terminate_session`, `overseerr_approve_request`, `overseerr_decline_request` and `maintainerr_handle_collections` fail unless called with `confirm: true`. This stops accidental calls, but a model can still set it, so use read-only mode or your client's tool approval prompts if you need a human in the loop. Tools carry `readOnlyHint` and `destructiveHint` annotations for clients that use them.
 - **File deletion**: `deleteFiles` defaults to `false`.
 - **Argument validation**: arguments are checked against each tool's schema before any request is sent.
@@ -790,6 +790,12 @@ Start the server once with `ADMIN_RECOVERY=true`. The log shows a one-time recov
 
 ### HTTP mode: "encryption key does not match" / "no key is available"
 The config file was encrypted with a different key. Start with the original `CONFIG_ENCRYPTION_KEY` (or restore the key file). To change keys, put the old one in `CONFIG_ENCRYPTION_KEY_PREVIOUS` for one start. Without the key the data can't be recovered — move the config file away to start fresh.
+
+### "SONARR_URL must be a full http:// or https:// URL"
+The server stops at startup when a configured service URL has no `http://` or `https://` scheme, for example `localhost:8989`. Use the full URL, such as `http://localhost:8989`.
+
+### "Invalid arguments for ..."
+Tool arguments are checked against the tool's input schema before any request is sent. IDs must be positive integers, and booleans, enums and limits must match the schema.
 
 ## Need help building or securing MCP servers?
 

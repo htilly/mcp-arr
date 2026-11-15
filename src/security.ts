@@ -85,6 +85,9 @@ export function applyToolPolicy(tool: Tool): void {
   }
 }
 
+/** Rejected tool arguments. The message is safe to return to the client. */
+export class ToolArgumentError extends Error {}
+
 interface PropertySchema {
   type?: string;
   enum?: unknown[];
@@ -97,14 +100,18 @@ function describeProblem(value: unknown, schema: PropertySchema): string | undef
   switch (schema.type) {
     case "integer":
       if (typeof value !== "number" || !Number.isSafeInteger(value)) return "must be an integer";
-      if (schema.minimum !== undefined && value < schema.minimum) return `must be at least ${schema.minimum}`;
-      if (schema.maximum !== undefined && value > schema.maximum) return `must be at most ${schema.maximum}`;
+      break;
+    case "number":
+      if (typeof value !== "number" || !Number.isFinite(value)) return "must be a number";
       break;
     case "string":
       if (typeof value !== "string") return "must be a string";
       break;
     case "boolean":
       if (typeof value !== "boolean") return "must be a boolean";
+      break;
+    case "object":
+      if (value === null || typeof value !== "object" || Array.isArray(value)) return "must be an object";
       break;
     case "array":
       if (!Array.isArray(value)) return "must be an array";
@@ -116,16 +123,20 @@ function describeProblem(value: unknown, schema: PropertySchema): string | undef
       }
       break;
   }
+  if (typeof value === "number") {
+    if (schema.minimum !== undefined && value < schema.minimum) return `must be at least ${schema.minimum}`;
+    if (schema.maximum !== undefined && value > schema.maximum) return `must be at most ${schema.maximum}`;
+  }
   if (schema.enum && !schema.enum.includes(value)) {
     return `must be one of: ${schema.enum.join(", ")}`;
   }
   return undefined;
 }
 
-/** Throw unless `args` satisfies the tool's inputSchema and confirmation rule. */
+/** Throw a ToolArgumentError unless `args` satisfies the tool's inputSchema and confirmation rule. */
 export function validateToolArgs(tool: Tool, args: Record<string, unknown>): void {
   const fail = (problem: string): never => {
-    throw new Error(`Invalid arguments for ${tool.name}: ${problem}`);
+    throw new ToolArgumentError(`Invalid arguments for ${tool.name}: ${problem}`);
   };
 
   for (const key of tool.inputSchema.required ?? []) {
@@ -147,7 +158,7 @@ export function validateToolArgs(tool: Tool, args: Record<string, unknown>): voi
 /** A positive integer ID, encoded for use in a URL path or query string. */
 export function pathId(id: number): string {
   if (!Number.isSafeInteger(id) || id <= 0) {
-    throw new Error("ID must be a positive integer");
+    throw new ToolArgumentError("ID must be a positive integer");
   }
   return encodeURIComponent(id);
 }

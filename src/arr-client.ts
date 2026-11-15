@@ -636,7 +636,7 @@ export class ArrClient {
 
 export class SonarrClient extends ArrClient {
   async grabEpisodeRelease(episodeId: number, indexerId: number, guid: string, acknowledgedRejections: string[] = []): Promise<unknown> {
-    const releases = await this.request<Array<{ indexerId?: number; guid?: string; downloadAllowed?: boolean; rejected?: boolean; rejections?: string[] }>>(`/release?episodeId=${episodeId}`);
+    const releases = await this.request<Array<{ indexerId?: number; guid?: string; downloadAllowed?: boolean; rejected?: boolean; rejections?: string[] }>>(`/release?episodeId=${pathId(episodeId)}`);
     const matches = releases.filter(r => r.indexerId === indexerId && r.guid === guid);
     if (matches.length !== 1) throw new ArrValidationError("Selected release is missing or ambiguous; inspect current results");
     const release = matches[0];
@@ -658,11 +658,11 @@ export class SonarrClient extends ArrClient {
   }
 
   async getEpisodeReleases(episodeId: number): Promise<SonarrRelease[]> {
-    return this['request']<SonarrRelease[]>(`/release?episodeId=${episodeId}`);
+    return this['request']<SonarrRelease[]>(`/release?episodeId=${pathId(episodeId)}`);
   }
 
   async getEpisodeFiles(seriesId: number): Promise<SonarrEpisodeFile[]> {
-    return this['request']<SonarrEpisodeFile[]>(`/episodefile?seriesId=${seriesId}`);
+    return this['request']<SonarrEpisodeFile[]>(`/episodefile?seriesId=${pathId(seriesId)}`);
   }
 
   constructor(config: ArrConfig) {
@@ -864,11 +864,11 @@ export class RadarrClient extends ArrClient {
 
   async getCommand(commandId: number): Promise<unknown> {
     if (!Number.isSafeInteger(commandId) || commandId <= 0) throw new ArrValidationError('Invalid commandId');
-    return this.request(`/command/${commandId}`);
+    return this.request(`/command/${pathId(commandId)}`);
   }
 
   async grabMovieRelease(movieId: number, indexerId: number, guid: string, acknowledgedRejections: string[] = []): Promise<unknown> {
-    const releases = await this.request<Array<{ indexerId?: number; guid?: string; downloadAllowed?: boolean; rejected?: boolean; rejections?: string[] }>>(`/release?movieId=${movieId}`);
+    const releases = await this.request<Array<{ indexerId?: number; guid?: string; downloadAllowed?: boolean; rejected?: boolean; rejections?: string[] }>>(`/release?movieId=${pathId(movieId)}`);
     const matches = releases.filter(r => r.indexerId === indexerId && r.guid === guid);
     if (matches.length !== 1) throw new ArrValidationError("Selected release is missing or ambiguous; inspect current results");
     const release = matches[0];
@@ -887,11 +887,11 @@ export class RadarrClient extends ArrClient {
   }
 
   async getMovieReleases(movieId: number): Promise<RadarrRelease[]> {
-    return this['request']<RadarrRelease[]>(`/release?movieId=${movieId}`);
+    return this['request']<RadarrRelease[]>(`/release?movieId=${pathId(movieId)}`);
   }
 
   async getMovieFiles(movieId: number): Promise<RadarrMovieFile[]> {
-    return this['request']<RadarrMovieFile[]>(`/moviefile?movieId=${movieId}`);
+    return this['request']<RadarrMovieFile[]>(`/moviefile?movieId=${pathId(movieId)}`);
   }
 
   constructor(config: ArrConfig) {

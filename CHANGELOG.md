@@ -25,11 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Web UI menu:** the flat row of twelve tabs is now a two-level menu: *Media*, *My account*, *Users*, *Server* and *About*, each with its own pages. The old *Settings* tab is split across *Server → Public address*, *Certificates & DNS* (certificate status and settings on one page), *Connectors & proxy* and *Security* (encryption and startup settings). Unsaved settings changes are kept across those pages and saved together.
 - **BREAKING (HTTP mode):** `MCP_TRANSPORT=http` now serves **HTTPS with authentication**. It requires `PUBLIC_URL` and a writable `CONFIG_PATH`, and every MCP request needs a per-user access token created in the web UI. Existing unauthenticated plain-HTTP setups (e.g. n8n pointing at `http://host:3000/mcp`) must be updated - see README "Remote server". `TLS_MODE=off` keeps plain HTTP for use behind a TLS-terminating reverse proxy, but tokens are still required. stdio mode is unchanged.
 - **Deploy workflow** (`deploy.yml`): the post-deploy check now works with the authenticated HTTPS server. It accepts `200` (older unauthenticated image, e.g. after a rollback) or `401` + `WWW-Authenticate: Bearer` (auth enforced), and, when `MCP_CHECK_TOKEN` is set on the runner, also runs an authenticated `initialize` over verified HTTPS (`MCP_ARR_CA_FILE`). An untrusted certificate falls back to an unverified liveness check with a warning (the token is never sent over it), and the rollback step also accepts a plain-HTTP older image behind an `https://` `APP_URL`. When the check fails it names the likely cause from curl's exit code (host does not resolve, connection refused, timeout, http/https scheme mismatch, untrusted certificate) without printing any host name. Responses and the token are never printed. The host compose file must run the HTTPS mode - see README "Self-hosted deploy".
-- **Synced with upstream `aplaceforallmystuff/mcp-arr` v1.8.0 (previously v1.7.3).** Fork-only features are kept; where both sides changed the same tool, the result is a superset:
+- **Synced with upstream `aplaceforallmystuff/mcp-arr` v1.9.0 (previously v1.7.3).** Fork-only features are kept; where both sides changed the same tool, the result is a superset:
   - `sonarr_get_series` and `radarr_get_movies` accept upstream's `limit` / `offset` / `search` **and** the fork's `sortBy` / `sortDir`. Sorting is applied before pagination. **Behaviour change for fork users:** `limit` now defaults to 25 (max 100) instead of returning everything, and the response uses upstream's pagination fields (`total`, `returned`, `hasMore`, `nextOffset`, ...) instead of `totalCount` / `count` / `limitedTo`.
   - The server starts in TRaSH-only mode when nothing is configured, instead of exiting.
   - Readarr support is gone (removed upstream in 1.6.1); the Readarr tools no longer exist.
   - From v1.8.0: `sonarr_grab_release`, `radarr_grab_release` and `radarr_manual_import` keep upstream's `confirmed: true` guard and are also write tools here, so `ARR_READ_ONLY` and the *user* role block them. ID arguments of the new file/release tools must be positive integers and `limit` is capped at 100 (rejected above, not clamped). Fork-only tools get `openWorldHint: true`, and write tools without their own hint `idempotentHint: false`.
+  - From v1.8.1 / v1.9.0: argument validation, `ARR_READ_ONLY` and sorting were contributed upstream from this fork. The fork keeps its own versions (explicit `WRITE_TOOLS` list, `confirm: true`, *user* role, metadata-host blocking) and adds upstream's `ToolArgumentError` and wider validation (`number`, `object`, minimum/maximum on any number). Upstream's security tests run as `test/security.test.mjs`; the fork's moved to `test/fork-security.test.mjs`.
 
 ### Added
 - **Maintainerr (library cleanup) integration** - optional, enabled with `MAINTAINERR_URL` + `MAINTAINERR_API_KEY` (env or the web UI's Services tab):
@@ -51,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Web UI: simple **name + password** sign-in as an alternative to passkeys. Available in setup, recovery and invite flows, and under "My sign-in" for existing users (set / change / remove). Passwords are scrypt-hashed, minimum 8 characters, rate-limited like other sign-in attempts. User names are now unique (case-insensitive). The UI works on pages where passkeys are unavailable (untrusted certificate).
 
 ### Fixed
+- `ARR_READ_ONLY` and *user*-role refusals of `sonarr_grab_release`, `radarr_grab_release` and `radarr_manual_import` now say why the call was refused. They were shown as the generic "Service request failed" message.
 - Passkey errors in the web UI now show the browser's error name/message and a hint about the usual cause (untrusted root certificate, wrong host name) instead of only "cancelled or timed out".
 - `@modelcontextprotocol/sdk` is a runtime dependency again (as upstream). It sat in `devDependencies`, so a production install (`npm ci --omit=dev`, as the Dockerfile does) left it out and the container crashed on start with `ERR_MODULE_NOT_FOUND`.
 - `radarr_get_movies` reads `rating` / `ratingVotes` from the TMDB entry of Radarr's per-source `ratings` map. It read `ratings.value`, which does not exist on a Radarr movie, so the rating was never populated. The per-source `ratings` map from upstream is returned alongside.
@@ -106,6 +108,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - `overseerr_decline_request` – Decline a pending media request
   - `overseerr_search` – Search for movies and TV shows (uses TMDB)
   - `overseerr_status` – Get Overseerr server status and version
+
+## [1.9.0] - 2026-11-15
+
+### Added
+- Optional `sortBy` (`dateAdded` or `sizeOnDisk`) and `sortDir` (`asc` or `desc`) for `sonarr_get_series` and `radarr_get_movies`. Sorting applies after the optional `search` filter and before pagination, so `limit` and `offset` page through the sorted order. Without `sortBy`, order and response shape are unchanged.
+- `ARR_READ_ONLY=true` hides tools that change state from `tools/list` and refuses calls to them. Write tools are identified by their `readOnlyHint` annotation, so newly annotated tools are covered automatically.
+
+Both contributed by Henrik Tilly ([@htilly](https://github.com/htilly)) in [#83](https://github.com/aplaceforallmystuff/mcp-arr/pull/83) and [#84](https://github.com/aplaceforallmystuff/mcp-arr/pull/84).
+
+### CI
+- The release workflow now updates the MCP Registry listing (`server.json`) after npm publishes, signing in with GitHub OIDC so no token is stored. Re-runs skip a version that's already listed.
+
+## [1.8.1] - 2026-11-15
+
+### Security
+- Fixes [GHSA-78w2-pqhr-q7p7](https://github.com/aplaceforallmystuff/mcp-arr/security/advisories/GHSA-78w2-pqhr-q7p7) (affects 1.8.0 and earlier). Reported, with the fix, by Henrik Tilly ([@htilly](https://github.com/htilly)).
+- Validate tool arguments against each tool's input schema before dispatch. ID arguments are now declared as positive integers, so a string such as `../downloadclient/5` can no longer redirect a request to another endpoint.
+- Validate and URL-encode every ID used in a service request path or query string.
+- Redact configured API keys from error text returned to clients.
+- Stop at startup when a configured service URL is not a full `http://` or `https://` URL.
+
+### Documentation
+- Synchronize both registry tool catalogues with the updated input schemas.
 
 ## [1.8.0] - 2026-11-12
 

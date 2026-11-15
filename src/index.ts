@@ -55,6 +55,7 @@ import {
   applyToolPolicy,
   createRedactor,
   isWriteTool,
+  ToolArgumentError,
   validateServiceUrl,
   validateToolArgs,
 } from "./security.js";
@@ -523,19 +524,19 @@ if (clients.sonarr) {
     {
       name: "sonarr_get_series",
       annotations: READ_ONLY,
-      description: "Get TV series from Sonarr library with optional pagination, title filtering and sorting. Defaults to limit=25 to avoid very large responses. Use offset to fetch additional pages. Optional sortBy: 'dateAdded' or 'sizeOnDisk' (applied before pagination). Optional sortDir: 'asc' or 'desc'.",
+      description: "Get TV series from Sonarr library with optional pagination, title filtering and sorting. Defaults to limit=25 to avoid very large responses. Use offset to fetch additional pages. Optional sortBy (dateAdded or sizeOnDisk) is applied before pagination.",
       inputSchema: {
         type: "object" as const,
         properties: {
           sortBy: {
             type: "string",
             enum: ["dateAdded", "sizeOnDisk"],
-            description: "Sort by date added or size on disk. Omit for default order.",
+            description: "Optional sort applied before pagination. Omit to keep the library order.",
           },
           sortDir: {
             type: "string",
             enum: ["asc", "desc"],
-            description: "Sort direction: 'asc' (ascending) or 'desc' (descending). Default: 'asc' for dateAdded, 'desc' for sizeOnDisk.",
+            description: "Sort direction (default: asc for dateAdded, desc for sizeOnDisk). Requires sortBy.",
           },
           limit: {
             type: "integer",
@@ -769,19 +770,19 @@ if (clients.radarr) {
     {
       name: "radarr_get_movies",
       annotations: READ_ONLY,
-      description: "Get movies from Radarr library with optional pagination, title filtering and sorting. Defaults to limit=25 to avoid very large responses. Use offset to fetch additional pages. Optional sortBy: 'dateAdded' or 'sizeOnDisk' (applied before pagination). Optional sortDir: 'asc' or 'desc'.",
+      description: "Get movies from Radarr library with optional pagination, title filtering and sorting. Defaults to limit=25 to avoid very large responses. Use offset to fetch additional pages. Optional sortBy (dateAdded or sizeOnDisk) is applied before pagination.",
       inputSchema: {
         type: "object" as const,
         properties: {
           sortBy: {
             type: "string",
             enum: ["dateAdded", "sizeOnDisk"],
-            description: "Sort by date added or size on disk. Omit for default order.",
+            description: "Optional sort applied before pagination. Omit to keep the library order.",
           },
           sortDir: {
             type: "string",
             enum: ["asc", "desc"],
-            description: "Sort direction: 'asc' (ascending) or 'desc' (descending). Default: 'asc' for dateAdded, 'desc' for sizeOnDisk.",
+            description: "Sort direction (default: asc for dateAdded, desc for sizeOnDisk). Requires sortBy.",
           },
           limit: {
             type: "integer",
@@ -1929,11 +1930,42 @@ function jsonText(data: unknown) {
   };
 }
 
+// Derived from the annotations, so a new write tool cannot be missed. A tool
+// without an explicit readOnlyHint: true counts as a write tool.
+function isReadOnlyTool(tool: Tool): boolean {
+  return tool.annotations?.readOnlyHint === true;
+}
+
 function textError(message: string) {
   return {
     content: [{ type: "text" as const, text: message }],
     isError: true,
   };
+}
+
+type LibrarySort = { sortBy: "dateAdded" | "sizeOnDisk"; sortDir: "asc" | "desc" };
+
+// Validates optional sortBy/sortDir. Returns undefined when no sort was requested.
+function parseLibrarySort(args: { sortBy?: unknown; sortDir?: unknown }): LibrarySort | undefined | string {
+  const { sortBy, sortDir } = args;
+  if (sortBy === undefined) {
+    return sortDir === undefined ? undefined : "sortDir requires sortBy";
+  }
+  if (sortBy !== "dateAdded" && sortBy !== "sizeOnDisk") {
+    return "sortBy must be dateAdded or sizeOnDisk";
+  }
+  if (sortDir !== undefined && sortDir !== "asc" && sortDir !== "desc") {
+    return "sortDir must be asc or desc";
+  }
+  return { sortBy, sortDir: sortDir ?? (sortBy === "dateAdded" ? "asc" : "desc") };
+}
+
+// Returns a sorted copy; the stable sort keeps library order for equal keys.
+function sortLibrary<T>(items: T[], sort: LibrarySort, added: (item: T) => string | undefined, size: (item: T) => number | undefined): T[] {
+  const sign = sort.sortDir === "asc" ? 1 : -1;
+  return [...items].sort((a, b) => sign * (sort.sortBy === "dateAdded"
+    ? (Date.parse(added(a) ?? "") || 0) - (Date.parse(added(b) ?? "") || 0)
+    : (size(a) ?? 0) - (size(b) ?? 0)));
 }
 
 async function runUnifiedSearch(query: string): Promise<SearchEntry[]> {
@@ -2174,10 +2206,10 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
 
   try {
     if (readOnly && isWriteTool(name)) {
-      throw new Error(`${name} is disabled because ARR_READ_ONLY is set`);
+      throw new ToolArgumentError(`${name} is disabled because ARR_READ_ONLY is set`);
     }
     if (callerReadOnly && isWriteTool(name)) {
-      throw new Error(`${name} changes state and needs an admin account - your account has the user role (read-only tools)`);
+      throw new ToolArgumentError(`${name} changes state and needs an admin account - your account has the user role (read-only tools)`);
     }
     const tool = TOOLS.find(t => t.name === name);
     if (tool) {
@@ -2812,15 +2844,15 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
       }
       case "sonarr_get_series": {
         if (!clients.sonarr) throw new Error("Sonarr not configured");
-        const { limit = 25, offset = 0, search, sortBy: sortByArg, sortDir: sortDirArg } = args as {
+        const { limit = 25, offset = 0, search, sortBy, sortDir } = args as {
           limit?: number;
           offset?: number;
           search?: string;
-          sortBy?: string;
-          sortDir?: string;
+          sortBy?: unknown;
+          sortDir?: unknown;
         };
-        const sortBy = sortByArg === 'dateAdded' || sortByArg === 'sizeOnDisk' ? sortByArg : undefined;
-        const sortDir = sortDirArg === 'asc' || sortDirArg === 'desc' ? sortDirArg : undefined;
+        const sort = parseLibrarySort({ sortBy, sortDir });
+        if (typeof sort === "string") return textError(sort);
         const normalizedLimit = Math.max(1, Math.min(limit, 100));
         const normalizedOffset = Math.max(0, offset);
         const filter = search?.trim().toLowerCase();
@@ -2829,21 +2861,10 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
         const filteredSeries = filter
           ? allSeries.filter(s => s.title.toLowerCase().includes(filter))
           : allSeries;
-        // Sorting happens before pagination, so offset/limit page through the sorted order.
-        let sortedSeries = filteredSeries;
-        if (sortBy === 'dateAdded') {
-          const dir = sortDir ?? 'asc';
-          sortedSeries = [...filteredSeries].sort((a, b) => {
-            const cmp = (a.added ?? '').localeCompare(b.added ?? '');
-            return dir === 'desc' ? -cmp : cmp;
-          });
-        } else if (sortBy === 'sizeOnDisk') {
-          const dir = sortDir ?? 'desc';
-          sortedSeries = [...filteredSeries].sort((a, b) => {
-            const cmp = (b.statistics?.sizeOnDisk ?? 0) - (a.statistics?.sizeOnDisk ?? 0);
-            return dir === 'asc' ? -cmp : cmp;
-          });
-        }
+        // Sort before pagination so offset/limit page through the sorted order.
+        const sortedSeries = sort
+          ? sortLibrary(filteredSeries, sort, s => s.added, s => s.statistics?.sizeOnDisk)
+          : filteredSeries;
         const pagedSeries = sortedSeries.slice(normalizedOffset, normalizedOffset + normalizedLimit);
         return {
           content: [{
@@ -2859,8 +2880,7 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
                 ? normalizedOffset + normalizedLimit
                 : null,
               search: search ?? null,
-              sortBy: sortBy ?? null,
-              sortDir: sortBy ? (sortDir ?? (sortBy === 'dateAdded' ? 'asc' : 'desc')) : null,
+              ...sort,
               series: pagedSeries.map(s => ({
                 id: s.id,
                 title: s.title,
@@ -3094,15 +3114,15 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
       // Radarr handlers
       case "radarr_get_movies": {
         if (!clients.radarr) throw new Error("Radarr not configured");
-        const { limit = 25, offset = 0, search, sortBy: sortByArg, sortDir: sortDirArg } = args as {
+        const { limit = 25, offset = 0, search, sortBy, sortDir } = args as {
           limit?: number;
           offset?: number;
           search?: string;
-          sortBy?: string;
-          sortDir?: string;
+          sortBy?: unknown;
+          sortDir?: unknown;
         };
-        const sortBy = sortByArg === 'dateAdded' || sortByArg === 'added' ? 'dateAdded' : sortByArg === 'sizeOnDisk' ? 'sizeOnDisk' : undefined;
-        const sortDir = sortDirArg === 'asc' || sortDirArg === 'desc' ? sortDirArg : undefined;
+        const sort = parseLibrarySort({ sortBy, sortDir });
+        if (typeof sort === "string") return textError(sort);
         const normalizedLimit = Math.max(1, Math.min(limit, 100));
         const normalizedOffset = Math.max(0, offset);
         const filter = search?.trim().toLowerCase();
@@ -3111,23 +3131,10 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
         const filteredMovies = filter
           ? allMovies.filter(m => m.title.toLowerCase().includes(filter))
           : allMovies;
-        // Sorting happens before pagination, so offset/limit page through the sorted order.
-        let sortedMovies = filteredMovies;
-        if (sortBy === 'dateAdded') {
-          const dir = sortDir ?? 'asc';
-          sortedMovies = [...filteredMovies].sort((a, b) => {
-            const da = a.dateAdded ?? a.added ?? '';
-            const db = b.dateAdded ?? b.added ?? '';
-            const cmp = da.localeCompare(db);
-            return dir === 'desc' ? -cmp : cmp;
-          });
-        } else if (sortBy === 'sizeOnDisk') {
-          const dir = sortDir ?? 'desc';
-          sortedMovies = [...filteredMovies].sort((a, b) => {
-            const cmp = (b.sizeOnDisk ?? 0) - (a.sizeOnDisk ?? 0);
-            return dir === 'asc' ? -cmp : cmp;
-          });
-        }
+        // Sort before pagination so offset/limit page through the sorted order.
+        const sortedMovies = sort
+          ? sortLibrary(filteredMovies, sort, m => m.added, m => m.sizeOnDisk)
+          : filteredMovies;
         const pagedMovies = sortedMovies.slice(normalizedOffset, normalizedOffset + normalizedLimit);
         return {
           content: [{
@@ -3143,8 +3150,7 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
                 ? normalizedOffset + normalizedLimit
                 : null,
               search: search ?? null,
-              sortBy: sortBy ?? null,
-              sortDir: sortBy ? (sortDir ?? (sortBy === 'dateAdded' ? 'asc' : 'desc')) : null,
+              ...sort,
               movies: pagedMovies.map(m => ({
                 id: m.id,
                 title: m.title,
@@ -3915,7 +3921,7 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
             const sonarrResults = await clients.sonarr.searchSeries(term);
             results.sonarr = { count: sonarrResults.length, results: sonarrResults.slice(0, 5) };
           } catch (e) {
-            results.sonarr = { error: e instanceof Error ? e.message : String(e) };
+            results.sonarr = { error: errorText(e) };
           }
         }
 
@@ -3924,7 +3930,7 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
             const radarrResults = await clients.radarr.searchMovies(term);
             results.radarr = { count: radarrResults.length, results: radarrResults.slice(0, 5) };
           } catch (e) {
-            results.radarr = { error: e instanceof Error ? e.message : String(e) };
+            results.radarr = { error: errorText(e) };
           }
         }
 
@@ -3933,7 +3939,7 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
             const lidarrResults = await clients.lidarr.searchArtists(term);
             results.lidarr = { count: lidarrResults.length, results: lidarrResults.slice(0, 5) };
           } catch (e) {
-            results.lidarr = { error: e instanceof Error ? e.message : String(e) };
+            results.lidarr = { error: errorText(e) };
           }
         }
 
@@ -4714,9 +4720,10 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
         throw new Error(`Unknown tool: ${name}`);
     }
   } catch (error) {
+    const rawMessage = errorText(error);
     const newTools = ["radarr_get_manual_import_candidates", "radarr_manual_import", "radarr_get_command", "sonarr_grab_release", "radarr_grab_release", "sonarr_get_episode_files", "radarr_get_movie_files", "sonarr_get_episode_releases", "radarr_get_movie_releases"];
-    const errorMessage = newTools.includes(name) && !(error instanceof ArrValidationError)
-      ? 'Service request failed; check the service logs and current state before retrying' : errorText(error);
+    const errorMessage = newTools.includes(name) && !(error instanceof ArrValidationError || error instanceof ToolArgumentError)
+      ? 'Service request failed; check the service logs and current state before retrying' : rawMessage;
     return {
       content: [{ type: "text", text: `Error: ${errorMessage}` }],
       isError: true,

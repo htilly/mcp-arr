@@ -332,15 +332,19 @@
       "type": "object",
       "properties": {
         "seriesId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Sonarr series ID"
         },
         "limit": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
           "description": "Maximum records (default 25, max 100)"
         },
         "offset": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 0,
           "description": "Records to skip (default 0)"
         },
         "fields": {
@@ -368,15 +372,19 @@
       "type": "object",
       "properties": {
         "movieId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Radarr movie ID"
         },
         "limit": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
           "description": "Maximum records (default 25, max 100)"
         },
         "offset": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 0,
           "description": "Records to skip (default 0)"
         },
         "fields": {
@@ -403,15 +411,19 @@
       "type": "object",
       "properties": {
         "episodeId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Sonarr episode ID (not episode-file ID)"
         },
         "limit": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
           "description": "Maximum results (default 25, max 100)"
         },
         "offset": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 0,
           "description": "Results to skip (default 0)"
         }
       },
@@ -431,15 +443,19 @@
       "type": "object",
       "properties": {
         "movieId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Radarr movie ID"
         },
         "limit": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
           "description": "Maximum results (default 25, max 100)"
         },
         "offset": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 0,
           "description": "Results to skip (default 0)"
         }
       },
@@ -459,11 +475,13 @@
       "type": "object",
       "properties": {
         "episodeId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Sonarr episode ID"
         },
         "indexerId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Indexer ID returned by sonarr_get_episode_releases"
         },
         "guid": {
@@ -503,11 +521,13 @@
       "type": "object",
       "properties": {
         "movieId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Radarr movie ID"
         },
         "indexerId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Indexer ID returned by radarr_get_movie_releases"
         },
         "guid": {
@@ -674,16 +694,34 @@
   },
   {
     "name": "sonarr_get_series",
-    "description": "Get TV series from Sonarr library with optional pagination and title filtering. Defaults to limit=25 to avoid very large responses. Use offset to fetch additional pages.",
+    "description": "Get TV series from Sonarr library with optional pagination, title filtering and sorting. Defaults to limit=25 to avoid very large responses. Use offset to fetch additional pages. Optional sortBy (dateAdded or sizeOnDisk) is applied before pagination.",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "sortBy": {
+          "type": "string",
+          "enum": [
+            "dateAdded",
+            "sizeOnDisk"
+          ],
+          "description": "Optional sort applied before pagination. Omit to keep the library order."
+        },
+        "sortDir": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "description": "Sort direction (default: asc for dateAdded, desc for sizeOnDisk). Requires sortBy."
+        },
         "limit": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 0,
           "description": "Maximum number of series to return (default: 25, max: 100)"
         },
         "offset": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 0,
           "description": "Number of series to skip before returning results (default: 0)"
         },
         "search": {
@@ -725,11 +763,13 @@
       "type": "object",
       "properties": {
         "limit": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 0,
           "description": "Maximum number of queue items to return (default: 25, max: 100)"
         },
         "offset": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 0,
           "description": "Number of queue items to skip before returning results (default: 0)"
         }
       },
@@ -765,11 +805,13 @@
       "type": "object",
       "properties": {
         "seriesId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Series ID to get episodes for"
         },
         "seasonNumber": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 0,
           "description": "Optional: filter to a specific season"
         }
       },
@@ -789,7 +831,8 @@
       "type": "object",
       "properties": {
         "seriesId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Series ID to search for missing episodes"
         }
       },
@@ -814,7 +857,8 @@
           "type": "array",
           "maxItems": 1000,
           "items": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1
           },
           "description": "Episode ID(s) to search for"
         }
@@ -837,7 +881,8 @@
       "type": "object",
       "properties": {
         "seriesId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Series ID to refresh"
         }
       },
@@ -859,7 +904,8 @@
       "type": "object",
       "properties": {
         "tvdbId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "TVDB ID from sonarr_search results"
         },
         "title": {
@@ -867,7 +913,8 @@
           "description": "Series title"
         },
         "qualityProfileId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Quality profile ID from sonarr_get_quality_profiles"
         },
         "rootFolderPath": {
@@ -886,7 +933,8 @@
           "type": "array",
           "maxItems": 1000,
           "items": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1
           },
           "description": "Array of tag IDs from sonarr_get_tags (optional)"
         }
@@ -907,16 +955,34 @@
   },
   {
     "name": "radarr_get_movies",
-    "description": "Get movies from Radarr library with optional pagination and title filtering. Defaults to limit=25 to avoid very large responses. Use offset to fetch additional pages.",
+    "description": "Get movies from Radarr library with optional pagination, title filtering and sorting. Defaults to limit=25 to avoid very large responses. Use offset to fetch additional pages. Optional sortBy (dateAdded or sizeOnDisk) is applied before pagination.",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "sortBy": {
+          "type": "string",
+          "enum": [
+            "dateAdded",
+            "sizeOnDisk"
+          ],
+          "description": "Optional sort applied before pagination. Omit to keep the library order."
+        },
+        "sortDir": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "description": "Sort direction (default: asc for dateAdded, desc for sizeOnDisk). Requires sortBy."
+        },
         "limit": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 0,
           "description": "Maximum number of movies to return (default: 25, max: 100)"
         },
         "offset": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 0,
           "description": "Number of movies to skip before returning results (default: 0)"
         },
         "search": {
@@ -958,11 +1024,13 @@
       "type": "object",
       "properties": {
         "limit": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 0,
           "description": "Maximum number of queue items to return (default: 25, max: 100)"
         },
         "offset": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 0,
           "description": "Number of queue items to skip before returning results (default: 0)"
         }
       },
@@ -998,7 +1066,8 @@
       "type": "object",
       "properties": {
         "movieId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Movie ID to search for"
         }
       },
@@ -1020,7 +1089,8 @@
       "type": "object",
       "properties": {
         "movieId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Movie ID to refresh"
         }
       },
@@ -1042,7 +1112,8 @@
       "type": "object",
       "properties": {
         "tmdbId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "TMDB ID from radarr_search results"
         },
         "title": {
@@ -1050,7 +1121,8 @@
           "description": "Movie title"
         },
         "qualityProfileId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Quality profile ID from radarr_get_quality_profiles"
         },
         "rootFolderPath": {
@@ -1075,7 +1147,8 @@
           "type": "array",
           "maxItems": 1000,
           "items": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1
           },
           "description": "Array of tag IDs from radarr_get_tags (optional)"
         }
@@ -1101,11 +1174,13 @@
       "type": "object",
       "properties": {
         "movieId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Movie ID to update"
         },
         "qualityProfileId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "New quality profile ID (from radarr_get_quality_profiles)"
         },
         "monitored": {
@@ -1126,7 +1201,8 @@
           "type": "array",
           "maxItems": 1000,
           "items": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1
           },
           "description": "Replace all tags with this list of tag IDs"
         },
@@ -1153,7 +1229,8 @@
       "type": "object",
       "properties": {
         "queueId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Queue item ID (from radarr_get_queue)"
         },
         "removeFromClient": {
@@ -1186,7 +1263,8 @@
           "type": "array",
           "maxItems": 1000,
           "items": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1
           },
           "description": "Array of movie IDs to search for"
         }
@@ -1242,11 +1320,13 @@
       "type": "object",
       "properties": {
         "limit": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 0,
           "description": "Maximum number of queue items to return (default: 25, max: 100)"
         },
         "offset": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 0,
           "description": "Number of queue items to skip before returning results (default: 0)"
         }
       },
@@ -1264,7 +1344,8 @@
       "type": "object",
       "properties": {
         "artistId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Artist ID to get albums for"
         }
       },
@@ -1284,7 +1365,8 @@
       "type": "object",
       "properties": {
         "albumId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Album ID to search for"
         }
       },
@@ -1306,7 +1388,8 @@
       "type": "object",
       "properties": {
         "artistId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Artist ID to search missing albums for"
         }
       },
@@ -1354,11 +1437,13 @@
           "description": "Artist name"
         },
         "qualityProfileId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Quality profile ID from lidarr_get_quality_profiles"
         },
         "metadataProfileId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Metadata profile ID from lidarr_get_metadata_profiles"
         },
         "rootFolderPath": {
@@ -1373,7 +1458,8 @@
           "type": "array",
           "maxItems": 1000,
           "items": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1
           },
           "description": "Array of tag IDs from lidarr_get_tags (optional)"
         }
@@ -1646,7 +1732,8 @@
           "description": "Which service"
         },
         "profileId": {
-          "type": "number",
+          "type": "integer",
+          "minimum": 1,
           "description": "Your quality profile ID to compare"
         },
         "trashProfile": {
