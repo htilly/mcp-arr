@@ -1,6 +1,6 @@
 # AGENTS.md - mcp-arr
 
-MCP server for the *arr media management suite (Sonarr, Radarr, Lidarr, Prowlarr), plus Tautulli, Overseerr, Bazarr and Maintainerr.
+MCP server for the *arr media management suite (Sonarr, Radarr, Lidarr, Prowlarr), plus Tautulli, Overseerr, Bazarr, Maintainerr and Tdarr.
 
 ## Tech Stack
 
@@ -63,6 +63,8 @@ node dist/index.js
 | BAZARR_API_KEY | For Bazarr | API key from Bazarr settings |
 | MAINTAINERR_URL | For Maintainerr | Base URL (e.g., http://localhost:6246) |
 | MAINTAINERR_API_KEY | For Maintainerr | API key from Maintainerr Settings → General |
+| TDARR_URL | For Tdarr | Base URL (e.g., http://localhost:8265); enough on its own when Tdarr auth is off |
+| TDARR_API_KEY | No | Only when authentication is on in Tdarr (Tools → API Keys) |
 | ARR_READ_ONLY | No | `true` hides and blocks tools that change state |
 | MCP_TRANSPORT | No | `stdio` (default) or `http` (HTTPS server + web UI) |
 | PUBLIC_URL | HTTP mode | Browser URL, e.g. https://mcp-arr.home.lan:3000 (host name, not IP - passkeys). Also settable in the web UI (restarts in-process); unset = setup mode (temporary cert, passwords only) |

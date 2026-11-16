@@ -2,6 +2,8 @@
 // See ../integration.ts. To add one: create ./<name>.ts exporting an
 // IntegrationDefinition and add it to this list.
 import type { IntegrationDefinition } from "../integration.js";
+import { tdarr } from "./tdarr.js";
 
 export const INTEGRATIONS: IntegrationDefinition[] = [
+  tdarr,
 ];

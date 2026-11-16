@@ -12,7 +12,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io)
 
-MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, and Prowlarr, plus [Tautulli](https://tautulli.com/) for Plex statistics, [Overseerr](https://overseerr.dev/) for request management, [Bazarr](https://www.bazarr.media/) for subtitles and [Maintainerr](https://maintainerr.info/) for rule-based library cleanup.
+MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, and Prowlarr, plus [Tautulli](https://tautulli.com/) for Plex statistics, [Overseerr](https://overseerr.dev/) for request management, [Bazarr](https://www.bazarr.media/) for subtitles, [Maintainerr](https://maintainerr.info/) for rule-based library cleanup and [Tdarr](https://tdarr.io/) for transcoding.
 
 Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP mode for hosted MCP clients such as ChatGPT connectors.
 
@@ -38,6 +38,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
 | **Overseerr (Requests)** | List requests, approve/decline, view users, search media, request management |
 | **Bazarr (Subtitles)** | Missing subtitles, series/episode/movie subtitle status, search & download subtitles, history, providers, languages |
 | **Maintainerr (Cleanup)** | Collections marked for deletion with deletion dates, rules, logs, exclusions, postpone deletion, run rules |
+| **Tdarr (Transcoding)** | Find files by video/audio codec (e.g. AV1, DTS), requeue them through the library flow, nodes and workers, queues, stats |
 | **Remote server** | Optional HTTPS server with web UI: passkey login per user, encrypted config, offline certificates |
 | **Cross-Service** | Status check, unified search across all configured services |
 | **Configuration** | Quality profiles, download clients, naming conventions, health checks, storage info |
@@ -52,6 +53,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
   - [Overseerr](https://overseerr.dev/) (request management for Plex)
   - [Bazarr](https://www.bazarr.media/) (subtitle management for Sonarr/Radarr)
   - [Maintainerr](https://maintainerr.info/) (rule-based cleanup of Plex/Jellyfin/Emby libraries)
+  - [Tdarr](https://tdarr.io/) (distributed transcoding / health checks)
 
 ## Installation
 
@@ -150,7 +152,8 @@ Add to your Claude Desktop config file:
         "BAZARR_URL": "http://localhost:6767",
         "BAZARR_API_KEY": "your-bazarr-api-key",
         "MAINTAINERR_URL": "http://localhost:6246",
-        "MAINTAINERR_API_KEY": "your-maintainerr-api-key"
+        "MAINTAINERR_API_KEY": "your-maintainerr-api-key",
+        "TDARR_URL": "http://localhost:8265"
       }
     }
   }
@@ -494,6 +497,11 @@ The existing service-specific tools remain available for richer local or power-u
 - "Check my download client configuration"
 - "How much free space do I have on my root folders?"
 
+### Transcoding (Tdarr)
+- "Which files are AV1 or have DTS audio? My Samsung TV can't direct-play them"
+- "Send those back through Tdarr so they become H.264 with AAC audio"
+- "What is Tdarr working on right now, and how much space has it saved?"
+
 ### Cross-Service
 - "Check status of all my *arr services"
 - "Search for 'comedy' across all services"
@@ -695,6 +703,25 @@ When `MAINTAINERR_URL` and `MAINTAINERR_API_KEY` are set (API key: Maintainerr â
 
 Media ids are media server ids (Plex rating key or Jellyfin/Emby id); get them from `maintainerr_search_media` or `maintainerr_get_collection_media`. `arr_status` includes Maintainerr connection status when configured.
 
+### Tdarr Tools (Transcoding)
+
+When `TDARR_URL` is set (default port 8265). `TDARR_API_KEY` is only needed when authentication is on in Tdarr (Tools â†’ API Keys).
+
+| Tool | Description |
+|------|-------------|
+| `tdarr_status` | Version, uptime, nodes online/paused, active workers, transcode and health check queue sizes |
+| `tdarr_get_libraries` | Libraries with folder, flow / plugin stack, file count, status counts and codecs |
+| `tdarr_get_nodes` | Nodes and running jobs: file, progress, fps, ETA |
+| `tdarr_search_files` | Find files by video codec, audio codec (any audio track), container, library, path, status or size |
+| `tdarr_get_file` | One file with all its streams (codec, channels, language) |
+| `tdarr_get_queue` | Transcode / health check queue, or the success and error tables |
+| `tdarr_get_staged` | Transcodes waiting for you to accept or reject them |
+| `tdarr_get_stats` | Space saved, transcodes done, files per codec, container, resolution and status |
+| `tdarr_requeue_files` | Send files (by id or by the search filter) back through the library's flow, at most 100 per call. Requires `confirm: true` |
+| `tdarr_set_node_paused` | Pause or resume a node |
+
+Example: a TV that cannot direct-play AV1 video or DTS audio makes Plex transcode on the fly. `tdarr_search_files` with `videoCodecs: ["av1"]` and `audioCodecs: ["dts"]` lists those files (a DTS second audio track counts), and `tdarr_requeue_files` with the same filter queues them again. What they turn into - e.g. H.264 video and AAC audio - is decided by the library's flow or plugin stack in Tdarr, so set that up first (`tdarr_get_libraries` shows which flow a library uses). Requeueing usually replaces the original files. `arr_status` includes Tdarr connection status when configured.
+
 ### Configuration Review Tools
 
 These tools are available for Sonarr, Radarr, and Lidarr. Replace `{service}` with the service name (e.g., `sonarr_get_quality_profiles`).
@@ -752,7 +779,7 @@ npm run test
 SONARR_URL="http://localhost:8989" SONARR_API_KEY="your-key" node dist/index.js
 ```
 
-For `npm run test`, set URL and API key in `test-config.txt` (project root, .env-style) or as environment variables. The script tests Sonarr, Radarr, Lidarr, Readarr, Prowlarr, Tautulli, Overseerr, Bazarr and Maintainerr; Tautulli gets a detailed output (recent history, users) when configured.
+For `npm run test`, set URL and API key in `test-config.txt` (project root, .env-style) or as environment variables. The script tests Sonarr, Radarr, Lidarr, Readarr, Prowlarr, Tautulli, Overseerr, Bazarr, Maintainerr and Tdarr; Tautulli gets a detailed output (recent history, users) when configured.
 
 ## Troubleshooting
 
