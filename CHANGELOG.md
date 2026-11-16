@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - Optional integrations: services next to the *arr apps that use their own APIs can live in their own module under `src/integrations/`. `index.ts` loads the ones whose `<SERVICE>_URL` and `<SERVICE>_API_KEY` are set, adds their tools, routes their calls (after argument validation and read-only filtering) and reports them in `arr_status`, `/health` and the startup log. Nothing changes until an integration is added.
 - `npm run catalogue` regenerates `tools.json` and `docker-registry/tools.json` from the built server.
+- Optional Tautulli (Plex monitoring) integration, enabled with `TAUTULLI_URL` and `TAUTULLI_API_KEY`. Adds 9 `tautulli_*` tools for activity, watch history with title lookup, libraries, server info, home stats, users, recently added and server status. `tautulli_terminate_session` requires `confirmed=true` and is the only write tool, so read-only mode hides it. Tautulli errors are reported without response details.
 
 ## [1.9.0] - 2026-11-15
 

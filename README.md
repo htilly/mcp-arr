@@ -34,6 +34,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
 | **Radarr (Movies)** | List movies, search films, trigger downloads, check queue, view releases, review setup |
 | **Lidarr (Music)** | List artists, view albums, search musicians, trigger downloads, check queue, view calendar, review setup |
 | **Prowlarr (Indexers)** | List indexers, search across all trackers, test health, view statistics |
+| **Tautulli (Plex)** | Now playing, watch history, libraries, users, recently added, home stats, stop streams |
 | **Cross-Service** | Status check, unified search across all configured services |
 | **Configuration** | Quality profiles, download clients, naming conventions, health checks, storage info |
 | **TRaSH Guides** | Reference quality profiles, custom formats, naming conventions, compare against recommendations |
@@ -361,6 +362,22 @@ Inspect existing episode and movie files with paginated summary or full MediaInf
 | `prowlarr_search` | Search across all indexers |
 | `prowlarr_test_indexers` | Test all indexers and return health status |
 | `prowlarr_get_stats` | Get indexer statistics (queries, grabs, failures) |
+
+### Tautulli Tools (Plex)
+
+Available when `TAUTULLI_URL` and `TAUTULLI_API_KEY` are set.
+
+| Tool | Description |
+|------|-------------|
+| `tautulli_get_activity` | Current Plex streams, including session keys and IDs |
+| `tautulli_get_history` | Watch history; with `title`, whether it is in the library and who watched it when |
+| `tautulli_get_libraries` | Plex libraries with section IDs and item counts |
+| `tautulli_get_server_info` | Plex server name, version and platform |
+| `tautulli_get_home_stats` | Most watched media, most active users and platforms |
+| `tautulli_get_users` | Plex users known to Tautulli |
+| `tautulli_get_recently_added` | Recently added media, optionally for one library section |
+| `tautulli_server_status` | Whether Tautulli can reach the Plex server |
+| `tautulli_terminate_session` | Stop an active stream. Requires `confirmed=true` after the user approves the exact stream |
 
 ### Configuration Review Tools
 
