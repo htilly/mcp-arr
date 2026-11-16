@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - Optional integrations: services next to the *arr apps that use their own APIs can live in their own module under `src/integrations/`. `index.ts` loads the ones whose `<SERVICE>_URL` and `<SERVICE>_API_KEY` are set, adds their tools, routes their calls (after argument validation and read-only filtering) and reports them in `arr_status`, `/health` and the startup log. Nothing changes until an integration is added.
 - `npm run catalogue` regenerates `tools.json` and `docker-registry/tools.json` from the built server.
+- Optional Bazarr (subtitles) integration, enabled with `BAZARR_URL` and `BAZARR_API_KEY`. Adds 16 `bazarr_*` tools for status, health, badges, series/episode/movie subtitle status, wanted lists, history, missing-subtitle searches, single-language subtitle downloads, provider status and reset, and languages. Subtitle downloads are marked destructive because they replace an existing subtitle in that language.
 
 ## [1.9.0] - 2026-11-15
 

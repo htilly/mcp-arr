@@ -32,6 +32,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
 |----------|-------------|
 | **Sonarr (TV)** | List series, view episodes, search shows, trigger downloads, check queue, view calendar, review setup |
 | **Radarr (Movies)** | List movies, search films, trigger downloads, check queue, view releases, review setup |
+| **Bazarr (Subtitles)** | Missing subtitles, subtitle status per series/episode/movie, search and download subtitles, history, providers, languages |
 | **Lidarr (Music)** | List artists, view albums, search musicians, trigger downloads, check queue, view calendar, review setup |
 | **Prowlarr (Indexers)** | List indexers, search across all trackers, test health, view statistics |
 | **Cross-Service** | Status check, unified search across all configured services |
@@ -336,6 +337,29 @@ Inspect existing episode and movie files with paginated summary or full MediaInf
 | `radarr_update_movie` | Update a movie's quality profile, monitored status, minimum availability, tags, or path |
 | `radarr_delete_queue_item` | Remove an item from the download queue (optionally blocklist the release) |
 | `radarr_refresh_movie` | Trigger a metadata refresh for a specific movie in Radarr |
+
+### Bazarr Tools (Subtitles)
+
+Available when `BAZARR_URL` and `BAZARR_API_KEY` are set. Series and episode IDs are Sonarr IDs; movie IDs are Radarr IDs.
+
+| Tool | Description |
+|------|-------------|
+| `bazarr_status` | Bazarr system status (Bazarr, Sonarr and Radarr versions) |
+| `bazarr_get_health` | Health check issues |
+| `bazarr_get_badges` | Counts of episodes and movies missing subtitles, provider and health issues |
+| `bazarr_get_series` | Series with language profile and missing-subtitle counts |
+| `bazarr_get_episodes` | Episodes of a series with existing and missing subtitles (optional season filter) |
+| `bazarr_get_movies` | Movies with existing and missing subtitles |
+| `bazarr_get_wanted_episodes` | Episodes missing subtitles |
+| `bazarr_get_wanted_movies` | Movies missing subtitles |
+| `bazarr_get_history` | Subtitle history for episodes or movies |
+| `bazarr_search_series` | Search for all missing subtitles of a series |
+| `bazarr_search_movie` | Search for all missing subtitles of a movie |
+| `bazarr_download_episode_subtitle` | Download a subtitle in one language for an episode (optional forced/HI); replaces an existing subtitle in that language |
+| `bazarr_download_movie_subtitle` | Download a subtitle in one language for a movie (optional forced/HI); replaces an existing subtitle in that language |
+| `bazarr_get_providers` | Subtitle provider status (throttled providers) |
+| `bazarr_reset_providers` | Reset throttled providers so Bazarr retries them |
+| `bazarr_get_languages` | Enabled languages and language profiles |
 
 ### Lidarr Tools (Music)
 

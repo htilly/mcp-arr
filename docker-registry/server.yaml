@@ -31,6 +31,9 @@ config:
     - name: RADARR_URL
       description: "Radarr base URL (e.g., http://localhost:7878 or http://radarr:7878)"
       example: "http://localhost:7878"
+    - name: BAZARR_URL
+      description: "Optional Bazarr base URL for subtitle tools (e.g., http://localhost:6767 or http://bazarr:6767)"
+      example: "http://localhost:6767"
     - name: LIDARR_URL
       description: "Lidarr base URL (e.g., http://localhost:8686 or http://lidarr:8686)"
       example: "http://localhost:8686"
@@ -46,6 +49,10 @@ config:
       env: RADARR_API_KEY
       description: "Radarr API key from Settings > General > Security"
       example: "<your-radarr-api-key>"
+    - name: arr.bazarr-api-key
+      env: BAZARR_API_KEY
+      description: "Bazarr API key from Settings > General > Security"
+      example: "<your-bazarr-api-key>"
     - name: arr.lidarr-api-key
       env: LIDARR_API_KEY
       description: "Lidarr API key from Settings > General > Security"
