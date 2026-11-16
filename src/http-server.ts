@@ -32,6 +32,7 @@ import { SETTING_DEFS, STARTUP_KEYS, effectiveSettings, isSettingKey, normaliseS
 import { stats, CallEvent, CallContext, LoginMethod } from './stats.js';
 import { isBlockedServiceHost, urlOrigin } from './security.js';
 import { TlsTrustError } from './tls-trust.js';
+import type { SignInResult } from './integration.js';
 
 export interface HttpServerOptions {
   store: ConfigStore;
@@ -482,6 +483,37 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
     }
   }
 
+  // Sign-ins in progress (see the /services/<id>/signin routes). Memory only: a restart ends them.
+  const SIGN_IN_TTL_MS = 10 * 60_000;
+  const signIns = new Map<string, { service: ServiceId; state: unknown; expires: number; results?: SignInResult[] }>();
+  function pruneSignIns(): void {
+    const now = Date.now();
+    for (const [key, s] of signIns) if (s.expires < now) signIns.delete(key);
+  }
+
+  /** Saves what a sign-in returned. Values set by environment variables are never overwritten. */
+  function saveSignInResult(def: ServiceDef, result: SignInResult) {
+    const effective = store.getEffective()[def.id];
+    const update: Record<string, string | undefined> = {};
+    if (result.url && effective.urlSource !== 'env') {
+      if (isBlockedServiceHost(result.url)) throw new HttpError(400, 'The address from the sign-in is link-local / cloud metadata and cannot be used');
+      update.url = result.url;
+    }
+    for (const f of def.fields) {
+      const value = result.values[f.key];
+      if (value === undefined) continue;
+      if (effective.sources[f.key] === 'env') throw new HttpError(409, `${f.label} is set by an environment variable`);
+      update[f.key] = value;
+    }
+    try {
+      store.setService(def.id, update);
+    } catch (error) {
+      throw new HttpError(400, error instanceof Error ? error.message : String(error));
+    }
+    opts.onConfigChanged();
+    return { status: 'saved', label: result.label, services: servicesView(true), configuredSummary: opts.getConfiguredSummary() };
+  }
+
   function servicesView(includeDetails: boolean) {
     const effective = store.getEffective();
     return SERVICE_DEFS.map(def => {
@@ -497,6 +529,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
         hasApiKey: Boolean(e.apiKey),
         apiKeyHint: e.apiKey && e.apiKey.length >= 12 ? e.apiKey.slice(-4) : '',
         apiKeySource: e.apiKeySource,
+        signIn: def.integration?.signIn?.label ?? '',
         fields: def.fields.map(f => {
           const value = e.values[f.key];
           return {
@@ -912,6 +945,69 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
     }
 
     // --- admin only ---
+    // "Sign in with <service>" (integration.ts IntegrationSignIn): start, poll, pick a result.
+    const signInMatch = path.match(/^\/services\/([a-z][a-z0-9]*)\/signin(?:\/([0-9a-f]{32})(\/choose)?)?$/);
+    if (signInMatch && method === 'POST') {
+      requireAdmin(req);
+      const id = signInMatch[1];
+      const def = isServiceId(id) ? serviceDef(id) : undefined;
+      const flow = def?.integration?.signIn;
+      if (!def || !flow) throw new HttpError(404, 'This service has no sign-in');
+      const clientId = store.getInstallId();
+      pruneSignIns();
+
+      if (!signInMatch[2]) {
+        if (signIns.size >= 20) throw new HttpError(429, 'Too many sign-ins in progress - try again in a few minutes');
+        let started: { authUrl: string; state: unknown };
+        try {
+          started = await flow.start({ clientId });
+        } catch (error) {
+          throw new HttpError(502, error instanceof Error ? error.message : 'Sign-in could not start');
+        }
+        const sessionId = randomBytes(16).toString('hex');
+        signIns.set(sessionId, { service: id, state: started.state, expires: Date.now() + SIGN_IN_TTL_MS });
+        sendJson(res, 200, { sessionId, authUrl: started.authUrl });
+        return;
+      }
+
+      const session = signIns.get(signInMatch[2]);
+      if (!session || session.service !== id) throw new HttpError(404, 'Sign-in not found or expired - start again');
+
+      if (signInMatch[3]) {
+        const body = await readJson(req);
+        const index = typeof body.index === 'number' ? body.index : -1;
+        const result = session.results?.[index];
+        if (!result) throw new HttpError(400, 'Pick one of the listed servers');
+        signIns.delete(signInMatch[2]);
+        sendJson(res, 200, saveSignInResult(def, result));
+        return;
+      }
+
+      if (session.results) {
+        sendJson(res, 200, { status: 'choose', choices: session.results.map((r, index) => ({ index, label: r.label, url: r.url ?? '' })) });
+        return;
+      }
+      let polled;
+      try {
+        polled = await flow.poll(session.state, { clientId });
+      } catch (error) {
+        signIns.delete(signInMatch[2]);
+        throw new HttpError(502, error instanceof Error ? error.message : 'Sign-in failed');
+      }
+      if (polled.status === 'pending') {
+        sendJson(res, 200, { status: 'pending' });
+        return;
+      }
+      if (polled.results.length === 1) {
+        signIns.delete(signInMatch[2]);
+        sendJson(res, 200, saveSignInResult(def, polled.results[0]));
+        return;
+      }
+      session.results = polled.results;
+      sendJson(res, 200, { status: 'choose', choices: polled.results.map((r, index) => ({ index, label: r.label, url: r.url ?? '' })) });
+      return;
+    }
+
     const serviceMatch = path.match(/^\/services\/([a-z]+)(\/test)?$/);
     if (serviceMatch) {
       requireAdmin(req);

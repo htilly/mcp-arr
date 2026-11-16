@@ -89,7 +89,39 @@ export interface IntegrationDefinition {
   confirmTools?: string[];
   /** Tools that change state (hidden and refused in read-only mode). */
   writeTools?: string[];
+  /** Optional "Sign in with ..." button in the web UI, instead of copying a token (see IntegrationSignIn). */
+  signIn?: IntegrationSignIn;
   create(config: IntegrationConfig): IntegrationInstance;
+}
+
+/** One service the user can pick after signing in (e.g. one of several Plex servers). */
+export interface SignInResult {
+  /** Shown when there is more than one, e.g. the server name. */
+  label: string;
+  /** Base URL to save, or undefined to keep the current one. */
+  url?: string;
+  /** Field values to save by key (e.g. { token }). Only declared fields are saved. */
+  values: Record<string, string>;
+}
+
+export type SignInPoll = { status: "pending" } | { status: "done"; results: SignInResult[] };
+
+/**
+ * A browser sign-in at the service's own site (OAuth-like PIN flows such as
+ * Plex's). The server keeps `state` in memory; the browser only gets authUrl
+ * and never sees the resulting credentials, which are saved to the encrypted
+ * config directly.
+ */
+export interface IntegrationSignIn {
+  /** Button label, e.g. "Sign in with Plex". */
+  label: string;
+  /**
+   * Starts a sign-in. clientId is a stable random id for this mcp-arr install
+   * (services list it as a device). Returns the page to open and opaque state.
+   */
+  start(context: { clientId: string }): Promise<{ authUrl: string; state: unknown }>;
+  /** Checks whether the user finished. Throws when the sign-in failed or expired. */
+  poll(state: unknown, context: { clientId: string }): Promise<SignInPoll>;
 }
 
 export function integrationFields(definition: { fields?: IntegrationField[] }): IntegrationField[] {

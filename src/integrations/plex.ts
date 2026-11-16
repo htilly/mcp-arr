@@ -7,6 +7,7 @@
  */
 
 import { fetchFor, TLS_FINGERPRINT_FIELD } from "../tls-trust.js";
+import { plexSignIn } from "../plex-signin.js";
 import type { Tool, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { jsonText, type IntegrationDefinition } from "../integration.js";
 import { PlexClient, type PlexMetadata } from "../plex-client.js";
@@ -177,6 +178,7 @@ export const plex: IntegrationDefinition = {
     + '<rect x="-54" y="-54" width="108" height="108" rx="18" class="thin"/>'
     + '<path class="ink f-gold" d="M-30 -46 H2 L36 0 L2 46 H-30 L4 0 Z"/>'
     + '<path fill="url(#hatch)" d="M-30 -46 H2 L36 0 L2 46 H-30 L4 0 Z"/>',
+  signIn: plexSignIn,
   writeTools: ["plex_scan_library", "plex_refresh_metadata", "plex_cancel_activity"],
   confirmTools: ["plex_empty_trash", "plex_terminate_session"],
 
