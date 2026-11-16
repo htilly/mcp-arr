@@ -108,6 +108,7 @@ export function resourcesToResults(resources: PlexResource[]): SignInResult[] {
     label: `${r.name ?? "Plex server"}${r.owned === false ? " (shared with you)" : ""}`,
     url: pickConnection(r.connections),
     values: { token: r.accessToken! },
+    preferred: r.owned === true,
   }));
 }
 

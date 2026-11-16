@@ -34,14 +34,15 @@ let cookie;
 
 const RESOURCES = () => [
   {
-    name: 'Tilly Plex', provides: 'server', owned: true, accessToken: SERVER_TOKEN, clientIdentifier: 'abc',
+    name: 'Home Plex', provides: 'server', owned: true, accessToken: SERVER_TOKEN, clientIdentifier: 'abc',
     connections: [
       { protocol: 'https', address: '1.2.3.4', port: 32400, uri: 'https://1-2-3-4.hash.plex.direct:32400', local: false, relay: false },
-      { protocol: 'https', address: '172.16.230.80', port: 32400, uri: 'https://172-16-230-80.hash.plex.direct:32400', local: true, relay: false },
+      { protocol: 'https', address: '192.168.1.20', port: 32400, uri: 'https://192-168-1-20.hash.plex.direct:32400', local: true, relay: false },
     ],
   },
   { name: 'Plex Web', provides: 'client,player', accessToken: 'player-token' },
   ...(servers > 1 ? [{ name: 'Friend', provides: 'server', owned: false, accessToken: 'friend-token', connections: [{ address: '5.6.7.8', port: 32400, uri: 'https://5-6-7-8.x.plex.direct:32400', local: false }] }] : []),
+  ...(servers > 2 ? [{ name: 'Cabin', provides: 'server', owned: true, accessToken: 'cabin-token', connections: [{ address: '10.0.0.5', port: 32400, local: true }] }] : []),
 ];
 
 before(async () => {
@@ -132,11 +133,11 @@ async function waitFor(fn, ms) {
 }
 
 test('the best Plex connection is a local address over http, never a relay', () => {
-  assert.equal(pickConnection(RESOURCES()[0].connections), 'http://172.16.230.80:32400');
+  assert.equal(pickConnection(RESOURCES()[0].connections), 'http://192.168.1.20:32400');
   assert.equal(pickConnection([{ address: '9.9.9.9', port: 1, relay: true, local: true }]), undefined);
   assert.equal(pickConnection([{ address: '1.2.3.4', port: 32400, uri: 'https://x.plex.direct:32400', local: false }]), 'https://x.plex.direct:32400');
   const results = resourcesToResults(RESOURCES());
-  assert.deepEqual(results.map((r) => r.label), ['Tilly Plex'], 'players are not servers');
+  assert.deepEqual(results.map((r) => r.label), ['Home Plex'], 'players are not servers');
 });
 
 test('Sign in with Plex saves the server token and local URL, never the account token', async () => {
@@ -151,7 +152,7 @@ test('Sign in with Plex saves the server token and local URL, never the account 
   assert.match(start.json.authUrl, /^https:\/\/app\.plex\.example\/auth#\?clientID=[0-9a-f-]{36}&code=ABCD1234/);
   // Plex sends the browser back to the web UI, which then shows the result.
   const forward = new URLSearchParams(start.json.authUrl.split('#?')[1]).get('forwardUrl');
-  assert.equal(forward, `${origin}/admin#signin=plex:${start.json.sessionId}`);
+  assert.equal(forward, `${origin}/admin?signin=plex:${start.json.sessionId}`);
   assert.match(start.json.sessionId, /^[0-9a-f]{32}$/);
   const clientId = seen[0].client;
   assert.match(clientId, /^[0-9a-f-]{36}$/);
@@ -165,7 +166,7 @@ test('Sign in with Plex saves the server token and local URL, never the account 
   assert.equal(saved.json.status, 'saved', saved.text);
   const after = saved.json.services.find((s) => s.id === 'plex');
   assert.equal(after.configured, true);
-  assert.equal(after.url, 'http://172.16.230.80:32400');
+  assert.equal(after.url, 'http://192.168.1.20:32400');
   assert.ok(!saved.text.includes(SERVER_TOKEN) && !saved.text.includes(ACCOUNT_TOKEN), 'no token reaches the browser');
   assert.equal(after.fields.find((f) => f.key === 'token').hint, SERVER_TOKEN.slice(-4));
   assert.ok(seen.every((r) => r.client === clientId), 'one stable client id');
@@ -181,21 +182,37 @@ test('Sign in with Plex saves the server token and local URL, never the account 
   assert.equal(again.status, 200);
 });
 
-test('with several servers the admin picks one', async () => {
+test('the one server the account owns is saved without asking; shared servers are ignored', async () => {
   seen = []; pinPolls = 5; servers = 2;
+  const start = await ui('/services/plex/signin', { method: 'POST', body: {} });
+  let r;
+  await waitFor(async () => (r = await ui(`/services/plex/signin/${start.json.sessionId}`, { method: 'POST', body: {} })).json.status !== 'pending', 10000);
+  assert.equal(r.json.status, 'saved', r.text);
+  assert.equal(r.json.label, 'Home Plex');
+  assert.equal(r.json.services.find((s) => s.id === 'plex').url, 'http://192.168.1.20:32400');
+});
+
+test('with several owned servers the admin picks one', async () => {
+  seen = []; pinPolls = 5; servers = 3;
   const start = await ui('/services/plex/signin', { method: 'POST', body: {} });
   let choose;
   await waitFor(async () => (choose = await ui(`/services/plex/signin/${start.json.sessionId}`, { method: 'POST', body: {} })).json.status !== 'pending', 10000);
   assert.equal(choose.json.status, 'choose');
-  assert.deepEqual(choose.json.choices.map((c) => c.label), ['Tilly Plex', 'Friend (shared with you)']);
+  assert.deepEqual(choose.json.choices.map((c) => c.label), ['Home Plex', 'Cabin', 'Friend (shared with you)']);
   assert.ok(!choose.text.includes('friend-token'));
   const bad = await ui(`/services/plex/signin/${start.json.sessionId}/choose`, { method: 'POST', body: { index: 9 } });
   assert.equal(bad.status, 400);
-  const picked = await ui(`/services/plex/signin/${start.json.sessionId}/choose`, { method: 'POST', body: { index: 1 } });
+  const picked = await ui(`/services/plex/signin/${start.json.sessionId}/choose`, { method: 'POST', body: { index: 2 } });
   assert.equal(picked.json.status, 'saved', picked.text);
   const twice = await ui(`/services/plex/signin/${start.json.sessionId}/choose`, { method: 'POST', body: { index: 0 } });
   assert.equal(twice.status, 400, 'a finished sign-in cannot be changed afterwards');
   assert.equal(picked.json.services.find((s) => s.id === 'plex').url, 'https://5-6-7-8.x.plex.direct:32400');
+});
+
+test('the connection test names only the missing required field', async () => {
+  const r = await ui('/services/sabnzbd/test', { method: 'POST', body: { url: 'http://127.0.0.1:9' } });
+  assert.equal(r.status, 400);
+  assert.equal(r.json.error, 'API key is required to test');
 });
 
 test('sign-in needs an admin session and only exists for services that have one', async () => {
