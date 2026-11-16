@@ -28,8 +28,11 @@ import {
 } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { API_KEY_FIELD, IntegrationDefinition, IntegrationField, hasRequiredValues, integrationFields } from './integration.js';
+import { INTEGRATIONS } from './integrations/index.js';
 
-export type ServiceId =
+/** Services built into index.ts. Optional integrations (src/integrations/) add their own ids. */
+export type BuiltinServiceId =
   | 'sonarr'
   | 'radarr'
   | 'lidarr'
@@ -39,14 +42,20 @@ export type ServiceId =
   | 'bazarr'
   | 'maintainerr';
 
+export type ServiceId = string;
+
 export interface ServiceDef {
   id: ServiceId;
   displayName: string;
   envPrefix: string;
   exampleUrl: string;
+  /** Fields next to the URL. Built-in services have a single required API key. */
+  fields: IntegrationField[];
+  /** Set for optional integrations (src/integrations/). */
+  integration?: IntegrationDefinition;
 }
 
-export const SERVICE_DEFS: ServiceDef[] = [
+const BUILTIN_SERVICE_DEFS: Array<{ id: BuiltinServiceId; displayName: string; envPrefix: string; exampleUrl: string }> = [
   { id: 'sonarr', displayName: 'Sonarr (TV)', envPrefix: 'SONARR', exampleUrl: 'http://localhost:8989' },
   { id: 'radarr', displayName: 'Radarr (Movies)', envPrefix: 'RADARR', exampleUrl: 'http://localhost:7878' },
   { id: 'lidarr', displayName: 'Lidarr (Music)', envPrefix: 'LIDARR', exampleUrl: 'http://localhost:8686' },
@@ -57,20 +66,75 @@ export const SERVICE_DEFS: ServiceDef[] = [
   { id: 'maintainerr', displayName: 'Maintainerr (Cleanup)', envPrefix: 'MAINTAINERR', exampleUrl: 'http://localhost:6246' },
 ];
 
+/** Every service: the built-in ones, then the optional integrations in registry order. */
+export const SERVICE_DEFS: ServiceDef[] = buildServiceDefs(INTEGRATIONS);
+
+/** Exported for tests. Rejects integrations whose id or env prefix collides. */
+export function buildServiceDefs(integrations: IntegrationDefinition[]): ServiceDef[] {
+  const defs: ServiceDef[] = BUILTIN_SERVICE_DEFS.map(d => ({ ...d, fields: [API_KEY_FIELD] }));
+  for (const integration of integrations) {
+    if (!/^[a-z][a-z0-9]*$/.test(integration.name)) {
+      throw new Error(`Integration name ${integration.name} must be lower-case letters and digits`);
+    }
+    if (defs.some(d => d.id === integration.name || d.envPrefix === integration.envPrefix)) {
+      throw new Error(`Integration ${integration.name} collides with another service`);
+    }
+    const fields = integrationFields(integration);
+    const keys = new Set<string>();
+    for (const f of fields) {
+      if (f.key === 'url' || keys.has(f.key) || !/^[A-Z][A-Z0-9_]*$/.test(f.envSuffix) || f.envSuffix === 'URL') {
+        throw new Error(`Integration ${integration.name} has an invalid field ${f.key}`);
+      }
+      keys.add(f.key);
+    }
+    defs.push({
+      id: integration.name,
+      displayName: integration.displayName,
+      envPrefix: integration.envPrefix,
+      exampleUrl: integration.exampleUrl,
+      fields,
+      integration,
+    });
+  }
+  return defs;
+}
+
 export function isServiceId(value: string): value is ServiceId {
   return SERVICE_DEFS.some(d => d.id === value);
+}
+
+export function serviceDef(id: ServiceId): ServiceDef | undefined {
+  return SERVICE_DEFS.find(d => d.id === id);
 }
 
 export type ValueSource = 'env' | 'file' | 'none';
 
 export interface EffectiveService {
   url?: string;
+  /** Same as values.apiKey (kept for the built-in services). */
   apiKey?: string;
   urlSource: ValueSource;
   apiKeySource: ValueSource;
+  /** Every field of the service by key, environment variables winning. */
+  values: Record<string, string | undefined>;
+  sources: Record<string, ValueSource>;
+  /** URL and every required field are set. */
+  configured: boolean;
 }
 
-export type EffectiveConfig = Record<ServiceId, EffectiveService>;
+export type EffectiveConfig = Record<BuiltinServiceId, EffectiveService> & Record<ServiceId, EffectiveService>;
+
+/** Every secret field value of every service, for redacting error text. */
+export function secretValues(config: EffectiveConfig): string[] {
+  const secrets: string[] = [];
+  for (const def of SERVICE_DEFS) {
+    for (const f of def.fields) {
+      const value = config[def.id]?.values[f.key];
+      if (f.secret && value) secrets.push(value);
+    }
+  }
+  return secrets;
+}
 
 export type Role = 'admin' | 'user';
 
@@ -154,7 +218,8 @@ export interface StoredTls {
 }
 
 interface ConfigData {
-  services: Partial<Record<ServiceId, { url?: string; apiKey?: string }>>;
+  /** Per service: url plus one entry per field key (e.g. apiKey). */
+  services: Partial<Record<ServiceId, Record<string, string>>>;
   users: StoredUser[];
   invites: StoredInvite[];
   tokens: StoredToken[];
@@ -423,22 +488,37 @@ export class ConfigStore {
   getEffective(): EffectiveConfig {
     const result = {} as EffectiveConfig;
     for (const def of SERVICE_DEFS) {
-      const envUrl = this.env[`${def.envPrefix}_URL`] || undefined;
-      const envKey = this.env[`${def.envPrefix}_API_KEY`] || undefined;
       const stored = this.data.services[def.id] ?? {};
+      const envUrl = this.env[`${def.envPrefix}_URL`] || undefined;
+      const values: Record<string, string | undefined> = {};
+      const sources: Record<string, ValueSource> = {};
+      for (const f of def.fields) {
+        const envValue = this.env[`${def.envPrefix}_${f.envSuffix}`] || undefined;
+        values[f.key] = envValue ?? (stored[f.key] || undefined);
+        sources[f.key] = envValue ? 'env' : stored[f.key] ? 'file' : 'none';
+      }
+      const url = envUrl ?? (stored.url || undefined);
       result[def.id] = {
-        url: envUrl ?? (stored.url || undefined),
-        apiKey: envKey ?? (stored.apiKey || undefined),
+        url,
+        apiKey: values.apiKey,
         urlSource: envUrl ? 'env' : stored.url ? 'file' : 'none',
-        apiKeySource: envKey ? 'env' : stored.apiKey ? 'file' : 'none',
+        apiKeySource: sources.apiKey ?? 'none',
+        values,
+        sources,
+        configured: hasRequiredValues(def.fields, url, values),
       };
     }
     return result;
   }
 
-  /** url/apiKey: '' clears, undefined leaves unchanged. */
-  setService(id: ServiceId, update: { url?: string; apiKey?: string }): void {
-    const current = { ...(this.data.services[id] ?? {}) };
+  /** url and field values by key: '' clears, undefined leaves unchanged. Unknown keys are rejected. */
+  setService(id: ServiceId, update: Record<string, string | undefined>): void {
+    const def = serviceDef(id);
+    if (!def) throw new Error('Unknown service');
+    for (const key of Object.keys(update)) {
+      if (key !== 'url' && !def.fields.some(f => f.key === key)) throw new Error(`Unknown field ${key}`);
+    }
+    const current: Record<string, string> = { ...(this.data.services[id] ?? {}) };
     if (update.url !== undefined) {
       const url = update.url.trim().replace(/\/+$/, '');
       if (url) {
@@ -454,12 +534,14 @@ export class ConfigStore {
         delete current.url;
       }
     }
-    if (update.apiKey !== undefined) {
-      const key = update.apiKey.trim();
-      if (key) current.apiKey = key;
-      else delete current.apiKey;
+    for (const f of def.fields) {
+      const value = update[f.key];
+      if (value === undefined) continue;
+      const trimmed = value.trim();
+      if (trimmed) current[f.key] = trimmed;
+      else delete current[f.key];
     }
-    if (current.url || current.apiKey) this.data.services[id] = current;
+    if (Object.keys(current).length > 0) this.data.services[id] = current;
     else delete this.data.services[id];
     this.save();
   }

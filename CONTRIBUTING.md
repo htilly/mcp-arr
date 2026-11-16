@@ -22,6 +22,17 @@ Run `npm test` before submitting. These tests check HTTP transport and unique to
 4. Update the Available Tools tables in README.md and add an entry under Unreleased in CHANGELOG.md.
 5. Exercise the affected behavior and include the command and result in your pull request.
 
+## Adding an optional integration
+
+Services that sit next to the *arr apps and have their own HTTP API (download clients, transcoders, media servers, ...) go in their own module instead of `src/index.ts`. Only services with an HTTP API qualify; no SSH, shell commands or page scraping.
+
+1. Put the API client in `src/<service>-client.ts` and the tools and handlers in `src/integrations/<service>.ts`, exporting an `IntegrationDefinition` (see `src/integration.ts`). Tool names must start with `<service>_`.
+2. Declare the credential fields (`fields`). The default is one required `<SERVICE>_API_KEY`; use `required: false` for optional keys and `secret: true` for anything that must not reach the browser or error text.
+3. List state-changing tools in `writeTools` and destructive ones in `confirmTools` (they then need `confirm: true`, and `ARR_READ_ONLY` hides both).
+4. Throw errors as `<Service> API error: <status> ...` without response bodies; the web UI connection test turns 401/403 into "check the ..." hints.
+5. Add it to `src/integrations/index.ts`. The config file, web UI Services tab (inputs, icon, connection test), `arr_status`, error redaction and the status board pick it up from there.
+6. Add `test/<service>.test.mjs`, the env vars to README, AGENTS.md and `server.json`, and a CHANGELOG entry.
+
 ## Code style
 
 Match the existing TypeScript style and ES module imports. Run the checks above and do not skip configured Git hooks.

@@ -24,6 +24,8 @@ src/
 ├── admin-ui.ts       # Web UI page (single self-contained HTML string, no external assets)
 ├── security.ts       # Tool argument validation, confirmation, read-only list, URL checks, key redaction
 ├── config-store.ts   # Encrypted config file (AES-256-GCM), env merge, users/tokens/invites
+├── integration.ts    # Hook for optional integrations (tools, write/confirm policy, credential fields)
+├── integrations/     # One module per optional integration + index.ts registry
 ├── tools/            # Tool implementations by service
 │   ├── sonarr.ts     # TV show management
 │   ├── radarr.ts     # Movie management
@@ -115,6 +117,10 @@ rules:
 2. Register in `src/index.ts` tool list
 3. Update README.md "Available Tools" section
 4. Update CHANGELOG.md
+
+### Adding a New Service
+
+Services with their own HTTP API go in `src/integrations/<service>.ts` (an `IntegrationDefinition`, see `src/integration.ts` and CONTRIBUTING.md), not in `index.ts`. Write/confirm tools are declared in the module, not in `src/security.ts`.
 
 ### Testing Changes
 

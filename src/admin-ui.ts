@@ -4,6 +4,8 @@
  * NOTE: the page source below must not contain backticks or dollar-brace sequences.
  */
 
+import { INTEGRATIONS } from './integrations/index.js';
+
 const PAGE = String.raw`<!doctype html>
 <html lang="en">
 <head>
@@ -398,6 +400,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
   };
   /** The Claude mark (terracotta C + sea-glass brain), centred on 0,0. */
   var CLAUDE_MARK = '<path d="M-14 -38 A40 40 0 1 0 -14 38" fill="none" stroke="#d06c43" stroke-width="20" stroke-linecap="round"/><path class="ink f-sea" d="M20 -36 C6 -42 -6 -30 -4 -20 C-16 -18 -16 -2 -8 2 C-14 14 -2 26 12 22 C16 32 30 30 32 18 L32 -34 Z"/><path class="ink f-sea" d="M36 -36 C50 -42 62 -30 60 -20 C72 -18 72 -2 64 2 C70 14 58 26 44 22 C40 32 28 30 26 18 L26 -30 Z"/>';
+  Object.assign(ICONS, __INTEGRATION_ICONS__);
   ICONS.core = '<g transform="translate(-14 0) scale(1.25)">' + CLAUDE_MARK + '</g>';
   var SVGNS = 'http://www.w3.org/2000/svg';
   function svgEl(tag, attrs, inner) {
@@ -455,8 +458,17 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
   /** Sketch of Claude in the middle with the services around it; services that are enabled get a check mark. */
   function hubSketch(services) {
     var W = 760, H = 440, cx = 380, cy = 215;
-    var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': 'Claude connected to ' + services.filter(function (s) { return s.configured; }).length + ' of ' + services.length + ' services' });
     var slots = [[92, 80], [92, 215], [92, 350], [668, 80], [668, 215], [668, 350], [380, 62]];
+    if (services.length > slots.length) {
+      // More services than the fixed sketch has room for: two columns that grow downwards.
+      var perSide = Math.ceil(services.length / 2), rowH = 100;
+      H = 170 + (perSide - 1) * rowH; cy = Math.round(H / 2);
+      slots = [];
+      for (var side = 0; side < 2; side++) {
+        for (var r = 0; r < perSide; r++) slots.push([side ? 668 : 92, cy - (perSide - 1) * rowH / 2 + r * rowH]);
+      }
+    }
+    var svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': 'Claude connected to ' + services.filter(function (s) { return s.configured; }).length + ' of ' + services.length + ' services' });
     var arrows = svgEl('g'), nodes = svgEl('g');
     svg.appendChild(arrows);
     services.slice(0, slots.length).forEach(function (s, i) {
@@ -708,23 +720,35 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
   // ---------- main views ----------
   function serviceCard(svc, onUpdated) {
     var urlInput = el('input', { type: 'url', value: svc.url, placeholder: svc.exampleUrl, disabled: svc.urlSource === 'env' });
-    var keyInput = el('input', {
-      type: 'password', autocomplete: 'off', disabled: svc.apiKeySource === 'env',
-      placeholder: svc.hasApiKey ? 'Saved' + (svc.apiKeyHint ? ' (ends with ' + svc.apiKeyHint + ')' : '') + ' - leave empty to keep' : 'API key'
+    // One input per field (API key, token, username, password, ...). Secrets are never sent to the page.
+    var fields = (svc.fields || []).map(function (f) {
+      var input = el('input', {
+        type: f.secret ? 'password' : 'text', autocomplete: 'off', disabled: f.source === 'env',
+        value: f.secret ? '' : f.value,
+        placeholder: f.secret && f.hasValue
+          ? 'Saved' + (f.hint ? ' (ends with ' + f.hint + ')' : '') + ' - leave empty to keep'
+          : (f.placeholder || f.label) + (f.required ? '' : ' (optional)')
+      });
+      return { def: f, input: input };
     });
     var msg = el('div', { class: 'msg' });
+    function typedFields(all) {
+      var out = {};
+      fields.forEach(function (x) {
+        if (x.def.source === 'env') return;
+        if (x.def.secret ? x.input.value : (all || x.input.value !== x.def.value)) out[x.def.key] = x.input.value;
+      });
+      return out;
+    }
     function payload() {
-      var p = {};
+      var p = { fields: typedFields(false) };
       if (svc.urlSource !== 'env') p.url = urlInput.value;
-      if (svc.apiKeySource !== 'env' && keyInput.value) p.apiKey = keyInput.value;
       return p;
     }
     var testBtn = el('button', { text: 'Test', onclick: function () {
       testBtn.disabled = true;
       showMsg(msg, 'warn', 'Testing…');
-      var body = { url: urlInput.value };
-      if (keyInput.value) body.apiKey = keyInput.value;
-      api('POST', '/services/' + svc.id + '/test', body).then(function (r) {
+      api('POST', '/services/' + svc.id + '/test', { url: urlInput.value, fields: typedFields(true) }).then(function (r) {
         if (r.ok) showMsg(msg, 'ok', 'Connected' + (r.version ? ' - version ' + r.version : ''));
         else showMsg(msg, 'err', r.error || 'Connection failed');
       }, function (e) { showMsg(msg, 'err', e.message); }).then(function () { testBtn.disabled = false; });
@@ -735,23 +759,25 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
         saveBtn.disabled = false; showMsg(msg, 'err', e.message);
       });
     } });
-    var canRemove = (svc.urlSource === 'file' || svc.apiKeySource === 'file');
+    var canRemove = svc.urlSource === 'file' || fields.some(function (x) { return x.def.source === 'file'; });
     var clearBtn = canRemove ? el('button', { class: 'danger', text: 'Remove', onclick: function () {
       if (!confirm('Remove the saved settings for ' + svc.displayName + '?')) return;
-      var p = {};
+      var p = { fields: {} };
       if (svc.urlSource !== 'env') p.url = '';
-      if (svc.apiKeySource !== 'env') p.apiKey = '';
+      fields.forEach(function (x) { if (x.def.source !== 'env') p.fields[x.def.key] = ''; });
       api('PUT', '/services/' + svc.id, p).then(onUpdated, function (e) { showMsg(msg, 'err', e.message); });
     } }) : null;
-    return el('div', { class: 'panel' }, [
+    var body = [
       el('div', { class: 'card-head' }, [el('div', { class: 'card-title' }, [serviceIcon(svc.id, svc.configured), el('strong', { text: svc.displayName })]), el('span', { class: 'pill' + (svc.configured ? ' ok' : ''), text: svc.configured ? 'Enabled' : 'Not configured' })]),
       el('label', { text: 'URL' }), urlInput,
-      svc.urlSource === 'env' ? el('div', { class: 'note', text: 'Set by ' + svc.envPrefix + '_URL (read-only here)' }) : null,
-      el('label', { text: 'API key' }), keyInput,
-      svc.apiKeySource === 'env' ? el('div', { class: 'note', text: 'Set by ' + svc.envPrefix + '_API_KEY (read-only here)' }) : null,
-      el('div', { class: 'row' }, [saveBtn, testBtn, clearBtn]),
-      msg
-    ]);
+      svc.urlSource === 'env' ? el('div', { class: 'note', text: 'Set by ' + svc.envPrefix + '_URL (read-only here)' }) : null
+    ];
+    fields.forEach(function (x) {
+      body.push(el('label', { text: x.def.label }), x.input);
+      if (x.def.source === 'env') body.push(el('div', { class: 'note', text: 'Set by ' + x.def.envName + ' (read-only here)' }));
+    });
+    body.push(el('div', { class: 'row' }, [saveBtn, testBtn, clearBtn]), msg);
+    return el('div', { class: 'panel' }, body);
   }
 
   /** The hub sketch with a live indicator; tool calls animate on it (see animateHub). */
@@ -780,7 +806,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     }));
     return el('section', null, [
       el('h2', { text: 'Service configuration' }),
-      el('p', { class: 'muted', text: 'URL and API key for each service. Values set by environment variables are shown read-only.' }),
+      el('p', { class: 'muted', text: 'URL and credentials for each service. Values set by environment variables are shown read-only.' }),
       grid
     ]);
   }
@@ -1984,6 +2010,13 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
 </html>
 `;
 
+/** Icons of the optional integrations, as a JS object literal (no "<" so it cannot end the script). */
+const INTEGRATION_ICONS = JSON.stringify(
+  Object.fromEntries(INTEGRATIONS.filter(i => i.icon).map(i => [i.name, i.icon])),
+).replace(/</g, '\\u003c');
+
+const PAGE_WITH_ICONS = PAGE.split('__INTEGRATION_ICONS__').join(INTEGRATION_ICONS);
+
 export function renderAdminPage(nonce: string): string {
-  return PAGE.split('__NONCE__').join(nonce);
+  return PAGE_WITH_ICONS.split('__NONCE__').join(nonce);
 }
