@@ -18,6 +18,7 @@
     "watch": "tsc --watch",
     "start": "node dist/index.js",
     "sync-server-json": "node scripts/sync-server-json.mjs",
+    "catalogue": "node scripts/generate-tool-catalogue.mjs",
     "version": "npm run sync-server-json && git add server.json",
     "prepublishOnly": "npm run build"
   },

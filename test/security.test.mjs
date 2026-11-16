@@ -4,11 +4,12 @@ import { createServer } from "node:http";
 import { after, before, test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { SERVICES } from "./helpers/services.mjs";
 
 // Runs dist/index.js against a local stub with a dummy key, so no real
 // service is contacted. Build first: npm run build
 const DUMMY_KEY = "dummy-key-0123456789";
-const services = ["SONARR", "RADARR", "LIDARR", "PROWLARR"];
+const services = SERVICES;
 
 let stub;
 let baseUrl;

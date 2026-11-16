@@ -11,6 +11,7 @@
  * - LIDARR_URL, LIDARR_API_KEY
  * - PROWLARR_URL, PROWLARR_API_KEY
  * - ARR_READ_ONLY=true to hide and refuse tools that change state
+ * - Optional integrations (src/integrations/): <SERVICE>_URL, <SERVICE>_API_KEY
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -41,6 +42,8 @@ import {
   validateServiceUrl,
   validateToolArgs,
 } from "./security.js";
+import { loadIntegrations, LoadedIntegration } from "./integration.js";
+import { INTEGRATIONS } from "./integrations/index.js";
 
 // Read from package.json rather than hardcoding, so the version reported to
 // clients can never drift from the released version. package.json sits at the
@@ -129,8 +132,28 @@ for (const service of configuredServices) {
   }
 }
 
+// Optional integrations (see src/integration.ts), enabled by their own env vars.
+let integrations: LoadedIntegration[];
+try {
+  integrations = loadIntegrations(INTEGRATIONS, process.env);
+} catch (error) {
+  console.error(`[mcp-arr] ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
+const configuredDisplayNames = [
+  ...configuredServices.map(s => s.displayName),
+  ...integrations.map(i => i.displayName),
+];
+const configuredServiceNames = [
+  ...configuredServices.map(s => s.name),
+  ...integrations.map(i => i.name),
+];
+
 // Removes configured API keys from error text returned to clients.
-const redact = createRedactor(configuredServices.map(s => s.apiKey));
+const redact = createRedactor([
+  ...configuredServices.map(s => s.apiKey),
+  ...integrations.map(i => i.apiKey),
+]);
 
 function errorText(error: unknown): string {
   return redact(error instanceof Error ? error.message : String(error));
@@ -184,8 +207,8 @@ const TOOLS: Tool[] = [
   {
     name: "arr_status",
     annotations: READ_ONLY,
-    description: configuredServices.length > 0
-      ? `Get status of all configured *arr services. Currently configured: ${configuredServices.map(s => s.displayName).join(', ')}`
+    description: configuredDisplayNames.length > 0
+      ? `Get status of all configured *arr services. Currently configured: ${configuredDisplayNames.join(', ')}`
       : "Get status of all supported *arr services. No local *arr services are currently configured, but TRaSH reference tools remain available.",
     inputSchema: {
       type: "object" as const,
@@ -1308,6 +1331,11 @@ TOOLS.push(
   }
 );
 
+// Optional integration tools, after the built-in ones.
+for (const integration of integrations) {
+  TOOLS.push(...integration.tools);
+}
+
 // Build a fresh MCP server instance with all request handlers registered.
 // The HTTP transport builds a new instance per request (see startHttpServer)
 // so concurrent / long-lived transports never share a single server. A shared
@@ -1628,6 +1656,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       validateToolArgs(tool, (args ?? {}) as Record<string, unknown>);
     }
 
+    const integration = tool && integrations.find(i => i.tools.includes(tool));
+    if (integration) {
+      return await integration.callTool(name, (args ?? {}) as Record<string, unknown>);
+    }
+
     switch (name) {
       case "search": {
         const query = (args as { query: string }).query;
@@ -1663,8 +1696,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             };
           }
         }
+        for (const integration of integrations) {
+          try {
+            const status = await integration.getStatus();
+            statuses[integration.name] = { configured: true, connected: true, version: status.version };
+          } catch (error) {
+            statuses[integration.name] = { configured: true, connected: false, error: errorText(error) };
+          }
+        }
         // Add unconfigured services
-        for (const service of services) {
+        for (const service of [...services, ...INTEGRATIONS]) {
           if (!statuses[service.name]) {
             statuses[service.name] = { configured: false };
           }
@@ -3247,7 +3288,7 @@ async function startHttpServer() {
         status: "ok",
         version: SERVER_VERSION,
         transport: "http",
-        configuredServices: configuredServices.map((service) => service.name),
+        configuredServices: configuredServiceNames,
       }));
       return;
     }
@@ -3303,7 +3344,7 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`*arr MCP server running over stdio - configured services: ${configuredServices.map(s => s.name).join(', ') || 'none (TRaSH-only mode)'}`);
+  console.error(`*arr MCP server running over stdio - configured services: ${configuredServiceNames.join(', ') || 'none (TRaSH-only mode)'}`);
 }
 
 main().catch((error) => {

@@ -1,8 +1,9 @@
 import { createServer } from 'node:http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { SERVICES } from './services.mjs';
 
-export async function fixture(service, respond) {
+export async function fixture(service, respond, extraEnv = {}) {
   const calls = [];
   const api = createServer(async (req, res) => {
     let body = '';
@@ -15,12 +16,13 @@ export async function fixture(service, respond) {
   });
   await new Promise(resolve => api.listen(0, '127.0.0.1', resolve));
   const env = { ...process.env, MCP_TRANSPORT: 'stdio' };
-  for (const name of ['SONARR', 'RADARR', 'LIDARR', 'PROWLARR']) {
+  for (const name of SERVICES) {
     env[name + '_URL'] = '';
     env[name + '_API_KEY'] = '';
   }
   env[service.toUpperCase() + '_URL'] = `http://127.0.0.1:${api.address().port}`;
   env[service.toUpperCase() + '_API_KEY'] = 'test';
+  Object.assign(env, extraEnv);
   const transport = new StdioClientTransport({ command: process.execPath, args: ['dist/index.js'], env, stderr: 'ignore' });
   const client = new Client({ name: 'contribution-test', version: '1.0.0' });
   try { await client.connect(transport); }

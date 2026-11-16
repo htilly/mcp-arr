@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import test from "node:test";
+import { SERVICES } from "./helpers/services.mjs";
 
-const services = ["sonarr", "radarr", "lidarr", "prowlarr"];
+const services = SERVICES.map((service) => service.toLowerCase());
 const configurations = [[], ...services.map((service) => [service]), services];
 
 for (const configured of configurations) {
@@ -102,7 +103,7 @@ async function waitForHealth(port, configured) {
       });
       if (response.ok) {
         const health = await response.json();
-        assert.deepEqual(health.configuredServices, configured);
+        assert.deepEqual([...health.configuredServices].sort(), [...configured].sort());
         return;
       }
     } catch (error) {

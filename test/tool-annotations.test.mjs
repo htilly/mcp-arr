@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import test from "node:test";
+import { INTEGRATIONS, SERVICES } from "./helpers/services.mjs";
 
 // Every tool must declare annotations.readOnlyHint so clients can tell lookups
-// apart from tools that change state. All four services are configured (with
+// apart from tools that change state. Every service is configured (with
 // unreachable URLs; listing tools makes no API calls) so every tool is listed.
 const WRITE_TOOLS = [
   "radarr_manual_import",
@@ -61,8 +62,11 @@ test("every tool declares an explicit readOnlyHint", async () => {
     }
   }
 
+  // Optional integrations check their own write tools in their own tests.
+  const integrationPrefixes = INTEGRATIONS.map((prefix) => `${prefix.toLowerCase()}_`);
   const writeTools = tools
     .filter((tool) => tool.annotations.readOnlyHint === false)
+    .filter((tool) => !integrationPrefixes.some((prefix) => tool.name.startsWith(prefix)))
     .map((tool) => tool.name)
     .sort();
   assert.deepEqual(writeTools, [...WRITE_TOOLS].sort());
@@ -70,7 +74,7 @@ test("every tool declares an explicit readOnlyHint", async () => {
 
 async function listTools() {
   const env = { ...process.env, MCP_TRANSPORT: "stdio" };
-  for (const service of ["SONARR", "RADARR", "LIDARR", "PROWLARR"]) {
+  for (const service of SERVICES) {
     env[`${service}_URL`] = "http://127.0.0.1:9";
     env[`${service}_API_KEY`] = "test";
   }

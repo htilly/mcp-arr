@@ -20,7 +20,17 @@ Run `npm test` before submitting. These tests check HTTP transport and unique to
 2. Keep service access in `src/arr-client.ts` and TRaSH Guides access in `src/trash-client.ts`.
 3. Read URLs and API keys from environment variables. Return useful errors without exposing credentials or raw API errors.
 4. Update the Available Tools tables in README.md and add an entry under Unreleased in CHANGELOG.md.
-5. Exercise the affected behavior and include the command and result in your pull request.
+5. Run `npm run build && npm run catalogue` to update `tools.json` and `docker-registry/tools.json`.
+6. Exercise the affected behavior and include the command and result in your pull request.
+
+## Adding an optional integration
+
+Services that sit next to the *arr apps but have their own API (subtitles, requests, Plex monitoring, ...) go in their own module instead of `src/index.ts`:
+
+1. Put the API client in `src/<service>-client.ts` and the tools and handlers in `src/integrations/<service>.ts`, exporting an `IntegrationDefinition` (see `src/integration.ts`). Tool names must start with `<service>_` and every tool must declare annotations.
+2. Add it to `src/integrations/index.ts`.
+3. Add `<SERVICE>_URL` and `<SERVICE>_API_KEY` to `server.json` and `docker-registry/server.yaml`. The shared tests read the service list from `server.json`.
+4. Add `test/<service>-tools.test.mjs`, a README section and a CHANGELOG entry, then run `npm run catalogue`.
 
 ## Code style
 

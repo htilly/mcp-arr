@@ -3,8 +3,9 @@ import { createServer } from "node:http";
 import { after, before, test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { SERVICES } from "./helpers/services.mjs";
 
-// All four services point at a local stub, so every tool is listed and any
+// All services point at a local stub, so every tool is listed and any
 // request that slips through is recorded instead of reaching a real service.
 let api;
 let requests = [];
@@ -22,7 +23,7 @@ after(() => api.close());
 
 async function connect(readOnly) {
   const env = { PATH: process.env.PATH, MCP_TRANSPORT: "stdio" };
-  for (const service of ["SONARR", "RADARR", "LIDARR", "PROWLARR"]) {
+  for (const service of SERVICES) {
     env[`${service}_URL`] = `http://127.0.0.1:${api.address().port}`;
     env[`${service}_API_KEY`] = "test";
   }

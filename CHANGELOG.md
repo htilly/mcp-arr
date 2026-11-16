@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Optional integrations: services next to the *arr apps that use their own APIs can live in their own module under `src/integrations/`. `index.ts` loads the ones whose `<SERVICE>_URL` and `<SERVICE>_API_KEY` are set, adds their tools, routes their calls (after argument validation and read-only filtering) and reports them in `arr_status`, `/health` and the startup log. Nothing changes until an integration is added.
+- `npm run catalogue` regenerates `tools.json` and `docker-registry/tools.json` from the built server.
+
 ## [1.9.0] - 2026-11-15
 
 ### Added
