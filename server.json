@@ -115,6 +115,20 @@
           "name": "TDARR_API_KEY"
         },
         {
+          "description": "Plex Media Server URL",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "PLEX_URL"
+        },
+        {
+          "description": "Plex token (X-Plex-Token)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "PLEX_TOKEN"
+        },
+        {
           "description": "Set to true to hide and block every tool that changes state",
           "isRequired": false,
           "format": "string",

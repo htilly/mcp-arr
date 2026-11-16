@@ -18,6 +18,8 @@ for (const configured of configurations) {
       env[`${prefix}_URL`] = configured.includes(service) ? "http://127.0.0.1:1" : "";
       env[`${prefix}_API_KEY`] = configured.includes(service) ? "test-key" : "";
     }
+    env.PLEX_URL = "";
+    env.PLEX_TOKEN = "";
 
     const child = spawn(process.execPath, ["dist/index.js"], {
       cwd: new URL("..", import.meta.url),

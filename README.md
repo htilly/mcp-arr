@@ -12,7 +12,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io)
 
-MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, and Prowlarr, plus [Tautulli](https://tautulli.com/) for Plex statistics, [Overseerr](https://overseerr.dev/) for request management, [Bazarr](https://www.bazarr.media/) for subtitles, [Maintainerr](https://maintainerr.info/) for rule-based library cleanup and [Tdarr](https://tdarr.io/) for transcoding.
+MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, and Prowlarr, plus [Tautulli](https://tautulli.com/) for Plex statistics, [Overseerr](https://overseerr.dev/) for request management, [Bazarr](https://www.bazarr.media/) for subtitles, [Maintainerr](https://maintainerr.info/) for rule-based library cleanup, [Tdarr](https://tdarr.io/) for transcoding and [Plex Media Server](https://www.plex.tv/) for direct server control.
 
 Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP mode for hosted MCP clients such as ChatGPT connectors.
 
@@ -39,6 +39,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
 | **Bazarr (Subtitles)** | Missing subtitles, series/episode/movie subtitle status, search & download subtitles, history, providers, languages |
 | **Maintainerr (Cleanup)** | Collections marked for deletion with deletion dates, rules, logs, exclusions, postpone deletion, run rules |
 | **Tdarr (Transcoding)** | Find files by video/audio codec (e.g. AV1, DTS), requeue them through the library flow, nodes and workers, queues, stats |
+| **Plex (Media Server)** | Library scans (whole library or one folder), metadata refresh, live sessions with direct play / transcode decision, stream codecs, background activities, empty trash, stop a stream |
 | **Remote server** | Optional HTTPS server with web UI: passkey login per user, encrypted config, offline certificates |
 | **Cross-Service** | Status check, unified search across all configured services |
 | **Configuration** | Quality profiles, download clients, naming conventions, health checks, storage info |
@@ -54,6 +55,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
   - [Bazarr](https://www.bazarr.media/) (subtitle management for Sonarr/Radarr)
   - [Maintainerr](https://maintainerr.info/) (rule-based cleanup of Plex/Jellyfin/Emby libraries)
   - [Tdarr](https://tdarr.io/) (distributed transcoding / health checks)
+  - [Plex Media Server](https://www.plex.tv/) (direct control: scans, sessions, transcodes)
 
 ## Installation
 
@@ -153,7 +155,9 @@ Add to your Claude Desktop config file:
         "BAZARR_API_KEY": "your-bazarr-api-key",
         "MAINTAINERR_URL": "http://localhost:6246",
         "MAINTAINERR_API_KEY": "your-maintainerr-api-key",
-        "TDARR_URL": "http://localhost:8265"
+        "TDARR_URL": "http://localhost:8265",
+        "PLEX_URL": "http://localhost:32400",
+        "PLEX_TOKEN": "your-plex-token"
       }
     }
   }
@@ -435,7 +439,7 @@ Use your actual paths and API keys. Only include the services you use.
 
 - **Roles (HTTP mode)**: tokens of *user*-role accounts only get read-only tools; tools that change state need an *admin* account.
 - **Read-only mode**: set `ARR_READ_ONLY=true` to hide and block every tool that changes state, including deletes, adds, updates, triggered searches, release grabs, manual imports, subtitle downloads, indexer tests and request approvals.
-- **Confirmation**: `sonarr_delete_series`, `sonarr_delete_season`, `sonarr_delete_episode_files`, `radarr_delete_movie`, `radarr_delete_queue_item`, `tautulli_terminate_session`, `overseerr_approve_request`, `overseerr_decline_request` and `maintainerr_handle_collections` fail unless called with `confirm: true`. This stops accidental calls, but a model can still set it, so use read-only mode or your client's tool approval prompts if you need a human in the loop. Tools carry `readOnlyHint` and `destructiveHint` annotations for clients that use them.
+- **Confirmation**: `sonarr_delete_series`, `sonarr_delete_season`, `sonarr_delete_episode_files`, `radarr_delete_movie`, `radarr_delete_queue_item`, `tautulli_terminate_session`, `overseerr_approve_request`, `overseerr_decline_request`, `maintainerr_handle_collections`, `plex_empty_trash` and `plex_terminate_session` fail unless called with `confirm: true`. This stops accidental calls, but a model can still set it, so use read-only mode or your client's tool approval prompts if you need a human in the loop. Tools carry `readOnlyHint` and `destructiveHint` annotations for clients that use them.
 - **File deletion**: `deleteFiles` defaults to `false`.
 - **Argument validation**: arguments are checked against each tool's schema before any request is sent.
 - **Service URLs**: a configured service URL must include `http://` or `https://`, or the server won't start.
@@ -721,6 +725,30 @@ When `TDARR_URL` is set (default port 8265). `TDARR_API_KEY` is only needed when
 | `tdarr_set_node_paused` | Pause or resume a node |
 
 Example: a TV that cannot direct-play AV1 video or DTS audio makes Plex transcode on the fly. `tdarr_search_files` with `videoCodecs: ["av1"]` and `audioCodecs: ["dts"]` lists those files (a DTS second audio track counts), and `tdarr_requeue_files` with the same filter queues them again. What they turn into - e.g. H.264 video and AAC audio - is decided by the library's flow or plugin stack in Tdarr, so set that up first (`tdarr_get_libraries` shows which flow a library uses). Requeueing usually replaces the original files. `arr_status` includes Tdarr connection status when configured.
+### Plex Tools (Media Server)
+
+When `PLEX_URL` (e.g. `http://localhost:32400`) and `PLEX_TOKEN` are set. The token is your X-Plex-Token ([how to find it](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)); it is sent only as a request header, never in a URL, and is redacted from errors.
+
+These tools control the Plex server itself. The `tautulli_*` tools are for watch history, statistics and users; use `plex_*` to scan libraries, refresh metadata, see why a stream transcodes, and manage background work. Both can be configured together.
+
+| Tool | Description |
+|------|-------------|
+| `plex_status` | Server name, version, platform, Plex Pass, transcoder capabilities, active streams |
+| `plex_get_libraries` | Libraries with id, type, item count, folders, last scan and whether a scan is running |
+| `plex_get_sessions` | What is playing: user, player device, progress, bandwidth, direct play / direct stream / transcode, video and audio codec from -> to, and inferred reasons for the transcode |
+| `plex_get_transcode_sessions` | Transcoder sessions: codecs, container, speed, throttling, hardware decoding/encoding |
+| `plex_search` | Search all libraries by title; returns ratingKeys |
+| `plex_get_recently_added` | Recently added items, for all libraries or one |
+| `plex_get_item` | One item by ratingKey: metadata, files, and video/audio/subtitle streams with codecs, HDR/Dolby Vision, channels, languages; children of shows/seasons/albums |
+| `plex_get_activities` | Running background work (scans, refreshes, analysis) with progress |
+| `plex_get_butler_tasks` | Scheduled maintenance tasks |
+| `plex_scan_library` | Scan a library, or only one folder inside it (the folder must be inside the library) |
+| `plex_refresh_metadata` | Refresh one item's metadata |
+| `plex_cancel_activity` | Cancel a running background activity |
+| `plex_empty_trash` | Remove library entries whose files are gone (files are not touched). Requires `confirm: true` |
+| `plex_terminate_session` | Stop a stream with a message to the viewer (needs Plex Pass). Requires `confirm: true` |
+
+The transcode reasons in `plex_get_sessions` are inferred from the source and target codecs (e.g. "video codec av1 transcoded to h264"); Plex does not report its exact reason there. `arr_status` includes Plex connection status when configured.
 
 ### Configuration Review Tools
 
@@ -779,7 +807,7 @@ npm run test
 SONARR_URL="http://localhost:8989" SONARR_API_KEY="your-key" node dist/index.js
 ```
 
-For `npm run test`, set URL and API key in `test-config.txt` (project root, .env-style) or as environment variables. The script tests Sonarr, Radarr, Lidarr, Readarr, Prowlarr, Tautulli, Overseerr, Bazarr, Maintainerr and Tdarr; Tautulli gets a detailed output (recent history, users) when configured.
+For `npm run test`, set URL and API key in `test-config.txt` (project root, .env-style) or as environment variables. The script tests Sonarr, Radarr, Lidarr, Readarr, Prowlarr, Tautulli, Overseerr, Bazarr, Maintainerr, Tdarr and Plex; Tautulli gets a detailed output (recent history, users) when configured.
 
 ## Troubleshooting
 

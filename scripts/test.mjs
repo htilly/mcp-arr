@@ -287,6 +287,31 @@ async function testTdarr() {
   }
 }
 
+async function testPlex() {
+  const baseUrl = get('PLEX_URL')?.replace(/\/$/, '');
+  const token = get('PLEX_TOKEN');
+  if (!baseUrl || !token) return null;
+  try {
+    // Token as a header only, never in the URL.
+    const res = await fetchWithTimeout(`${baseUrl}/`, {
+      method: 'GET',
+      headers: { 'X-Plex-Token': token, Accept: 'application/json' },
+    });
+    if (!res.ok) return { ok: false, error: `${res.status} ${res.statusText}` };
+    const json = await res.json();
+    return { ok: true, version: json.MediaContainer?.version ?? 'OK' };
+  } catch (err) {
+    const cause = err.cause?.message ?? err.cause?.code ?? err.message;
+    if (cause === 'This operation was aborted') {
+      return { ok: false, error: `Connection timeout (${FETCH_TIMEOUT_MS}ms) - check if Plex is reachable at ${baseUrl}` };
+    }
+    if (cause === 'ECONNREFUSED' || cause?.includes('ECONNREFUSED')) {
+      return { ok: false, error: `Connection refused - Plex not running at ${baseUrl}` };
+    }
+    return { ok: false, error: `${cause} (URL: ${baseUrl})` };
+  }
+}
+
 async function testBazarrFunctional(baseUrl, apiKey) {
   try {
     const res = await fetchWithTimeout(`${baseUrl}/api/badges`, {
@@ -357,6 +382,8 @@ async function main() {
 
   const tdarrResult = await testTdarr();
   summary.push({ name: 'Tdarr (Transcoding)', result: tdarrResult });
+  const plexResult = await testPlex();
+  summary.push({ name: 'Plex (Media Server)', result: plexResult });
 
   const configuredCount = summary.filter((s) => s.result !== null).length;
   if (configuredCount === 0) {
