@@ -102,6 +102,11 @@ export interface SignInResult {
   url?: string;
   /** Field values to save by key (e.g. { token }). Only declared fields are saved. */
   values: Record<string, string>;
+  /**
+   * The obvious choice (e.g. a Plex server the account owns). When exactly one result is
+   * preferred it is saved without asking; the others are only offered when none or several are.
+   */
+  preferred?: boolean;
 }
 
 export type SignInPoll = { status: "pending" } | { status: "done"; results: SignInResult[] };

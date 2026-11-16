@@ -850,11 +850,11 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     check();
   }
 
-  /** Set when the page was opened as #signin=<service>:<session> (back from the service's sign-in). */
+  /** Set when the page was opened as ?signin=<service>:<session> (back from the service's sign-in). */
   var resumeSignIn = (function () {
-    var m = /signin=([a-z][a-z0-9]*):([0-9a-f]{32})/.exec(location.hash);
+    var m = /[?&#]signin=([a-z][a-z0-9]*)(?::|%3A)([0-9a-f]{32})/i.exec(location.search + location.hash);
     if (!m) return null;
-    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* keep going */ }
+    try { history.replaceState(null, '', location.pathname); } catch (e) { /* keep going */ }
     currentTab = 'config';
     return { service: m[1], sessionId: m[2] };
   })();

@@ -516,9 +516,11 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
         const polled = await flow.poll(session.state, { clientId });
         failures = 0;
         if (polled.status === 'done') {
-          if (polled.results.length === 1) {
-            saveSignInResult(def, polled.results[0]);
-            session.saved = { label: polled.results[0].label };
+          const preferred = polled.results.filter(r => r.preferred);
+          const only = polled.results.length === 1 ? polled.results[0] : preferred.length === 1 ? preferred[0] : undefined;
+          if (only) {
+            saveSignInResult(def, only);
+            session.saved = { label: only.label };
           } else {
             session.results = polled.results;
           }
@@ -1023,7 +1025,8 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
         const sessionId = randomBytes(16).toString('hex');
         // After signing in, the service's page sends the browser back here to show the result.
         // The origin the admin page was loaded from (checked against Origin for every write).
-        const returnUrl = `${originOf(req)}/admin#signin=${id}:${sessionId}`;
+        // In the query: Plex drops a #fragment from forwardUrl when it redirects.
+        const returnUrl = `${originOf(req)}/admin?signin=${id}:${sessionId}`;
         let started: { authUrl: string; state: unknown };
         try {
           started = await flow.start({ clientId, returnUrl });
@@ -1077,9 +1080,11 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
         const missing = def.fields.filter(f => f.required && !values[f.key]);
         if (missing.length > 0) {
           const heldBack = missing.some(f => f.secret && effective.values[f.key]);
+          const missingLabels = missing.map(f => f.label);
+          const list = missingLabels.length === 1 ? missingLabels[0] : `${missingLabels.slice(0, -1).join(', ')} and ${missingLabels[missingLabels.length - 1]}`;
           throw new HttpError(400, heldBack && !savedKeyAllowed
-            ? `Enter the ${credentialLabel(id)} to test a new address - saved secrets are only sent to the saved address`
-            : `URL and ${credentialLabel(id)} are required to test`);
+            ? `Enter the ${list} to test a new address - saved secrets are only sent to the saved address`
+            : `${list} ${missingLabels.length === 1 ? 'is' : 'are'} required to test`);
         }
         if (isBlockedServiceHost(url)) throw new HttpError(400, 'That address is link-local / cloud metadata and cannot be used for a service');
         sendJson(res, 200, await testServiceConnection(id, url, values));

@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **Sign in with Plex with several servers.** An account with access to more than one server (e.g. one shared by a friend) got stuck after Allow: the choice was never shown because Plex drops the `#fragment` of the return address. The server the account owns is now saved without asking when it is the only one; the return address uses `?signin=` instead.
+- The web UI connection test names only the missing required fields (it listed every field, optional ones included).
 - **Sign in with Plex on phones.** After Allow nothing happened on an iPhone: the sign-in opens as its own tab there and the web UI tab, which did the checking, is paused meanwhile. The server now watches the sign-in itself and saves the token as soon as Plex approves it, Plex sends the browser back to the Services page (`forwardUrl`) to show the result, and with pop-ups blocked the sign-in runs in the same tab instead of failing.
 
 ### Added
