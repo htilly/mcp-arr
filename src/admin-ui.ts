@@ -776,8 +776,60 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
       body.push(el('label', { text: x.def.label }), x.input);
       if (x.def.source === 'env') body.push(el('div', { class: 'note', text: 'Set by ' + x.def.envName + ' (read-only here)' }));
     });
-    body.push(el('div', { class: 'row' }, [saveBtn, testBtn, clearBtn]), msg);
+    var signInBtn = svc.signIn ? el('button', { text: svc.signIn, onclick: function () { startSignIn(svc, signInBtn, msg, onUpdated); } }) : null;
+    body.push(el('div', { class: 'row' }, [saveBtn, testBtn, signInBtn, clearBtn]), msg);
     return el('div', { class: 'panel' }, body);
+  }
+
+  /**
+   * "Sign in with ..." (e.g. Plex): open the service's sign-in page in a popup, then poll
+   * the server until it has saved the credentials. The credentials never reach this page.
+   */
+  function startSignIn(svc, btn, msg, onUpdated) {
+    // Opened on the click itself so popup blockers allow it; the address follows.
+    var popup = window.open('about:blank', 'mcparr-signin', 'width=600,height=720');
+    // The sign-in site gets no handle back to this admin page.
+    if (popup) popup.opener = null;
+    btn.disabled = true;
+    showMsg(msg, 'warn', 'Waiting for the sign-in in the other window…');
+    var base = '/services/' + svc.id + '/signin';
+    var deadline = Date.now() + 10 * 60 * 1000;
+    function finish(text, kind) {
+      btn.disabled = false;
+      if (popup && !popup.closed) popup.close();
+      if (text) showMsg(msg, kind || 'err', text);
+    }
+    function handle(r, sessionId) {
+      if (r.status === 'saved') {
+        finish();
+        onUpdated(r);
+        return;
+      }
+      if (r.status === 'choose') {
+        if (popup && !popup.closed) popup.close();
+        var select = el('select', null, r.choices.map(function (c) { return el('option', { value: String(c.index), text: c.label + (c.url ? ' - ' + c.url : '') }); }));
+        var use = el('button', { class: 'primary', text: 'Use this server', onclick: function () {
+          use.disabled = true;
+          api('POST', base + '/' + sessionId + '/choose', { index: Number(select.value) }).then(function (res) { btn.disabled = false; onUpdated(res); }, function (e) { use.disabled = false; showMsg(msg, 'err', e.message); });
+        } });
+        msg.textContent = '';
+        msg.className = 'msg';
+        msg.append(el('p', { text: 'This account has more than one server. Pick the one to use:' }), select, el('div', { class: 'row' }, [use]));
+        return;
+      }
+      if (Date.now() > deadline) { finish('The sign-in took too long - start again'); return; }
+      setTimeout(function () {
+        api('POST', base + '/' + sessionId, {}).then(function (next) { handle(next, sessionId); }, function (e) { finish(e.message); });
+      }, 2000);
+    }
+    api('POST', base, {}).then(function (r) {
+      if (!popup || popup.closed) {
+        finish('Allow pop-ups for this page, then try again');
+        return;
+      }
+      popup.location.href = r.authUrl;
+      handle({ status: 'pending' }, r.sessionId);
+    }, function (e) { finish(e.message); });
   }
 
   /** The hub sketch with a live indicator; tool calls animate on it (see animateHub). */

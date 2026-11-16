@@ -29,9 +29,10 @@ Services that sit next to the *arr apps and have their own HTTP API (download cl
 1. Put the API client in `src/<service>-client.ts` and the tools and handlers in `src/integrations/<service>.ts`, exporting an `IntegrationDefinition` (see `src/integration.ts`). Tool names must start with `<service>_`.
 2. Declare the credential fields (`fields`). The default is one required `<SERVICE>_API_KEY`; use `required: false` for optional keys and `secret: true` for anything that must not reach the browser or error text.
 3. List state-changing tools in `writeTools` and destructive ones in `confirmTools` (they then need `confirm: true`, and `ARR_READ_ONLY` hides both).
-4. Throw errors as `<Service> API error: <status> ...` without response bodies; the web UI connection test turns 401/403 into "check the ..." hints.
-5. Add it to `src/integrations/index.ts`. The config file, web UI Services tab (inputs, icon, connection test), `arr_status`, error redaction and the status board pick it up from there.
-6. Add `test/<service>.test.mjs`, the env vars to README, AGENTS.md and `server.json`, and a CHANGELOG entry.
+4. Optionally add `signIn` (see `IntegrationSignIn` in `src/integration.ts`) for a browser sign-in at the service, as Plex does; the web UI shows the button and saves what it returns.
+5. Throw errors as `<Service> API error: <status> ...` without response bodies; the web UI connection test turns 401/403 into "check the ..." hints.
+6. Add it to `src/integrations/index.ts`. The config file, web UI Services tab (inputs, icon, connection test), `arr_status`, error redaction and the status board pick it up from there.
+7. Add `test/<service>.test.mjs`, the env vars to README, AGENTS.md and `server.json`, and a CHANGELOG entry.
 
 ## Code style
 

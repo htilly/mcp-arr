@@ -228,6 +228,8 @@ interface ConfigData {
   oauthRefresh: StoredRefreshToken[];
   /** Server settings changed in the web UI, keyed by environment variable name (see settings.ts). */
   settings: Record<string, string>;
+  /** Random id of this install, sent as the client id in sign-in flows (e.g. Plex). */
+  installId?: string;
 }
 
 interface EncryptedEnvelope {
@@ -874,6 +876,15 @@ export class ConfigStore {
   }
 
   // ---------- server settings (web UI) ----------
+
+  /** Stable random id of this install (created and saved on first use). */
+  getInstallId(): string {
+    if (!this.data.installId) {
+      this.data.installId = randomUUID();
+      if (this.path) this.save();
+    }
+    return this.data.installId;
+  }
 
   getSettings(): Record<string, string> {
     return { ...(this.data.settings ?? {}) };
