@@ -31,6 +31,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
 | Category | Capabilities |
 |----------|-------------|
 | **Sonarr (TV)** | List series, view episodes, search shows, trigger downloads, check queue, view calendar, review setup |
+| **Overseerr (Requests)** | List and count requests, per-user requests, users, TMDB search, approve or decline requests |
 | **Radarr (Movies)** | List movies, search films, trigger downloads, check queue, view releases, review setup |
 | **Lidarr (Music)** | List artists, view albums, search musicians, trigger downloads, check queue, view calendar, review setup |
 | **Prowlarr (Indexers)** | List indexers, search across all trackers, test health, view statistics |
@@ -319,6 +320,21 @@ Inspect existing episode and movie files with paginated summary or full MediaInf
 | `sonarr_search_missing` | Trigger search for all missing episodes in a series |
 | `sonarr_search_episode` | Trigger search for specific episode(s) |
 | `sonarr_refresh_series` | Trigger a metadata refresh for a specific series in Sonarr |
+
+### Overseerr Tools (Requests)
+
+Available when `OVERSEERR_URL` and `OVERSEERR_API_KEY` are set.
+
+| Tool | Description |
+|------|-------------|
+| `overseerr_get_requests` | List requests (newest first) with requester, request status and media status |
+| `overseerr_get_request_count` | Request counts by type and status |
+| `overseerr_get_users` | Users with their request counts |
+| `overseerr_get_user_requests` | Requests made by one user |
+| `overseerr_search` | Search movies and TV shows (TMDB) with their request/availability status |
+| `overseerr_status` | Overseerr version and update status |
+| `overseerr_approve_request` | Approve a pending request; Overseerr then sends it to Sonarr/Radarr. Requires `confirmed=true` |
+| `overseerr_decline_request` | Decline a pending request. Requires `confirmed=true` |
 
 ### Radarr Tools (Movies)
 

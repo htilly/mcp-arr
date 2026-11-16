@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - Optional integrations: services next to the *arr apps that use their own APIs can live in their own module under `src/integrations/`. `index.ts` loads the ones whose `<SERVICE>_URL` and `<SERVICE>_API_KEY` are set, adds their tools, routes their calls (after argument validation and read-only filtering) and reports them in `arr_status`, `/health` and the startup log. Nothing changes until an integration is added.
 - `npm run catalogue` regenerates `tools.json` and `docker-registry/tools.json` from the built server.
+- Optional Overseerr (media requests) integration, enabled with `OVERSEERR_URL` and `OVERSEERR_API_KEY`. Adds 8 `overseerr_*` tools for requests, request counts, users, per-user requests, TMDB search and status. `overseerr_approve_request` and `overseerr_decline_request` require `confirmed=true`, and declining is marked destructive.
 
 ## [1.9.0] - 2026-11-15
 

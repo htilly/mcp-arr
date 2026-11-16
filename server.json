@@ -31,6 +31,20 @@
           "name": "SONARR_API_KEY"
         },
         {
+          "description": "Overseerr server URL",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "OVERSEERR_URL"
+        },
+        {
+          "description": "Overseerr API key",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "OVERSEERR_API_KEY"
+        },
+        {
           "description": "Radarr server URL",
           "isRequired": false,
           "format": "string",

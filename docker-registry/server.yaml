@@ -28,6 +28,9 @@ config:
     - name: SONARR_URL
       description: "Sonarr base URL (e.g., http://localhost:8989 or http://sonarr:8989)"
       example: "http://localhost:8989"
+    - name: OVERSEERR_URL
+      description: "Optional Overseerr base URL for media requests (e.g., http://localhost:5055 or http://overseerr:5055)"
+      example: "http://localhost:5055"
     - name: RADARR_URL
       description: "Radarr base URL (e.g., http://localhost:7878 or http://radarr:7878)"
       example: "http://localhost:7878"
@@ -42,6 +45,10 @@ config:
       env: SONARR_API_KEY
       description: "Sonarr API key from Settings > General > Security"
       example: "<your-sonarr-api-key>"
+    - name: arr.overseerr-api-key
+      env: OVERSEERR_API_KEY
+      description: "Overseerr API key from Settings > General"
+      example: "<your-overseerr-api-key>"
     - name: arr.radarr-api-key
       env: RADARR_API_KEY
       description: "Radarr API key from Settings > General > Security"
