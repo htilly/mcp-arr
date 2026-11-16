@@ -115,6 +115,13 @@
           "name": "TDARR_API_KEY"
         },
         {
+          "description": "SHA-256 fingerprint of Tdarr's self-signed HTTPS certificate, to trust it",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "TDARR_TLS_FINGERPRINT"
+        },
+        {
           "description": "Plex Media Server URL",
           "isRequired": false,
           "format": "string",
@@ -127,6 +134,13 @@
           "format": "string",
           "isSecret": true,
           "name": "PLEX_TOKEN"
+        },
+        {
+          "description": "SHA-256 fingerprint of Plex's self-signed HTTPS certificate, to trust it",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "PLEX_TLS_FINGERPRINT"
         },
         {
           "description": "qBittorrent WebUI URL",
@@ -157,6 +171,13 @@
           "name": "QBITTORRENT_API_KEY"
         },
         {
+          "description": "SHA-256 fingerprint of qBittorrent's self-signed HTTPS certificate, to trust it",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "QBITTORRENT_TLS_FINGERPRINT"
+        },
+        {
           "description": "SABnzbd server URL",
           "isRequired": false,
           "format": "string",
@@ -169,6 +190,13 @@
           "format": "string",
           "isSecret": true,
           "name": "SABNZBD_API_KEY"
+        },
+        {
+          "description": "SHA-256 fingerprint of SABnzbd's self-signed HTTPS certificate, to trust it",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "SABNZBD_TLS_FINGERPRINT"
         },
         {
           "description": "Set to true to hide and block every tool that changes state",

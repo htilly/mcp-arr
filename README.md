@@ -776,6 +776,10 @@ Enabled when `QBITTORRENT_URL` is set (the WebUI address). Authentication, first
 
 A torrent counts as stuck when it is in `error` / `missingFiles`, has been fetching metadata (`metaDL`) or stalled (`stalledDL`) for longer than `stuckMinutes` (default 60), or runs at 0 B/s with no activity for that long.
 
+### Self-signed HTTPS (qBittorrent, SABnzbd, Tdarr, Plex)
+
+If the service uses HTTPS with a self-signed certificate (for example SABnzbd's built-in HTTPS), the connection fails with "certificate is not trusted" and the error shows the certificate's SHA-256 fingerprint. Check it against the service (e.g. `openssl x509 -noout -fingerprint -sha256 -in <cert>`) and set it as the trusted certificate: `SABNZBD_TLS_FINGERPRINT=AB:CD:...` (likewise `QBITTORRENT_`, `TDARR_`, `PLEX_TLS_FINGERPRINT`) or in the web UI Services tab. Only that exact certificate is accepted; when it is renewed, the error shows the new fingerprint.
+
 ### SABnzbd Tools (Usenet downloads)
 
 When `SABNZBD_URL` and `SABNZBD_API_KEY` are set (API key: SABnzbd → Config → General):

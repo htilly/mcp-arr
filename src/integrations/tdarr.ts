@@ -5,6 +5,7 @@
  * transcodes on the fly) and send those files back through Tdarr.
  */
 
+import { fetchFor, TLS_FINGERPRINT_FIELD } from "../tls-trust.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { jsonText, type IntegrationDefinition } from "../integration.js";
 import {
@@ -217,6 +218,7 @@ export const tdarr: IntegrationDefinition = {
   exampleUrl: "http://localhost:8265",
   fields: [
     { key: "apiKey", label: "API key", envSuffix: "API_KEY", secret: true, required: false, placeholder: "Only if authentication is on in Tdarr" },
+    TLS_FINGERPRINT_FIELD,
   ],
   // Film frame turning into a second frame: transcoding.
   icon:
@@ -234,7 +236,7 @@ export const tdarr: IntegrationDefinition = {
   // Requeueing sends up to 100 files through the library's flow, which usually replaces the originals.
   confirmTools: ["tdarr_requeue_files"],
   create({ url, values }) {
-    const client = new TdarrClient({ url, apiKey: values.apiKey });
+    const client = new TdarrClient({ url, apiKey: values.apiKey, fetch: fetchFor(values.tlsFingerprint) });
     return {
       tools: TOOLS.map(t => structuredClone(t)),
       async getStatus() {

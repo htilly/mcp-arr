@@ -12,10 +12,14 @@
  * are untyped there and are taken from community clients (see field comments).
  */
 
+import type { FetchLike } from './tls-trust.js';
+
 export interface TdarrConfig {
   url: string;
   /** Only needed when authentication is enabled in Tdarr. */
   apiKey?: string;
+  /** fetch to use, e.g. pinned to a self-signed certificate (tls-trust.ts). */
+  fetch?: FetchLike;
 }
 
 /** GET /api/v2/status (typed in the Swagger spec). */
@@ -316,10 +320,12 @@ export function summarizeFile(file: TdarrFile): TdarrFileSummary {
 export class TdarrClient {
   private url: string;
   private apiKey?: string;
+  private readonly fetch: FetchLike;
 
   constructor(config: TdarrConfig) {
     this.url = config.url.replace(/\/+$/, '');
     this.apiKey = config.apiKey?.trim() || undefined;
+    this.fetch = config.fetch ?? fetch;
   }
 
   static checkId(name: string, value: unknown): string {
@@ -334,7 +340,7 @@ export class TdarrClient {
     if (this.apiKey) headers['x-api-key'] = this.apiKey;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
 
-    const response = await fetch(`${this.url}/api/v2${path}`, {
+    const response = await this.fetch(`${this.url}/api/v2${path}`, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,

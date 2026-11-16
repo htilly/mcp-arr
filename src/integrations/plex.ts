@@ -6,6 +6,7 @@
  * Configured with PLEX_URL + PLEX_TOKEN (X-Plex-Token), or the web UI.
  */
 
+import { fetchFor, TLS_FINGERPRINT_FIELD } from "../tls-trust.js";
 import type { Tool, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { jsonText, type IntegrationDefinition } from "../integration.js";
 import { PlexClient, type PlexMetadata } from "../plex-client.js";
@@ -169,6 +170,7 @@ export const plex: IntegrationDefinition = {
   exampleUrl: "http://localhost:32400",
   fields: [
     { key: "token", label: "Plex token", envSuffix: "TOKEN", secret: true, required: true, placeholder: "X-Plex-Token" },
+    TLS_FINGERPRINT_FIELD,
   ],
   // A rounded dark tile with the Plex chevron, hatched.
   icon: '<rect x="-62" y="-62" width="124" height="124" rx="24" class="ink f-ink"/>'
@@ -179,7 +181,7 @@ export const plex: IntegrationDefinition = {
   confirmTools: ["plex_empty_trash", "plex_terminate_session"],
 
   create({ url, values }) {
-    const client = new PlexClient({ url, token: values.token ?? "" });
+    const client = new PlexClient({ url, token: values.token ?? "", fetch: fetchFor(values.tlsFingerprint) });
 
     return {
       tools: TOOLS.map(t => ({ ...t, inputSchema: { ...t.inputSchema }, annotations: { ...t.annotations } })),

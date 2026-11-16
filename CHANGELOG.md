@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Self-signed HTTPS for qBittorrent, SABnzbd, Tdarr and Plex.** Each has an optional *trusted certificate* field (`<SERVICE>_TLS_FINGERPRINT`, or the web UI): the SHA-256 fingerprint of the service's self-signed certificate. The certificate is checked against it during the TLS handshake, before any request (or API key) is sent; certificate checks are never switched off. Without it, an untrusted certificate now gives an error that names the problem and shows the fingerprint the server presented, also in the web UI connection test. Integration modules opt in with `TLS_FINGERPRINT_FIELD` and `fetchFor()` from `src/tls-trust.ts`.
 - **qBittorrent integration** (optional module, `src/integrations/qbittorrent.ts`) - enabled by `QBITTORRENT_URL`; log in with `QBITTORRENT_USERNAME` + `QBITTORRENT_PASSWORD`, use `QBITTORRENT_API_KEY` on qBittorrent 5.2+, or nothing when qBittorrent bypasses auth for this host (env or the web UI's Services tab):
   - `qbittorrent_status` (speed, limits, connection status, free disk), `qbittorrent_get_torrents` (filter, category, paging; `stalled` flag and a `stuck` reason, `stuckOnly`)
   - `qbittorrent_pause` / `qbittorrent_resume` (hashes or all; uses `stop`/`start` on WebAPI 2.11+), `qbittorrent_set_speed_limits`, `qbittorrent_recheck`, `qbittorrent_reannounce`
