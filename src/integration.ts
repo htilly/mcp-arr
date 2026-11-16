@@ -80,7 +80,7 @@ export interface IntegrationDefinition {
   exampleUrl: string;
   /** Fields next to the URL. Default: [API_KEY_FIELD]. An empty list means the URL alone enables it. */
   fields?: IntegrationField[];
-  /** Hand-drawn SVG for the web UI, drawn in a 168x176 box centred on 0,0 (see ICONS in admin-ui.ts). */
+  /** Hand-drawn SVG for the web UI: drawing about 130x110 centred on 0,0, shown in a 168x176 viewBox (see ICONS in admin-ui.ts). */
   icon?: string;
   /**
    * Destructive tools that must be called with `confirm: true`. They are also
