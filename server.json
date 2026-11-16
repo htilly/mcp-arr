@@ -129,6 +129,48 @@
           "name": "PLEX_TOKEN"
         },
         {
+          "description": "qBittorrent WebUI URL",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "QBITTORRENT_URL"
+        },
+        {
+          "description": "qBittorrent WebUI username",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "QBITTORRENT_USERNAME"
+        },
+        {
+          "description": "qBittorrent WebUI password",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "QBITTORRENT_PASSWORD"
+        },
+        {
+          "description": "qBittorrent API key (qBittorrent 5.2+, instead of username/password)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "QBITTORRENT_API_KEY"
+        },
+        {
+          "description": "SABnzbd server URL",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "SABNZBD_URL"
+        },
+        {
+          "description": "SABnzbd API key",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "SABNZBD_API_KEY"
+        },
+        {
           "description": "Set to true to hide and block every tool that changes state",
           "isRequired": false,
           "format": "string",

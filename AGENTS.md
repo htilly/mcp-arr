@@ -1,6 +1,6 @@
 # AGENTS.md - mcp-arr
 
-MCP server for the *arr media management suite (Sonarr, Radarr, Lidarr, Prowlarr), plus Tautulli, Overseerr, Bazarr, Maintainerr, Tdarr and Plex.
+MCP server for the *arr media management suite (Sonarr, Radarr, Lidarr, Prowlarr), plus Tautulli, Overseerr, Bazarr, Maintainerr, Tdarr, Plex and the download clients qBittorrent and SABnzbd.
 
 ## Tech Stack
 
@@ -67,6 +67,11 @@ node dist/index.js
 | TDARR_API_KEY | No | Only when authentication is on in Tdarr (Tools → API Keys) |
 | PLEX_URL | For Plex | Plex Media Server URL (e.g., http://localhost:32400) |
 | PLEX_TOKEN | For Plex | X-Plex-Token (sent as a header only) |
+| QBITTORRENT_URL | For qBittorrent | WebUI URL (e.g., http://localhost:8080). Enough on its own when qBittorrent bypasses auth for this host |
+| QBITTORRENT_USERNAME / QBITTORRENT_PASSWORD | No | WebUI login |
+| QBITTORRENT_API_KEY | No | API key (qBittorrent 5.2+), used instead of the login |
+| SABNZBD_URL | For SABnzbd | Base URL (e.g., http://localhost:8080) |
+| SABNZBD_API_KEY | For SABnzbd | API key from SABnzbd Config → General |
 | ARR_READ_ONLY | No | `true` hides and blocks tools that change state |
 | MCP_TRANSPORT | No | `stdio` (default) or `http` (HTTPS server + web UI) |
 | PUBLIC_URL | HTTP mode | Browser URL, e.g. https://mcp-arr.home.lan:3000 (host name, not IP - passkeys). Also settable in the web UI (restarts in-process); unset = setup mode (temporary cert, passwords only) |
