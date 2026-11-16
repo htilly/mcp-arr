@@ -3,9 +3,13 @@
 // IntegrationDefinition and add it to this list.
 import type { IntegrationDefinition } from "../integration.js";
 import { plex } from "./plex.js";
+import { qbittorrent } from "./qbittorrent.js";
+import { sabnzbd } from "./sabnzbd.js";
 import { tdarr } from "./tdarr.js";
 
 export const INTEGRATIONS: IntegrationDefinition[] = [
   plex,
+  qbittorrent,
+  sabnzbd,
   tdarr,
 ];

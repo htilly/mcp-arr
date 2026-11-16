@@ -12,7 +12,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-blue)](https://modelcontextprotocol.io)
 
-MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, and Prowlarr, plus [Tautulli](https://tautulli.com/) for Plex statistics, [Overseerr](https://overseerr.dev/) for request management, [Bazarr](https://www.bazarr.media/) for subtitles, [Maintainerr](https://maintainerr.info/) for rule-based library cleanup, [Tdarr](https://tdarr.io/) for transcoding and [Plex Media Server](https://www.plex.tv/) for direct server control.
+MCP server for the [*arr media management suite](https://wiki.servarr.com/) - Sonarr, Radarr, Lidarr, and Prowlarr, plus [Tautulli](https://tautulli.com/) for Plex statistics, [Overseerr](https://overseerr.dev/) for request management, [Bazarr](https://www.bazarr.media/) for subtitles, [Maintainerr](https://maintainerr.info/) for rule-based library cleanup, [Tdarr](https://tdarr.io/) for transcoding, [Plex Media Server](https://www.plex.tv/) for direct server control and the download clients [qBittorrent](https://www.qbittorrent.org/) and [SABnzbd](https://sabnzbd.org/).
 
 Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP mode for hosted MCP clients such as ChatGPT connectors.
 
@@ -40,6 +40,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
 | **Maintainerr (Cleanup)** | Collections marked for deletion with deletion dates, rules, logs, exclusions, postpone deletion, run rules |
 | **Tdarr (Transcoding)** | Find files by video/audio codec (e.g. AV1, DTS), requeue them through the library flow, nodes and workers, queues, stats |
 | **Plex (Media Server)** | Library scans (whole library or one folder), metadata refresh, live sessions with direct play / transcode decision, stream codecs, background activities, empty trash, stop a stream |
+| **qBittorrent / SABnzbd (Downloads)** | Queues, speed, pause/resume, speed limits, find and remove stuck or failed downloads, retry |
 | **Remote server** | Optional HTTPS server with web UI: passkey login per user, encrypted config, offline certificates |
 | **Cross-Service** | Status check, unified search across all configured services |
 | **Configuration** | Quality profiles, download clients, naming conventions, health checks, storage info |
@@ -56,6 +57,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
   - [Maintainerr](https://maintainerr.info/) (rule-based cleanup of Plex/Jellyfin/Emby libraries)
   - [Tdarr](https://tdarr.io/) (distributed transcoding / health checks)
   - [Plex Media Server](https://www.plex.tv/) (direct control: scans, sessions, transcodes)
+  - [qBittorrent](https://www.qbittorrent.org/) (torrent client, WebUI enabled) and [SABnzbd](https://sabnzbd.org/) (Usenet client)
 
 ## Installation
 
@@ -157,7 +159,12 @@ Add to your Claude Desktop config file:
         "MAINTAINERR_API_KEY": "your-maintainerr-api-key",
         "TDARR_URL": "http://localhost:8265",
         "PLEX_URL": "http://localhost:32400",
-        "PLEX_TOKEN": "your-plex-token"
+        "PLEX_TOKEN": "your-plex-token",
+        "QBITTORRENT_URL": "http://localhost:8080",
+        "QBITTORRENT_USERNAME": "admin",
+        "QBITTORRENT_PASSWORD": "your-qbittorrent-password",
+        "SABNZBD_URL": "http://localhost:8081",
+        "SABNZBD_API_KEY": "your-sabnzbd-api-key"
       }
     }
   }
@@ -439,7 +446,7 @@ Use your actual paths and API keys. Only include the services you use.
 
 - **Roles (HTTP mode)**: tokens of *user*-role accounts only get read-only tools; tools that change state need an *admin* account.
 - **Read-only mode**: set `ARR_READ_ONLY=true` to hide and block every tool that changes state, including deletes, adds, updates, triggered searches, release grabs, manual imports, subtitle downloads, indexer tests and request approvals.
-- **Confirmation**: `sonarr_delete_series`, `sonarr_delete_season`, `sonarr_delete_episode_files`, `radarr_delete_movie`, `radarr_delete_queue_item`, `tautulli_terminate_session`, `overseerr_approve_request`, `overseerr_decline_request`, `maintainerr_handle_collections`, `plex_empty_trash` and `plex_terminate_session` fail unless called with `confirm: true`. This stops accidental calls, but a model can still set it, so use read-only mode or your client's tool approval prompts if you need a human in the loop. Tools carry `readOnlyHint` and `destructiveHint` annotations for clients that use them.
+- **Confirmation**: `sonarr_delete_series`, `sonarr_delete_season`, `sonarr_delete_episode_files`, `radarr_delete_movie`, `radarr_delete_queue_item`, `tautulli_terminate_session`, `overseerr_approve_request`, `overseerr_decline_request`, `maintainerr_handle_collections`, `plex_empty_trash`, `plex_terminate_session`, `qbittorrent_delete_torrents`, `sabnzbd_delete_queue_item` and `sabnzbd_delete_history_item` fail unless called with `confirm: true`. This stops accidental calls, but a model can still set it, so use read-only mode or your client's tool approval prompts if you need a human in the loop. Tools carry `readOnlyHint` and `destructiveHint` annotations for clients that use them.
 - **File deletion**: `deleteFiles` defaults to `false`.
 - **Argument validation**: arguments are checked against each tool's schema before any request is sent.
 - **Service URLs**: a configured service URL must include `http://` or `https://`, or the server won't start.
@@ -749,6 +756,42 @@ These tools control the Plex server itself. The `tautulli_*` tools are for watch
 | `plex_terminate_session` | Stop a stream with a message to the viewer (needs Plex Pass). Requires `confirm: true` |
 
 The transcode reasons in `plex_get_sessions` are inferred from the source and target codecs (e.g. "video codec av1 transcoded to h264"); Plex does not report its exact reason there. `arr_status` includes Plex connection status when configured.
+### qBittorrent Tools (Torrent downloads)
+
+Enabled when `QBITTORRENT_URL` is set (the WebUI address). Authentication, first match wins:
+
+- `QBITTORRENT_API_KEY` - qBittorrent 5.2+ (Options → WebUI → API key). Sent as `Authorization: Bearer` and `X-API-Key`; no login or cookie.
+- `QBITTORRENT_USERNAME` + `QBITTORRENT_PASSWORD` - the WebUI login. The session is renewed automatically when it expires.
+- Nothing - when qBittorrent is set to bypass authentication for this host (localhost or a whitelisted subnet).
+
+| Tool | Description |
+|------|-------------|
+| `qbittorrent_status` | Version, connection status, download/upload speed, global and alternative limits, free disk space |
+| `qbittorrent_get_torrents` | Torrents with state, progress, size, speed, ETA, ratio, seeds/peers; filter by state, category, tag; paging. Each has a `stalled` flag and a `stuck` reason; `stuckOnly: true` lists only stuck ones |
+| `qbittorrent_pause` / `qbittorrent_resume` | Pause/resume torrents by hash, or all (uses `stop`/`start` on qBittorrent 5) |
+| `qbittorrent_set_speed_limits` | Global download/upload limit in KiB/s (0 = unlimited), alternative speed limits on/off |
+| `qbittorrent_recheck` | Recheck torrent data |
+| `qbittorrent_reannounce` | Reannounce to trackers (can revive stalled torrents) |
+| `qbittorrent_delete_torrents` | Remove torrents, optionally with their files. Requires `confirm: true` |
+
+A torrent counts as stuck when it is in `error` / `missingFiles`, has been fetching metadata (`metaDL`) or stalled (`stalledDL`) for longer than `stuckMinutes` (default 60), or runs at 0 B/s with no activity for that long.
+
+### SABnzbd Tools (Usenet downloads)
+
+When `SABNZBD_URL` and `SABNZBD_API_KEY` are set (API key: SABnzbd → Config → General):
+
+| Tool | Description |
+|------|-------------|
+| `sabnzbd_status` | Version, downloading/paused/idle, speed, speed limit, jobs, time left, free disk space |
+| `sabnzbd_get_queue` | Queue jobs with progress, size left, time left, category, priority and a `stuck` reason (grabbing, propagating, 0 KB/s); `stuckOnly: true` |
+| `sabnzbd_get_history` | Finished jobs with status and failure reason; `failedOnly: true` for failed downloads |
+| `sabnzbd_pause` / `sabnzbd_resume` | Whole queue (optionally paused for N minutes) or individual jobs |
+| `sabnzbd_set_speed_limit` | Percentage of the configured line speed (`50`; `100` = no limit) or absolute (`800K`, `5M`) |
+| `sabnzbd_retry_failed` | Retry one failed job, or all |
+| `sabnzbd_delete_queue_item` | Remove jobs from the queue, optionally with downloaded files. Requires `confirm: true` |
+| `sabnzbd_delete_history_item` | Remove jobs from the history, optionally with their files. Requires `confirm: true` |
+
+`arr_status` includes qBittorrent and SABnzbd connection status when configured.
 
 ### Configuration Review Tools
 
@@ -807,7 +850,7 @@ npm run test
 SONARR_URL="http://localhost:8989" SONARR_API_KEY="your-key" node dist/index.js
 ```
 
-For `npm run test`, set URL and API key in `test-config.txt` (project root, .env-style) or as environment variables. The script tests Sonarr, Radarr, Lidarr, Readarr, Prowlarr, Tautulli, Overseerr, Bazarr, Maintainerr, Tdarr and Plex; Tautulli gets a detailed output (recent history, users) when configured.
+For `npm run test`, set URL and API key in `test-config.txt` (project root, .env-style) or as environment variables. The script tests Sonarr, Radarr, Lidarr, Readarr, Prowlarr, Tautulli, Overseerr, Bazarr, Maintainerr, Tdarr, Plex, qBittorrent and SABnzbd; Tautulli gets a detailed output (recent history, users) when configured.
 
 ## Troubleshooting
 

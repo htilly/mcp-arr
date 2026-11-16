@@ -13,7 +13,7 @@ for (const configured of configurations) {
     const env = { ...process.env, MCP_TRANSPORT: "stdio", ARR_READ_ONLY: "" };
     // Never inherit real service configuration or contact a live *arr instance.
     // Listing tools only requires that a URL and API key are configured.
-    for (const service of [...services, "bazarr", "tautulli", "overseerr", "maintainerr", "tdarr"]) {
+    for (const service of [...services, "bazarr", "tautulli", "overseerr", "maintainerr", "tdarr", "qbittorrent", "sabnzbd"]) {
       const prefix = service.toUpperCase();
       env[`${prefix}_URL`] = configured.includes(service) ? "http://127.0.0.1:1" : "";
       env[`${prefix}_API_KEY`] = configured.includes(service) ? "test-key" : "";

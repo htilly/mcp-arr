@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **qBittorrent integration** (optional module, `src/integrations/qbittorrent.ts`) - enabled by `QBITTORRENT_URL`; log in with `QBITTORRENT_USERNAME` + `QBITTORRENT_PASSWORD`, use `QBITTORRENT_API_KEY` on qBittorrent 5.2+, or nothing when qBittorrent bypasses auth for this host (env or the web UI's Services tab):
+  - `qbittorrent_status` (speed, limits, connection status, free disk), `qbittorrent_get_torrents` (filter, category, paging; `stalled` flag and a `stuck` reason, `stuckOnly`)
+  - `qbittorrent_pause` / `qbittorrent_resume` (hashes or all; uses `stop`/`start` on WebAPI 2.11+), `qbittorrent_set_speed_limits`, `qbittorrent_recheck`, `qbittorrent_reannounce`
+  - `qbittorrent_delete_torrents` (optional `deleteFiles`) requires `confirm: true`
+- **SABnzbd integration** (optional module, `src/integrations/sabnzbd.ts`) - enabled by `SABNZBD_URL` + `SABNZBD_API_KEY`:
+  - `sabnzbd_status`, `sabnzbd_get_queue` (`stuck` reason, `stuckOnly`), `sabnzbd_get_history` (`failedOnly`, failure reasons)
+  - `sabnzbd_pause` / `sabnzbd_resume` (whole queue, timed pause or per job), `sabnzbd_set_speed_limit`, `sabnzbd_retry_failed`
+  - `sabnzbd_delete_queue_item` and `sabnzbd_delete_history_item` (optional `deleteFiles`) require `confirm: true`
 - **Optional integrations hook.** Services with their own HTTP API can now be added as a single module in `src/integrations/` (see CONTRIBUTING.md). A module declares its tools, which of them write or need `confirm: true`, and its credential fields (API key, token, username/password, optional or required). The encrypted config, web UI Services tab, connection test, `arr_status`, read-only mode, error redaction and the status board handle it without further changes. The list ships empty, so behaviour is unchanged.
 - **Tdarr (transcoding) integration** - optional, a module on the integrations hook. Enabled by `TDARR_URL` alone; `TDARR_API_KEY` only when authentication is on in Tdarr (env or the web UI's Services tab):
   - `tdarr_status`, `tdarr_get_libraries` (flow/plugins, file counts, codecs per library), `tdarr_get_nodes` (workers with progress, fps, ETA), `tdarr_get_queue`, `tdarr_get_staged`, `tdarr_get_stats` (space saved, files per codec/container/resolution/status), `tdarr_get_file`

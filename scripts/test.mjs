@@ -287,6 +287,33 @@ async function testTdarr() {
   }
 }
 
+/**
+ * Download clients use the built clients (dist/), which handle the qBittorrent
+ * login/API key and SABnzbd's in-body errors. Their errors never contain credentials.
+ */
+async function testDownloadClient(name, envPrefix, makeClient) {
+  const baseUrl = get(`${envPrefix}_URL`)?.replace(/\/$/, '');
+  if (!baseUrl) return null;
+  if (envPrefix === 'SABNZBD' && !get('SABNZBD_API_KEY')) return null;
+  let client;
+  try {
+    client = await makeClient(baseUrl);
+  } catch {
+    return { ok: false, error: 'Build first (npm run build) to test this service' };
+  }
+  try {
+    const version = await Promise.race([
+      client(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`Connection timeout (${FETCH_TIMEOUT_MS}ms) - check if ${name} is reachable at ${baseUrl}`)), FETCH_TIMEOUT_MS)),
+    ]);
+    return { ok: true, version: version ?? 'OK' };
+  } catch (err) {
+    const cause = err.cause?.code ?? err.cause?.errors?.[0]?.code ?? err.message;
+    if (cause === 'ECONNREFUSED') return { ok: false, error: `Connection refused - ${name} not running at ${baseUrl}` };
+    return { ok: false, error: `${cause} (URL: ${baseUrl})` };
+  }
+}
+
 async function testPlex() {
   const baseUrl = get('PLEX_URL')?.replace(/\/$/, '');
   const token = get('PLEX_TOKEN');
@@ -310,6 +337,28 @@ async function testPlex() {
     }
     return { ok: false, error: `${cause} (URL: ${baseUrl})` };
   }
+}
+
+function testQbittorrent() {
+  return testDownloadClient('qBittorrent', 'QBITTORRENT', async (url) => {
+    const { QBittorrentClient } = await import('../dist/qbittorrent-client.js');
+    const qbt = new QBittorrentClient({
+      url,
+      username: get('QBITTORRENT_USERNAME'),
+      password: get('QBITTORRENT_PASSWORD'),
+      apiKey: get('QBITTORRENT_API_KEY'),
+    });
+    return () => qbt.getVersion();
+  });
+}
+
+function testSabnzbd() {
+  return testDownloadClient('SABnzbd', 'SABNZBD', async (url) => {
+    const { SabnzbdClient } = await import('../dist/sabnzbd-client.js');
+    const sab = new SabnzbdClient({ url, apiKey: get('SABNZBD_API_KEY') });
+    // mode=version needs no key, so also read the queue to check the key.
+    return async () => (await Promise.all([sab.getVersion(), sab.getQueue({ limit: 1 })]))[0];
+  });
 }
 
 async function testBazarrFunctional(baseUrl, apiKey) {
@@ -384,6 +433,8 @@ async function main() {
   summary.push({ name: 'Tdarr (Transcoding)', result: tdarrResult });
   const plexResult = await testPlex();
   summary.push({ name: 'Plex (Media Server)', result: plexResult });
+  summary.push({ name: 'qBittorrent (Torrents)', result: await testQbittorrent() });
+  summary.push({ name: 'SABnzbd (Usenet)', result: await testSabnzbd() });
 
   const configuredCount = summary.filter((s) => s.result !== null).length;
   if (configuredCount === 0) {
