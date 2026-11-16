@@ -31,6 +31,7 @@ import type { Runtime, TestResult } from './runtime.js';
 import { SETTING_DEFS, STARTUP_KEYS, effectiveSettings, isSettingKey, normaliseSetting, settingDef, validatePublicUrl } from './settings.js';
 import { stats, CallEvent, CallContext, LoginMethod } from './stats.js';
 import { isBlockedServiceHost, urlOrigin } from './security.js';
+import { TlsTrustError } from './tls-trust.js';
 
 export interface HttpServerOptions {
   store: ConfigStore;
@@ -169,7 +170,8 @@ export async function testServiceConnection(
     const err = error as Error & { cause?: { code?: string } };
     const status = /API error: (\d{3})/.exec(err.message)?.[1];
     let message: string;
-    if (status === '401' || status === '403') message = `HTTP ${status} - check the ${credentialLabel(id)}`;
+    if (err instanceof TlsTrustError) message = err.message;
+    else if (status === '401' || status === '403') message = `HTTP ${status} - check the ${credentialLabel(id)}`;
     else if (status) message = `HTTP ${status} - is this the right address?`;
     else if (err.cause?.code) message = `Could not connect (${String(err.cause.code).slice(0, 40)})`;
     else if (/^Timed out/.test(err.message)) message = err.message;

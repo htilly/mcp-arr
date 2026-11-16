@@ -10,10 +10,14 @@
  * are requested as JSON (Accept: application/json) and wrapped in MediaContainer.
  */
 
+import { TlsTrustError, type FetchLike } from './tls-trust.js';
+
 export interface PlexConfig {
   url: string;
   /** X-Plex-Token (PLEX_TOKEN). */
   token: string;
+  /** fetch to use, e.g. pinned to a self-signed certificate (tls-trust.ts). */
+  fetch?: FetchLike;
 }
 
 type QueryValue = string | number | boolean | undefined;
@@ -239,10 +243,12 @@ export function redactPlexToken(text: string, token?: string): string {
 export class PlexClient {
   private url: string;
   private token: string;
+  private readonly fetch: FetchLike;
 
   constructor(config: PlexConfig) {
     this.url = config.url.replace(/\/+$/, '');
     this.token = config.token;
+    this.fetch = config.fetch ?? fetch;
   }
 
   static checkNumericId(value: string | number, what: string): string {
@@ -275,7 +281,7 @@ export class PlexClient {
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await this.fetch(url, {
         method,
         headers: {
           'X-Plex-Token': this.token,
@@ -286,6 +292,7 @@ export class PlexClient {
         },
       });
     } catch (error) {
+      if (error instanceof TlsTrustError) throw error;
       // Keep the cause code (ECONNREFUSED, ...) for callers, never the URL.
       const err = error as Error & { cause?: { code?: string } };
       const wrapped = new Error(`Plex request failed${err.cause?.code ? ` (${err.cause.code})` : ''}`) as Error & { cause?: unknown };

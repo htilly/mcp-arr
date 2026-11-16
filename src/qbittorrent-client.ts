@@ -20,11 +20,15 @@
  * torrents/start. The client reads /api/v2/app/webapiVersion once and uses the right endpoint.
  */
 
+import type { FetchLike } from './tls-trust.js';
+
 export interface QBittorrentConfig {
   url: string;
   username?: string;
   password?: string;
   apiKey?: string;
+  /** fetch to use, e.g. pinned to a self-signed certificate (tls-trust.ts). */
+  fetch?: FetchLike;
 }
 
 export type QBittorrentAuthMode = 'apiKey' | 'login' | 'none';
@@ -135,6 +139,7 @@ export class QBittorrentClient {
   private loggedIn = false;
   private loginPromise?: Promise<void>;
   private webApiVersion?: string;
+  private readonly fetch: FetchLike;
 
   constructor(config: QBittorrentConfig) {
     this.url = config.url.replace(/\/+$/, '');
@@ -142,6 +147,7 @@ export class QBittorrentClient {
     this.username = config.username || undefined;
     this.password = config.password ?? undefined;
     this.apiKey = config.apiKey || undefined;
+    this.fetch = config.fetch ?? fetch;
   }
 
   get authMode(): QBittorrentAuthMode {
@@ -187,7 +193,7 @@ export class QBittorrentClient {
     if (!this.loginPromise) {
       this.loginPromise = (async () => {
         const body = new URLSearchParams({ username: this.username ?? '', password: this.password ?? '' });
-        const response = await fetch(`${this.url}/api/v2/auth/login`, {
+        const response = await this.fetch(`${this.url}/api/v2/auth/login`, {
           method: 'POST',
           headers: {
             Referer: `${this.url}/`,
@@ -235,7 +241,7 @@ export class QBittorrentClient {
       body = search;
     }
 
-    const response = await fetch(url, { method, headers, body });
+    const response = await this.fetch(url, { method, headers, body });
 
     if (response.status === 403 && this.authMode === 'login' && !retried) {
       // Session expired or was dropped (qBittorrent restart): log in again once.

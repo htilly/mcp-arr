@@ -72,6 +72,7 @@ node dist/index.js
 | QBITTORRENT_API_KEY | No | API key (qBittorrent 5.2+), used instead of the login |
 | SABNZBD_URL | For SABnzbd | Base URL (e.g., http://localhost:8080) |
 | SABNZBD_API_KEY | For SABnzbd | API key from SABnzbd Config → General |
+| SABNZBD_TLS_FINGERPRINT, QBITTORRENT_TLS_FINGERPRINT, TDARR_TLS_FINGERPRINT, PLEX_TLS_FINGERPRINT | No | SHA-256 fingerprint of a self-signed HTTPS certificate to trust (the web UI Test shows it) |
 | ARR_READ_ONLY | No | `true` hides and blocks tools that change state |
 | MCP_TRANSPORT | No | `stdio` (default) or `http` (HTTPS server + web UI) |
 | PUBLIC_URL | HTTP mode | Browser URL, e.g. https://mcp-arr.home.lan:3000 (host name, not IP - passkeys). Also settable in the web UI (restarts in-process); unset = setup mode (temporary cert, passwords only) |

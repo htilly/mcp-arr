@@ -4,8 +4,9 @@
  * Enabled by SABNZBD_URL + SABNZBD_API_KEY (Config → General → API key).
  */
 
+import { fetchFor, TLS_FINGERPRINT_FIELD } from "../tls-trust.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { jsonText, type IntegrationDefinition } from "../integration.js";
+import { API_KEY_FIELD, jsonText, type IntegrationDefinition } from "../integration.js";
 import { SabnzbdClient, type SabnzbdHistorySlot, type SabnzbdQueue, type SabnzbdQueueSlot } from "../sabnzbd-client.js";
 import { formatBytes, unixToIso } from "../format.js";
 
@@ -169,11 +170,12 @@ export const sabnzbd: IntegrationDefinition = {
     '<path class="thin" d="M-54 -12 H-6 M-54 4 H-6 M-54 20 H-6 M-54 36 H-6"/>' +
     '<rect x="4" y="-14" width="34" height="34" rx="4" class="ink f-sea"/><rect x="4" y="-14" width="34" height="34" rx="4" fill="url(#hatch)"/>' +
     '<path class="ink f-gold" d="M14 -8 H28 V8 H36 L21 24 L6 8 H14 Z"/>',
+  fields: [API_KEY_FIELD, TLS_FINGERPRINT_FIELD],
   writeTools: ["sabnzbd_pause", "sabnzbd_resume", "sabnzbd_set_speed_limit", "sabnzbd_retry_failed"],
   confirmTools: ["sabnzbd_delete_queue_item", "sabnzbd_delete_history_item"],
 
   create({ url, values }) {
-    const client = new SabnzbdClient({ url, apiKey: values.apiKey ?? "" });
+    const client = new SabnzbdClient({ url, apiKey: values.apiKey ?? "", fetch: fetchFor(values.tlsFingerprint) });
     return {
       tools: TOOLS.map(t => ({ ...t, inputSchema: { ...t.inputSchema } })),
       async getStatus() {

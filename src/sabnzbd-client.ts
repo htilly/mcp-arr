@@ -8,9 +8,13 @@
  * so request URLs never go into error messages.
  */
 
+import type { FetchLike } from './tls-trust.js';
+
 export interface SabnzbdConfig {
   url: string;
   apiKey: string;
+  /** fetch to use, e.g. pinned to a self-signed certificate (tls-trust.ts). */
+  fetch?: FetchLike;
 }
 
 export interface SabnzbdQueueSlot {
@@ -98,10 +102,12 @@ class SabnzbdError extends Error {
 export class SabnzbdClient {
   private readonly url: string;
   private readonly apiKey: string;
+  private readonly fetch: FetchLike;
 
   constructor(config: SabnzbdConfig) {
     this.url = config.url.replace(/\/+$/, '');
     this.apiKey = config.apiKey;
+    this.fetch = config.fetch ?? fetch;
   }
 
   static joinIds(ids: string[]): string {
@@ -129,7 +135,7 @@ export class SabnzbdClient {
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined) search.append(key, String(value));
     }
-    const response = await fetch(`${this.url}/api?${search.toString()}`, { headers: { Accept: 'application/json' } });
+    const response = await this.fetch(`${this.url}/api?${search.toString()}`, { headers: { Accept: 'application/json' } });
     if (!response.ok) {
       await response.body?.cancel();
       if (response.status === 401 || response.status === 403) {

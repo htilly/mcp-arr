@@ -7,6 +7,7 @@
  * or QBITTORRENT_API_KEY on qBittorrent 5.2+.
  */
 
+import { fetchFor, TLS_FINGERPRINT_FIELD } from "../tls-trust.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { jsonText, type IntegrationDefinition } from "../integration.js";
 import {
@@ -161,6 +162,7 @@ export const qbittorrent: IntegrationDefinition = {
     { key: "username", label: "Username", envSuffix: "USERNAME", secret: false, required: false, placeholder: "WebUI username (empty if auth is bypassed)" },
     { key: "password", label: "Password", envSuffix: "PASSWORD", secret: true, required: false, placeholder: "WebUI password" },
     { key: "apiKey", label: "API key (qBittorrent 5.2+)", envSuffix: "API_KEY", secret: true, required: false, placeholder: "Optional, instead of username/password" },
+    TLS_FINGERPRINT_FIELD,
   ],
   // A magnet: horseshoe body with a lightning bolt through it.
   icon:
@@ -172,7 +174,7 @@ export const qbittorrent: IntegrationDefinition = {
   confirmTools: ["qbittorrent_delete_torrents"],
 
   create({ url, values }) {
-    const client = new QBittorrentClient({ url, username: values.username, password: values.password, apiKey: values.apiKey });
+    const client = new QBittorrentClient({ url, username: values.username, password: values.password, apiKey: values.apiKey, fetch: fetchFor(values.tlsFingerprint) });
     return {
       tools: TOOLS.map(t => ({ ...t, inputSchema: { ...t.inputSchema } })),
       async getStatus() {
