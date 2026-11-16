@@ -55,6 +55,18 @@ const WRITE_TOOLS = new Set([
   "radarr_manual_import",
 ]);
 
+/**
+ * Adds an optional integration's tools to the policy (see integration.ts).
+ * Confirm tools are write tools too.
+ */
+export function registerToolPolicy(policy: { writeTools?: string[]; confirmTools?: string[] }): void {
+  for (const name of policy.confirmTools ?? []) {
+    CONFIRM_REQUIRED_TOOLS.add(name);
+    WRITE_TOOLS.add(name);
+  }
+  for (const name of policy.writeTools ?? []) WRITE_TOOLS.add(name);
+}
+
 export function isWriteTool(name: string): boolean {
   return WRITE_TOOLS.has(name);
 }
@@ -81,7 +93,8 @@ export function applyToolPolicy(tool: Tool): void {
         description: "Must be true. Check the target with the user before setting this.",
       },
     };
-    tool.inputSchema.required = [...(tool.inputSchema.required ?? []), "confirm"];
+    const required = tool.inputSchema.required ?? [];
+    if (!required.includes("confirm")) tool.inputSchema.required = [...required, "confirm"];
   }
 }
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Optional integrations hook.** Services with their own HTTP API can now be added as a single module in `src/integrations/` (see CONTRIBUTING.md). A module declares its tools, which of them write or need `confirm: true`, and its credential fields (API key, token, username/password, optional or required). The encrypted config, web UI Services tab, connection test, `arr_status`, read-only mode, error redaction and the status board handle it without further changes. The list ships empty, so behaviour is unchanged.
+
+### Changed
+- **Web UI services:** the desktop service sketch grows to two columns when there are more than seven services (Maintainerr was not drawn before).
+
 ### Security
 - **BREAKING (HTTP mode):** MCP tokens of users with the *user* role now get read-only tools: tools that change state are hidden from `tools/list` and refused when called. Only *admin* accounts (and their OAuth connectors) can add, delete, approve or trigger anything. Previously the role only applied to the web UI.
 - **HTTP mode, `TRUST_PROXY=true`:** rate limiting now uses the right-most `X-Forwarded-For` entry (the address your proxy saw) instead of the left-most one, which the client controls and could rotate to make unlimited login attempts. Password logins are also throttled per account name (20 failures per 15 minutes from any address).

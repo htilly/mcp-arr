@@ -17,7 +17,7 @@ import { createServer as createHttpsServer } from 'node:https';
 import { randomBytes } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { ConfigStore, Role, checkPassword, SERVICE_DEFS, ServiceId, StoredUser, isServiceId } from './config-store.js';
+import { ConfigStore, Role, checkPassword, SERVICE_DEFS, ServiceDef, ServiceId, StoredUser, isServiceId, serviceDef } from './config-store.js';
 import { SonarrClient, RadarrClient, LidarrClient, ProwlarrClient } from './arr-client.js';
 import { TautulliClient } from './tautulli-client.js';
 import { OverseerrClient } from './overseerr-client.js';
@@ -138,15 +138,17 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-/** Try to connect to a service with the given URL/API key. */
+/** Try to connect to a service with the given URL and field values (apiKey, ...). */
 export async function testServiceConnection(
   id: ServiceId,
   url: string,
-  apiKey: string
+  values: Record<string, string | undefined>
 ): Promise<{ ok: boolean; version?: string; error?: string }> {
-  const cfg = { url: url.replace(/\/+$/, ''), apiKey };
+  const cfg = { url: url.replace(/\/+$/, ''), apiKey: values.apiKey ?? '' };
+  const integration = serviceDef(id)?.integration;
   try {
     const version = await withTimeout((async (): Promise<string | undefined> => {
+      if (integration) return (await integration.create({ url: cfg.url, values }).getStatus()).version;
       switch (id) {
         case 'sonarr': return (await new SonarrClient(cfg).getStatus()).version;
         case 'radarr': return (await new RadarrClient(cfg).getStatus()).version;
@@ -167,7 +169,7 @@ export async function testServiceConnection(
     const err = error as Error & { cause?: { code?: string } };
     const status = /API error: (\d{3})/.exec(err.message)?.[1];
     let message: string;
-    if (status === '401' || status === '403') message = `HTTP ${status} - check the API key`;
+    if (status === '401' || status === '403') message = `HTTP ${status} - check the ${credentialLabel(id)}`;
     else if (status) message = `HTTP ${status} - is this the right address?`;
     else if (err.cause?.code) message = `Could not connect (${String(err.cause.code).slice(0, 40)})`;
     else if (/^Timed out/.test(err.message)) message = err.message;
@@ -175,6 +177,26 @@ export async function testServiceConnection(
     else message = 'Connection failed';
     return { ok: false, error: message };
   }
+}
+
+/** "API key", or e.g. "username and password" for a service with other fields. */
+function credentialLabel(id: ServiceId): string {
+  const labels = (serviceDef(id)?.fields ?? []).map(f => f.label.toLowerCase().replace(/^api /, 'API '));
+  if (labels.length === 0) return 'address';
+  return labels.length === 1 ? labels[0] : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
+
+/** Field values typed in a Services form: body.fields.<key>, plus body.apiKey (older clients). */
+function typedServiceValues(def: ServiceDef, body: Record<string, unknown>): Record<string, string | undefined> {
+  const raw = body.fields !== null && typeof body.fields === 'object' && !Array.isArray(body.fields)
+    ? body.fields as Record<string, unknown>
+    : {};
+  const typed: Record<string, string | undefined> = {};
+  for (const f of def.fields) {
+    const value = f.key === 'apiKey' && body.apiKey !== undefined ? body.apiKey : raw[f.key];
+    if (value !== undefined) typed[f.key] = str(value) ?? '';
+  }
+  return typed;
 }
 
 function publicUser(u: StoredUser) {
@@ -462,7 +484,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
     const effective = store.getEffective();
     return SERVICE_DEFS.map(def => {
       const e = effective[def.id];
-      const base = { id: def.id, displayName: def.displayName, configured: Boolean(e.url && e.apiKey) };
+      const base = { id: def.id, displayName: def.displayName, configured: e.configured };
       if (!includeDetails) return base;
       return {
         ...base,
@@ -473,6 +495,22 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
         hasApiKey: Boolean(e.apiKey),
         apiKeyHint: e.apiKey && e.apiKey.length >= 12 ? e.apiKey.slice(-4) : '',
         apiKeySource: e.apiKeySource,
+        fields: def.fields.map(f => {
+          const value = e.values[f.key];
+          return {
+            key: f.key,
+            label: f.label,
+            secret: f.secret,
+            required: f.required,
+            placeholder: f.placeholder ?? '',
+            envName: `${def.envPrefix}_${f.envSuffix}`,
+            source: e.sources[f.key],
+            hasValue: Boolean(value),
+            // Secrets never go back to the browser, only a hint for long ones.
+            hint: f.secret && value && value.length >= 12 ? value.slice(-4) : '',
+            value: f.secret ? '' : value ?? '',
+          };
+        }),
       };
     });
   }
@@ -878,45 +916,54 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
       const id = serviceMatch[1];
       if (!isServiceId(id)) throw new HttpError(404, 'Unknown service');
       const effective = store.getEffective()[id];
+      const def = serviceDef(id)!;
 
       if (serviceMatch[2] && method === 'POST') {
         const body = await readJson(req);
         const url = (str(body.url) || effective.url || '').trim();
-        const typedKey = (str(body.apiKey) ?? '').trim();
-        // The saved key only goes to the saved address: testing another host needs the key typed in.
+        const typed = typedServiceValues(def, body);
+        // Saved secrets only go to the saved address: testing another host needs them typed in.
         const savedKeyAllowed = urlOrigin(url) !== undefined && urlOrigin(url) === urlOrigin(effective.url);
-        const apiKey = typedKey || (savedKeyAllowed ? (effective.apiKey ?? '').trim() : '');
+        const values: Record<string, string | undefined> = {};
+        for (const f of def.fields) {
+          const saved = !f.secret || savedKeyAllowed ? (effective.values[f.key] ?? '').trim() : '';
+          values[f.key] = (typed[f.key] ?? '').trim() || saved || undefined;
+        }
         if (!url) throw new HttpError(400, 'URL is required to test');
-        if (!apiKey) {
-          throw new HttpError(400, effective.apiKey && !savedKeyAllowed
-            ? 'Enter the API key to test a new address - the saved key is only sent to the saved address'
-            : 'URL and API key are required to test');
+        const missing = def.fields.filter(f => f.required && !values[f.key]);
+        if (missing.length > 0) {
+          const heldBack = missing.some(f => f.secret && effective.values[f.key]);
+          throw new HttpError(400, heldBack && !savedKeyAllowed
+            ? `Enter the ${credentialLabel(id)} to test a new address - saved secrets are only sent to the saved address`
+            : `URL and ${credentialLabel(id)} are required to test`);
         }
         if (isBlockedServiceHost(url)) throw new HttpError(400, 'That address is link-local / cloud metadata and cannot be used for a service');
-        sendJson(res, 200, await testServiceConnection(id, url, apiKey));
+        sendJson(res, 200, await testServiceConnection(id, url, values));
         return;
       }
 
       if (!serviceMatch[2] && method === 'PUT') {
         const body = await readJson(req);
-        const update: { url?: string; apiKey?: string } = {};
+        const typed = typedServiceValues(def, body);
+        const update: Record<string, string | undefined> = {};
         if (body.url !== undefined) {
           if (effective.urlSource === 'env') throw new HttpError(409, 'URL is set by an environment variable');
           update.url = str(body.url) ?? '';
           if (update.url && isBlockedServiceHost(update.url)) {
             throw new HttpError(400, 'That address is link-local / cloud metadata and cannot be used for a service');
           }
-          // Moving a saved key to another host needs the key typed in again, so a hijacked
+          // Moving saved secrets to another host needs them typed in again, so a hijacked
           // admin session cannot redirect stored keys to a server it controls.
-          const movesKey = update.url && effective.apiKey && effective.apiKeySource === 'file'
-            && urlOrigin(update.url) !== urlOrigin(effective.url);
-          if (movesKey && !(str(body.apiKey) ?? '').trim()) {
-            throw new HttpError(400, 'Enter the API key again when changing the service address');
+          if (update.url && urlOrigin(update.url) !== urlOrigin(effective.url)) {
+            const moves = def.fields.some(f => f.secret && effective.values[f.key] && effective.sources[f.key] === 'file'
+              && !(typed[f.key] ?? '').trim());
+            if (moves) throw new HttpError(400, `Enter the ${credentialLabel(id)} again when changing the service address`);
           }
         }
-        if (body.apiKey !== undefined) {
-          if (effective.apiKeySource === 'env') throw new HttpError(409, 'API key is set by an environment variable');
-          update.apiKey = str(body.apiKey) ?? '';
+        for (const f of def.fields) {
+          if (typed[f.key] === undefined) continue;
+          if (effective.sources[f.key] === 'env') throw new HttpError(409, `${f.label} is set by an environment variable`);
+          update[f.key] = typed[f.key];
         }
         try {
           store.setService(id, update);

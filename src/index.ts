@@ -14,6 +14,7 @@
  * - OVERSEERR_URL, OVERSEERR_API_KEY
  * - BAZARR_URL, BAZARR_API_KEY
  * - MAINTAINERR_URL, MAINTAINERR_API_KEY
+ * - Optional integrations (src/integrations/): <SERVICE>_URL plus their own fields, e.g. <SERVICE>_API_KEY
  *
  * Remote / Docker mode (HTTPS + web UI with passkey login), see README:
  * - MCP_TRANSPORT=http (default: stdio), PUBLIC_URL, PORT, HOST
@@ -47,7 +48,9 @@ import { TautulliClient } from "./tautulli-client.js";
 import { OverseerrClient } from "./overseerr-client.js";
 import { BazarrClient, BazarrSubtitle } from "./bazarr-client.js";
 import { MaintainerrClient } from "./maintainerr-client.js";
-import { ConfigStore, EffectiveConfig, SERVICE_DEFS } from "./config-store.js";
+import { ConfigStore, EffectiveConfig, SERVICE_DEFS, secretValues } from "./config-store.js";
+import { LoadedIntegration, loadIntegration } from "./integration.js";
+import { INTEGRATIONS } from "./integrations/index.js";
 import { resolve as resolvePath, dirname, join as joinPath } from "node:path";
 import { hostname as osHostname, networkInterfaces } from "node:os";
 import { stats, CallContext } from "./stats.js";
@@ -55,6 +58,7 @@ import {
   applyToolPolicy,
   createRedactor,
   isWriteTool,
+  registerToolPolicy,
   ToolArgumentError,
   validateServiceUrl,
   validateToolArgs,
@@ -142,6 +146,13 @@ let overseerrClient: OverseerrClient | undefined;
 let bazarrClient: BazarrClient | undefined;
 let maintainerrClient: MaintainerrClient | undefined;
 let statusParts: string[] = [];
+/** Configured optional integrations (src/integrations/), rebuilt by applyConfig. */
+let integrations: LoadedIntegration[] = [];
+for (const definition of INTEGRATIONS) {
+  // A module can only set the policy of its own tools.
+  const own = (names?: string[]) => (names ?? []).filter(n => n.startsWith(`${definition.name}_`));
+  registerToolPolicy({ writeTools: own(definition.writeTools), confirmTools: own(definition.confirmTools) });
+}
 
 const TOOLS: Tool[] = [];
 
@@ -155,14 +166,14 @@ function errorText(error: unknown): string {
 /** Stop at startup on a malformed service URL, before any request can echo it with a key. */
 function validateServiceUrls(config: EffectiveConfig): void {
   for (const def of SERVICE_DEFS) {
-    const { url, apiKey } = config[def.id];
-    if (url && apiKey) validateServiceUrl(`${def.envPrefix}_URL`, url);
+    const { url, configured } = config[def.id];
+    if (url && configured) validateServiceUrl(`${def.envPrefix}_URL`, url);
   }
 }
 
 /** True when at least one service has both a URL and an API key. */
 function anyServiceConfigured(): boolean {
-  return configuredServices.length > 0 || tautulliConfigured || overseerrConfigured || bazarrConfigured || maintainerrConfigured;
+  return configuredServices.length > 0 || tautulliConfigured || overseerrConfigured || bazarrConfigured || maintainerrConfigured || integrations.length > 0;
 }
 
 /**
@@ -170,7 +181,7 @@ function anyServiceConfigured(): boolean {
  * Called at startup and whenever the configuration changes via the web UI.
  */
 function applyConfig(config: EffectiveConfig): void {
-  redact = createRedactor(SERVICE_DEFS.map(def => config[def.id].apiKey));
+  redact = createRedactor(secretValues(config));
   services = ARR_SERVICE_IDS.map(id => ({
     name: id,
     displayName: SERVICE_DEFS.find(d => d.id === id)!.displayName,
@@ -205,6 +216,18 @@ function applyConfig(config: EffectiveConfig): void {
   if (overseerrConfigured) statusParts.push('Overseerr (Requests)');
   if (bazarrConfigured) statusParts.push('Bazarr (Subtitles)');
   if (maintainerrConfigured) statusParts.push('Maintainerr (Cleanup)');
+
+  integrations = [];
+  for (const def of SERVICE_DEFS) {
+    if (!def.integration || !config[def.id].configured) continue;
+    try {
+      integrations.push(loadIntegration(def.integration, { url: config[def.id].url!, values: config[def.id].values }));
+    } catch (error) {
+      // One broken integration must not take the server (or a web UI save) down.
+      console.error(`[mcp-arr] ${def.displayName} disabled: ${errorText(error)}`);
+    }
+  }
+  statusParts.push(...integrations.map(i => i.displayName));
 
   buildTools();
 }
@@ -1884,6 +1907,11 @@ TOOLS.push(
   }
 );
 
+// Optional integration tools (src/integrations/), after the built-in ones.
+for (const integration of integrations) {
+  TOOLS.push(...integration.tools);
+}
+
 TOOLS.forEach(applyToolPolicy);
 } // end buildTools
 
@@ -2214,6 +2242,8 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
     const tool = TOOLS.find(t => t.name === name);
     if (tool) {
       validateToolArgs(tool, args);
+      const integration = integrations.find(i => i.tools.includes(tool));
+      if (integration) return await integration.callTool(name, args);
     }
 
     switch (name) {
@@ -2345,6 +2375,20 @@ async function callTool(params: { name: string; arguments?: Record<string, unkno
           }
         } else {
           statuses.maintainerr = { configured: false };
+        }
+        for (const def of SERVICE_DEFS) {
+          if (!def.integration) continue;
+          const integration = integrations.find(i => i.name === def.id);
+          if (!integration) {
+            statuses[def.id] = { configured: false };
+            continue;
+          }
+          try {
+            const status = await integration.getStatus();
+            statuses[def.id] = { configured: true, connected: true, version: status.version };
+          } catch (error) {
+            statuses[def.id] = { configured: true, connected: false, error: errorText(error) };
+          }
         }
         return jsonText(statuses);
       }

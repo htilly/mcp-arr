@@ -29,3 +29,6 @@ mcp-arr-key.txt
 
 # Local security review output
 .security-review/
+
+# Scratch copies made by test/integration-hook.test.mjs
+.test-build/
