@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 - **Optional integrations hook.** Services with their own HTTP API can now be added as a single module in `src/integrations/` (see CONTRIBUTING.md). A module declares its tools, which of them write or need `confirm: true`, and its credential fields (API key, token, username/password, optional or required). The encrypted config, web UI Services tab, connection test, `arr_status`, read-only mode, error redaction and the status board handle it without further changes. The list ships empty, so behaviour is unchanged.
+- **Tdarr (transcoding) integration** - optional, the first module on the integrations hook. Enabled by `TDARR_URL` alone; `TDARR_API_KEY` only when authentication is on in Tdarr (env or the web UI's Services tab):
+  - `tdarr_status`, `tdarr_get_libraries` (flow/plugins, file counts, codecs per library), `tdarr_get_nodes` (workers with progress, fps, ETA), `tdarr_get_queue`, `tdarr_get_staged`, `tdarr_get_stats` (space saved, files per codec/container/resolution/status), `tdarr_get_file`
+  - `tdarr_search_files` filters the file database by video codec, audio codec (every audio track), container, library, path, status and size - e.g. find AV1 video or DTS audio a TV cannot direct-play
+  - `tdarr_requeue_files` sends matching files (or given file ids) back through the library's flow, at most 100 per call, and requires `confirm: true`; `tdarr_set_node_paused` pauses/resumes a node. Both are blocked by `ARR_READ_ONLY`
 
 ### Changed
 - **Web UI services:** the desktop service sketch grows to two columns when there are more than seven services (Maintainerr was not drawn before).

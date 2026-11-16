@@ -263,6 +263,30 @@ async function testMaintainerr() {
   }
 }
 
+async function testTdarr() {
+  const baseUrl = get('TDARR_URL')?.replace(/\/$/, '');
+  const apiKey = get('TDARR_API_KEY');
+  if (!baseUrl) return null;
+  try {
+    const res = await fetchWithTimeout(`${baseUrl}/api/v2/status`, {
+      method: 'GET',
+      headers: apiKey ? { 'x-api-key': apiKey } : {},
+    });
+    if (!res.ok) return { ok: false, error: `${res.status} ${res.statusText}` };
+    const json = await res.json();
+    return { ok: true, version: json.version ?? 'OK' };
+  } catch (err) {
+    const cause = err.cause?.message ?? err.cause?.code ?? err.message;
+    if (cause === 'This operation was aborted') {
+      return { ok: false, error: `Connection timeout (${FETCH_TIMEOUT_MS}ms) - check if Tdarr is reachable at ${baseUrl}` };
+    }
+    if (cause === 'ECONNREFUSED' || cause?.includes('ECONNREFUSED')) {
+      return { ok: false, error: `Connection refused - Tdarr not running at ${baseUrl}` };
+    }
+    return { ok: false, error: `${cause} (URL: ${baseUrl})` };
+  }
+}
+
 async function testBazarrFunctional(baseUrl, apiKey) {
   try {
     const res = await fetchWithTimeout(`${baseUrl}/api/badges`, {
@@ -330,6 +354,9 @@ async function main() {
 
   const maintainerrResult = await testMaintainerr();
   summary.push({ name: 'Maintainerr (Cleanup)', result: maintainerrResult });
+
+  const tdarrResult = await testTdarr();
+  summary.push({ name: 'Tdarr (Transcoding)', result: tdarrResult });
 
   const configuredCount = summary.filter((s) => s.result !== null).length;
   if (configuredCount === 0) {
