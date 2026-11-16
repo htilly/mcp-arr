@@ -117,9 +117,11 @@ export interface IntegrationSignIn {
   label: string;
   /**
    * Starts a sign-in. clientId is a stable random id for this mcp-arr install
-   * (services list it as a device). Returns the page to open and opaque state.
+   * (services list it as a device). returnUrl is where the service's page should send the
+   * browser after signing in (the web UI then shows the result). Returns the page to open
+   * and opaque state.
    */
-  start(context: { clientId: string }): Promise<{ authUrl: string; state: unknown }>;
+  start(context: { clientId: string; returnUrl?: string }): Promise<{ authUrl: string; state: unknown }>;
   /** Checks whether the user finished. Throws when the sign-in failed or expired. */
   poll(state: unknown, context: { clientId: string }): Promise<SignInPoll>;
 }

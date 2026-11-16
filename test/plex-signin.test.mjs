@@ -123,6 +123,14 @@ function http(path, { method = 'GET', body, withCookie = false } = {}) {
 }
 const ui = (path, opts = {}) => http(`/admin/api${path}`, { withCookie: true, ...opts });
 
+async function waitFor(fn, ms) {
+  const deadline = Date.now() + ms;
+  while (!(await fn())) {
+    if (Date.now() > deadline) throw new Error('timed out waiting');
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 test('the best Plex connection is a local address over http, never a relay', () => {
   assert.equal(pickConnection(RESOURCES()[0].connections), 'http://172.16.230.80:32400');
   assert.equal(pickConnection([{ address: '9.9.9.9', port: 1, relay: true, local: true }]), undefined);
@@ -141,12 +149,18 @@ test('Sign in with Plex saves the server token and local URL, never the account 
   const start = await ui('/services/plex/signin', { method: 'POST', body: {} });
   assert.equal(start.status, 200, start.text);
   assert.match(start.json.authUrl, /^https:\/\/app\.plex\.example\/auth#\?clientID=[0-9a-f-]{36}&code=ABCD1234/);
+  // Plex sends the browser back to the web UI, which then shows the result.
+  const forward = new URLSearchParams(start.json.authUrl.split('#?')[1]).get('forwardUrl');
+  assert.equal(forward, `${origin}/admin#signin=plex:${start.json.sessionId}`);
   assert.match(start.json.sessionId, /^[0-9a-f]{32}$/);
   const clientId = seen[0].client;
   assert.match(clientId, /^[0-9a-f-]{36}$/);
 
   const pending = await ui(`/services/plex/signin/${start.json.sessionId}`, { method: 'POST', body: {} });
   assert.deepEqual(pending.json, { status: 'pending' });
+  // The server checks the PIN itself (every 2 s): no browser polling is needed for it to save.
+  await waitFor(() => pinPolls >= 2 && seen.some((r) => r.url.startsWith('/api/v2/resources')), 10000);
+  await new Promise((r) => setTimeout(r, 200));
   const saved = await ui(`/services/plex/signin/${start.json.sessionId}`, { method: 'POST', body: {} });
   assert.equal(saved.json.status, 'saved', saved.text);
   const after = saved.json.services.find((s) => s.id === 'plex');
@@ -156,9 +170,9 @@ test('Sign in with Plex saves the server token and local URL, never the account 
   assert.equal(after.fields.find((f) => f.key === 'token').hint, SERVER_TOKEN.slice(-4));
   assert.ok(seen.every((r) => r.client === clientId), 'one stable client id');
 
-  // The session is gone once used.
-  const reused = await ui(`/services/plex/signin/${start.json.sessionId}`, { method: 'POST', body: {} });
-  assert.equal(reused.status, 404);
+  // Another tab (e.g. the one Plex sends back) sees the same result.
+  const again1 = await ui(`/services/plex/signin/${start.json.sessionId}`, { method: 'POST', body: {} });
+  assert.equal(again1.json.status, 'saved');
 
   // A second sign-in uses the same install id.
   seen = [];
@@ -170,7 +184,8 @@ test('Sign in with Plex saves the server token and local URL, never the account 
 test('with several servers the admin picks one', async () => {
   seen = []; pinPolls = 5; servers = 2;
   const start = await ui('/services/plex/signin', { method: 'POST', body: {} });
-  const choose = await ui(`/services/plex/signin/${start.json.sessionId}`, { method: 'POST', body: {} });
+  let choose;
+  await waitFor(async () => (choose = await ui(`/services/plex/signin/${start.json.sessionId}`, { method: 'POST', body: {} })).json.status !== 'pending', 10000);
   assert.equal(choose.json.status, 'choose');
   assert.deepEqual(choose.json.choices.map((c) => c.label), ['Tilly Plex', 'Friend (shared with you)']);
   assert.ok(!choose.text.includes('friend-token'));
@@ -178,6 +193,8 @@ test('with several servers the admin picks one', async () => {
   assert.equal(bad.status, 400);
   const picked = await ui(`/services/plex/signin/${start.json.sessionId}/choose`, { method: 'POST', body: { index: 1 } });
   assert.equal(picked.json.status, 'saved', picked.text);
+  const twice = await ui(`/services/plex/signin/${start.json.sessionId}/choose`, { method: 'POST', body: { index: 0 } });
+  assert.equal(twice.status, 400, 'a finished sign-in cannot be changed afterwards');
   assert.equal(picked.json.services.find((s) => s.id === 'plex').url, 'https://5-6-7-8.x.plex.direct:32400');
 });
 

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Sign in with Plex on phones.** After Allow nothing happened on an iPhone: the sign-in opens as its own tab there and the web UI tab, which did the checking, is paused meanwhile. The server now watches the sign-in itself and saves the token as soon as Plex approves it, Plex sends the browser back to the Services page (`forwardUrl`) to show the result, and with pop-ups blocked the sign-in runs in the same tab instead of failing.
+
 ### Added
 - **Sign in with Plex** (web UI). The Plex card in the Services tab has a *Sign in with Plex* button: Plex's own sign-in page opens in a popup (just Allow when already signed in to plex.tv), and mcp-arr saves the chosen server's access token and local URL straight to the encrypted config; with several servers the admin picks one. The token never reaches the browser and the plex.tv account token is not stored. Needs internet access to plex.tv; manual token entry still works. Integration modules can offer such a flow with `signIn` (see `src/integration.ts`).
 - **Self-signed HTTPS for qBittorrent, SABnzbd, Tdarr and Plex.** Each has an optional *trusted certificate* field (`<SERVICE>_TLS_FINGERPRINT`, or the web UI): the SHA-256 fingerprint of the service's self-signed certificate. The certificate is checked against it during the TLS handshake, before any request (or API key) is sent; certificate checks are never switched off. Without it, an untrusted certificate now gives an error that names the problem and shows the fingerprint the server presented, also in the web UI connection test. Integration modules opt in with `TLS_FINGERPRINT_FIELD` and `fetchFor()` from `src/tls-trust.ts`.

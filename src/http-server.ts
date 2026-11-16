@@ -484,11 +484,73 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
   }
 
   // Sign-ins in progress (see the /services/<id>/signin routes). Memory only: a restart ends them.
+  // The server polls the service itself (watchSignIn), so the sign-in completes even when the
+  // browser tab that started it is paused or closed - e.g. iOS while the Plex tab is in front.
   const SIGN_IN_TTL_MS = 10 * 60_000;
-  const signIns = new Map<string, { service: ServiceId; state: unknown; expires: number; results?: SignInResult[] }>();
+  const SIGN_IN_POLL_MS = 2_000;
+  interface SignInSession {
+    service: ServiceId;
+    state: unknown;
+    expires: number;
+    results?: SignInResult[];
+    saved?: { label: string };
+    error?: string;
+  }
+  const signIns = new Map<string, SignInSession>();
   function pruneSignIns(): void {
     const now = Date.now();
     for (const [key, s] of signIns) if (s.expires < now) signIns.delete(key);
+  }
+
+  function watchSignIn(sessionId: string, def: ServiceDef, clientId: string): void {
+    const flow = def.integration!.signIn!;
+    let failures = 0;
+    const tick = async () => {
+      const session = signIns.get(sessionId);
+      if (!session || session.results || session.saved || session.error) return;
+      if (Date.now() > session.expires) {
+        session.error = 'The sign-in took too long - start again';
+        return;
+      }
+      try {
+        const polled = await flow.poll(session.state, { clientId });
+        failures = 0;
+        if (polled.status === 'done') {
+          if (polled.results.length === 1) {
+            saveSignInResult(def, polled.results[0]);
+            session.saved = { label: polled.results[0].label };
+          } else {
+            session.results = polled.results;
+          }
+          return;
+        }
+      } catch (error) {
+        // plex.tv hiccups are retried a few times; a refused or expired sign-in ends it.
+        failures += 1;
+        const message = error instanceof HttpError || error instanceof Error ? error.message : 'Sign-in failed';
+        if (failures >= 5 || !/Could not reach|API error: 5\d\d/.test(message)) {
+          session.error = message;
+          return;
+        }
+      }
+      setTimeout(tick, SIGN_IN_POLL_MS).unref();
+    };
+    setTimeout(tick, SIGN_IN_POLL_MS).unref();
+  }
+
+  /** What the browser gets while a sign-in runs. */
+  function signInView(sessionId: string, session: SignInSession) {
+    if (session.error) {
+      signIns.delete(sessionId);
+      throw new HttpError(502, session.error);
+    }
+    if (session.saved) {
+      return { status: 'saved', label: session.saved.label, services: servicesView(true), configuredSummary: opts.getConfiguredSummary() };
+    }
+    if (session.results) {
+      return { status: 'choose', choices: session.results.map((r, index) => ({ index, label: r.label, url: r.url ?? '' })) };
+    }
+    return { status: 'pending' };
   }
 
   /** Saves what a sign-in returned. Values set by environment variables are never overwritten. */
@@ -958,14 +1020,18 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
 
       if (!signInMatch[2]) {
         if (signIns.size >= 20) throw new HttpError(429, 'Too many sign-ins in progress - try again in a few minutes');
+        const sessionId = randomBytes(16).toString('hex');
+        // After signing in, the service's page sends the browser back here to show the result.
+        // The origin the admin page was loaded from (checked against Origin for every write).
+        const returnUrl = `${originOf(req)}/admin#signin=${id}:${sessionId}`;
         let started: { authUrl: string; state: unknown };
         try {
-          started = await flow.start({ clientId });
+          started = await flow.start({ clientId, returnUrl });
         } catch (error) {
           throw new HttpError(502, error instanceof Error ? error.message : 'Sign-in could not start');
         }
-        const sessionId = randomBytes(16).toString('hex');
         signIns.set(sessionId, { service: id, state: started.state, expires: Date.now() + SIGN_IN_TTL_MS });
+        watchSignIn(sessionId, def, clientId);
         sendJson(res, 200, { sessionId, authUrl: started.authUrl });
         return;
       }
@@ -977,34 +1043,14 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
         const body = await readJson(req);
         const index = typeof body.index === 'number' ? body.index : -1;
         const result = session.results?.[index];
-        if (!result) throw new HttpError(400, 'Pick one of the listed servers');
-        signIns.delete(signInMatch[2]);
-        sendJson(res, 200, saveSignInResult(def, result));
+        if (!result || session.saved) throw new HttpError(400, 'Pick one of the listed servers');
+        const view = saveSignInResult(def, result);
+        session.saved = { label: result.label };
+        sendJson(res, 200, view);
         return;
       }
 
-      if (session.results) {
-        sendJson(res, 200, { status: 'choose', choices: session.results.map((r, index) => ({ index, label: r.label, url: r.url ?? '' })) });
-        return;
-      }
-      let polled;
-      try {
-        polled = await flow.poll(session.state, { clientId });
-      } catch (error) {
-        signIns.delete(signInMatch[2]);
-        throw new HttpError(502, error instanceof Error ? error.message : 'Sign-in failed');
-      }
-      if (polled.status === 'pending') {
-        sendJson(res, 200, { status: 'pending' });
-        return;
-      }
-      if (polled.results.length === 1) {
-        signIns.delete(signInMatch[2]);
-        sendJson(res, 200, saveSignInResult(def, polled.results[0]));
-        return;
-      }
-      session.results = polled.results;
-      sendJson(res, 200, { status: 'choose', choices: polled.results.map((r, index) => ({ index, label: r.label, url: r.url ?? '' })) });
+      sendJson(res, 200, signInView(signInMatch[2], session));
       return;
     }
 

@@ -114,7 +114,7 @@ export function resourcesToResults(resources: PlexResource[]): SignInResult[] {
 export const plexSignIn: IntegrationSignIn = {
   label: "Sign in with Plex",
 
-  async start({ clientId }) {
+  async start({ clientId, returnUrl }) {
     const pin = await plexTvJson<PlexPin>("/api/v2/pins?strong=true", { method: "POST", headers: headers(clientId) });
     if (!pin.id || !pin.code) throw new Error("plex.tv did not return a sign-in PIN");
     const params = new URLSearchParams({
@@ -122,6 +122,8 @@ export const plexSignIn: IntegrationSignIn = {
       code: pin.code,
       "context[device][product]": PRODUCT,
     });
+    // Plex sends the browser back after Allow. Without it a phone stays on Plex's page.
+    if (returnUrl) params.set("forwardUrl", returnUrl);
     const state: PinState = { id: pin.id, code: pin.code, createdAt: Date.now() };
     return { authUrl: `${plexApp()}/auth#?${params.toString()}`, state };
   },
