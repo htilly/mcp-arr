@@ -33,6 +33,7 @@ Supports both local `stdio` mode for Claude/Codex-style clients and remote HTTP 
 | **Sonarr (TV)** | List series, view episodes, search shows, trigger downloads, check queue, view calendar, review setup |
 | **Radarr (Movies)** | List movies, search films, trigger downloads, check queue, view releases, review setup |
 | **Lidarr (Music)** | List artists, view albums, search musicians, trigger downloads, check queue, view calendar, review setup |
+| **Maintainerr (Cleanup)** | See what rule-based cleanup will delete and when, postpone or exclude items, run rules |
 | **Prowlarr (Indexers)** | List indexers, search across all trackers, test health, view statistics |
 | **Cross-Service** | Status check, unified search across all configured services |
 | **Configuration** | Quality profiles, download clients, naming conventions, health checks, storage info |
@@ -352,6 +353,27 @@ Inspect existing episode and movie files with paginated summary or full MediaInf
 | `lidarr_search_album` | Trigger search for a specific album |
 | `lidarr_search_missing` | Trigger search for all missing albums for an artist |
 | `lidarr_get_calendar` | See upcoming album releases |
+
+### Maintainerr Tools (Library Cleanup)
+
+Available when `MAINTAINERR_URL` and `MAINTAINERR_API_KEY` are set. The API key is in Maintainerr under **Settings** > **General**. Media ids are media server item ids (Plex rating key or Jellyfin/Emby id).
+
+| Tool | Description |
+|------|-------------|
+| `maintainerr_status` | Version, health and whether rules are running |
+| `maintainerr_get_collections` | Collections of media marked for removal, with size, grace period and Sonarr/Radarr action |
+| `maintainerr_get_collection_media` | Items in a collection with the date each will be deleted (paginated) |
+| `maintainerr_get_collection_logs` | Activity log of a collection, newest first (paginated) |
+| `maintainerr_get_rules` | Rule groups with library, media type, active state and collection |
+| `maintainerr_get_exclusions` | Items excluded from rules (global or per rule group) |
+| `maintainerr_search_media` | Search the media server by title to find a `mediaId` |
+| `maintainerr_get_media_status` | Which rule groups an item is excluded from and which collections it was added to manually |
+| `maintainerr_run_rules` | Run all or one rule group now (updates collections; deletes nothing) |
+| `maintainerr_postpone_deletion` | Restart an item's grace period or push its deletion out by a number of days |
+| `maintainerr_exclude_media` | Exclude an item from rules so it is never deleted |
+| `maintainerr_remove_exclusion` | Remove an exclusion so rules apply to the item again |
+| `maintainerr_remove_from_collection` | Remove an item from a collection (a later rule run may add it again) |
+| `maintainerr_handle_collections` | Run the collection handler now; items past their grace period get their action, usually deletion. Requires `confirmed: true` |
 
 ### Prowlarr Tools (Indexers)
 

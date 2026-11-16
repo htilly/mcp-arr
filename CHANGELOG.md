@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - Optional integrations: services next to the *arr apps that use their own APIs can live in their own module under `src/integrations/`. `index.ts` loads the ones whose `<SERVICE>_URL` and `<SERVICE>_API_KEY` are set, adds their tools, routes their calls (after argument validation and read-only filtering) and reports them in `arr_status`, `/health` and the startup log. Nothing changes until an integration is added.
 - `npm run catalogue` regenerates `tools.json` and `docker-registry/tools.json` from the built server.
+- Optional Maintainerr (rule-based library cleanup) integration, enabled with `MAINTAINERR_URL` and `MAINTAINERR_API_KEY`. Adds 14 `maintainerr_*` tools to see what will be deleted and when, postpone deletions, manage exclusions, run rules and run the collection handler. `maintainerr_handle_collections` deletes media past its grace period and requires `confirmed: true`.
 
 ## [1.9.0] - 2026-11-15
 
