@@ -28,7 +28,7 @@ function seed() {
 }
 
 function start(env) {
-  const port = String(36000 + Math.floor(Math.random() * 1000));
+  const port = String(39000 + Math.floor(Math.random() * 1000));
   const child = spawn(process.execPath, ["dist/index.js"], {
     cwd: new URL("..", import.meta.url),
     env: { PATH: process.env.PATH, MCP_TRANSPORT: "http", HOST: "127.0.0.1", PORT: port, CONFIG_ENCRYPTION_KEY: KEY, TLS_MODE: "off", PUBLIC_URL: `https://mcp.example.com:${port}`, ...env },
