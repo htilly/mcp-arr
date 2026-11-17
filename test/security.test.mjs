@@ -131,7 +131,8 @@ test("API keys are redacted from error text", async () => {
   const client = await connect({ SONARR_URL: `${baseUrl}/fail` });
   const result = await call(client, "sonarr_get_series", {});
   assert.equal(result.isError, true);
-  assert.match(result.text, /\[REDACTED\]/);
+  // The raw upstream body is no longer echoed (O-006); only the status reaches the caller.
+  assert.match(result.text, /API error: 500/);
   assert.ok(!result.text.includes(DUMMY_KEY));
 });
 

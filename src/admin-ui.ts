@@ -898,7 +898,7 @@ body { padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-are
     if (internal) desktop.mcpServers.arr.env = { NODE_EXTRA_CA_CERTS: '/path/to/mcp-arr-ca.crt' };
     return el('section', null, [el('h2', { text: 'Connect an MCP client' }), el('div', { class: 'panel' }, [
       el('div', { class: 'muted', text: 'Endpoint (Streamable HTTP over HTTPS):' }), el('pre', { text: endpoint }),
-      el('p', { class: 'muted', text: 'Create an access token under "Access tokens" and send it as "Authorization: Bearer <token>". Clients that cannot send headers can use ' + endpoint + '?token=<token>.' }),
+      el('p', { class: 'muted', text: 'Create an access token under "Access tokens" and send it as "Authorization: Bearer <token>". Clients that cannot send headers can use ' + endpoint + '?token=<token> once "Accept the access token in the URL" is turned on under Settings.' }),
       internal ? el('div', { class: 'msg warn', text: 'This server uses the built-in certificate authority. Node-based clients (Claude Code, mcp-remote) need NODE_EXTRA_CA_CERTS pointing to the downloaded root certificate - see "Certificates".' }) : null,
       el('h3', { text: 'Claude Code' }),
       el('pre', { text: caHint + 'claude mcp add --transport http arr ' + endpoint + ' --header "Authorization: Bearer <token>"' }),

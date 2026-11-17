@@ -6,6 +6,7 @@
  */
 
 import { pathId } from "./security.js";
+import { upstreamErrorDetail } from "./format.js";
 
 export type ArrService = 'sonarr' | 'radarr' | 'lidarr' | 'prowlarr';
 
@@ -503,7 +504,7 @@ export class ArrClient {
 
     const text = await response.text();
     if (!response.ok) {
-      throw new Error(`${this.serviceName} API error: ${response.status} ${response.statusText} - ${text}`);
+      throw new Error(`${this.serviceName} API error: ${response.status} ${response.statusText}${upstreamErrorDetail(this.serviceName, response.status, text)}`);
     }
     if (!text || text.trim() === '') {
       return undefined as T;
@@ -807,7 +808,50 @@ export class RadarrClient extends ArrClient {
         params.set(key, scope[key]!);
       }
     }
+    if (scope.folder !== undefined) await this.assertImportFolderAllowed(scope.folder);
     return this.request<ManualImportCandidate[]>(`/manualimport?${params}`);
+  }
+
+  /**
+   * A folder scan lists every video file below the folder, so it is limited to the places
+   * Radarr itself imports from: its root folders, download-client folders, remote path
+   * mappings and the output paths of queued downloads. Any other path on the host is refused.
+   */
+  private async assertImportFolderAllowed(folder: string): Promise<void> {
+    const segments = folder.split(/[\\/]+/);
+    if (folder.includes('\0') || segments.includes('..') || segments.includes('.')) {
+      throw new ArrValidationError('Invalid folder');
+    }
+    const list = async <T>(endpoint: string): Promise<T[]> => {
+      try {
+        const result = await this.request<unknown>(endpoint);
+        return Array.isArray(result) ? (result as T[]) : [];
+      } catch {
+        return [];
+      }
+    };
+    const [roots, mappings, clients, queue] = await Promise.all([
+      list<{ path?: unknown }>('/rootfolder'),
+      list<{ localPath?: unknown }>('/remotepathmapping'),
+      list<{ fields?: Array<{ name?: unknown; value?: unknown }> }>('/downloadclient'),
+      this.request<{ records?: Array<{ outputPath?: unknown }> }>('/queue?page=1&pageSize=200&includeUnknownMovieItems=true').catch(() => ({ records: [] })),
+    ]);
+    const bases: unknown[] = [
+      ...roots.map(r => r.path),
+      ...mappings.map(m => m.localPath),
+      ...clients.flatMap(c => (c.fields ?? []).filter(f => typeof f.name === 'string' && /dir|path|folder/i.test(f.name)).map(f => f.value)),
+      ...(Array.isArray(queue?.records) ? queue.records.map(q => q.outputPath) : []),
+    ];
+    const norm = (p: string) => p.replace(/[\\/]+$/, '');
+    const target = norm(folder);
+    const allowed = bases
+      .filter((b): b is string => typeof b === 'string' && /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(b))
+      .map(norm)
+      .filter(Boolean)
+      .some(base => target === base || target.startsWith(`${base}/`) || target.startsWith(`${base}\\`));
+    if (!allowed) {
+      throw new ArrValidationError('Folder is outside Radarr\'s root folders, download folders and queued downloads; use downloadId for a queued item');
+    }
   }
 
   async manualImport(scope: ManualImportScope, files: ManualImportSelection[], importMode: string, confirmed: boolean): Promise<unknown> {

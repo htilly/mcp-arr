@@ -87,6 +87,7 @@ node dist/index.js
 | KEY_FILE_PATH | No | Fallback auto-generated key file (Docker /secrets/master.key) |
 | ADMIN_RECOVERY | No | `true` prints a one-time code to register a new admin passkey |
 | TRUST_PROXY | No | Use X-Forwarded-For for rate limiting |
+| ALLOW_TOKEN_IN_URL | No | `true` accepts the MCP token as `?token=` (off by default) |
 | OAUTH | No | `auto` (default; on only with https PUBLIC_URL + public cert / proxy), `on`, `off` |
 | OAUTH_ALLOWED_REDIRECT_HOSTS | No | Extra connector redirect hosts (default claude.ai, claude.com, chatgpt.com, openai.com) |
 

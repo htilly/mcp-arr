@@ -244,7 +244,7 @@ claude mcp add --transport http arr https://mcp-arr.home.lan:3000/mcp --header "
 }
 ```
 
-Clients that can't send headers can use `https://…/mcp?token=<token>`. On an offline machine, install `mcp-remote` once while online (`npm i -g mcp-remote`) and use `"command": "mcp-remote"`.
+Clients that can't send headers can use `https://…/mcp?token=<token>` after turning on **Accept the access token in the URL** in Settings (or `ALLOW_TOKEN_IN_URL=true`). It is off by default because URLs end up in proxy logs and histories. On an offline machine, install `mcp-remote` once while online (`npm i -g mcp-remote`) and use `"command": "mcp-remote"`.
 
 #### Status board and brand guide
 
@@ -366,6 +366,7 @@ All `TLS_*`, `ACME_*`, DNS-provider and `OAUTH*` variables and `TRUST_PROXY` can
 | `CONFIG_ENCRYPTION_KEY` / `_FILE` / `_PREVIOUS` | – | Encryption key (see above) |
 | `KEY_FILE_PATH` | `/secrets/master.key` (Docker) | Fallback auto-generated key file |
 | `ADMIN_RECOVERY` | `false` | `true` prints a one-time recovery code to register a new admin passkey |
+| `ALLOW_TOKEN_IN_URL` | `false` | Accept the MCP access token as `?token=` (for clients that cannot send headers). Tokens in URLs end up in logs |
 | `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` (only behind your own reverse proxy). The right-most entry is used, i.e. the address your proxy saw |
 | `OAUTH` | `auto` | OAuth sign-in for Claude/OpenAI connectors: `auto` (only with a publicly trusted certificate setup, see above), `on` (force; you vouch for the certificate), `off` |
 | `OAUTH_ALLOWED_REDIRECT_HOSTS` | – | Extra redirect hosts connectors may use, comma-separated (defaults: claude.ai, claude.com, chatgpt.com, openai.com) |
@@ -453,7 +454,7 @@ Use your actual paths and API keys. Only include the services you use.
 
 ## ChatGPT / Remote MCP
 
-To use `mcp-arr` with ChatGPT, run the server in remote HTTP mode on a reachable host and connect ChatGPT to the `/mcp` endpoint. Note that ChatGPT (like Claude custom connectors) connects from the vendor's cloud, so the server must be reachable from the internet with a publicly trusted certificate, and the client must be able to send the access token (`Authorization: Bearer` or `?token=`).
+To use `mcp-arr` with ChatGPT, run the server in remote HTTP mode on a reachable host and connect ChatGPT to the `/mcp` endpoint. Note that ChatGPT (like Claude custom connectors) connects from the vendor's cloud, so the server must be reachable from the internet with a publicly trusted certificate, and the client must be able to send the access token (`Authorization: Bearer`, or `?token=` with `ALLOW_TOKEN_IN_URL=true`).
 
 The server now exposes the generic `search` and `fetch` tools expected by ChatGPT-style remote MCP integrations:
 

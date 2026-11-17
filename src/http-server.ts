@@ -76,6 +76,8 @@ const RATE_MAX_ACCOUNT_FAILURES = 20;
 const TEST_TIMEOUT_MS = 10_000;
 const SESSION_COOKIE = '__Host-marr_session';
 const REGISTER_MAX = 20;
+/** Passkey sign-in starts per address and window (the page asks once per load). */
+const LOGIN_OPTIONS_MAX = 100;
 
 const CORS = { 'Access-Control-Allow-Origin': '*' };
 
@@ -229,6 +231,8 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
   }
 
   const failures = new Map<string, { count: number; first: number }>();
+  /** Passkey sign-in starts per address (each holds a challenge for a few minutes). */
+  const loginOptions = new Map<string, { count: number; first: number }>();
 
   function clientIp(req: IncomingMessage): string {
     if (rt.trustProxy) {
@@ -283,6 +287,7 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
     auth.cleanup();
     rt.oauth?.sweep();
     for (const [ip, r] of registrations) if (now - r.first > RATE_WINDOW_MS) registrations.delete(ip);
+    for (const [ip, o] of loginOptions) if (now - o.first > RATE_WINDOW_MS) loginOptions.delete(ip);
   }, 5 * 60 * 1000);
   cleanup.unref();
 
@@ -290,7 +295,9 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
 
   function mcpUser(req: IncomingMessage, url: URL): { user: StoredUser; tokenName: string } | undefined {
     const header = req.headers.authorization;
-    const token = header?.startsWith('Bearer ') ? header.slice(7).trim() : url.searchParams.get('token') ?? undefined;
+    // ?token= only when enabled: URLs are logged by proxies and kept in histories.
+    const fromUrl = rt.allowTokenInUrl ? url.searchParams.get('token') ?? undefined : undefined;
+    const token = header?.startsWith('Bearer ') ? header.slice(7).trim() : fromUrl;
     return token ? store.resolveToken(token) : undefined;
   }
 
@@ -887,6 +894,11 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
 
     if (path === '/login/options' && method === 'POST') {
       if (rateLimited(req)) throw new HttpError(429, 'Too many failed attempts - try again later');
+      // Unauthenticated and each call holds a challenge in memory: limit per address too.
+      const ip = clientIp(req);
+      const o = loginOptions.get(ip);
+      if (!o || Date.now() - o.first > RATE_WINDOW_MS) loginOptions.set(ip, { count: 1, first: Date.now() });
+      else if (++o.count > LOGIN_OPTIONS_MAX) throw new HttpError(429, 'Too many sign-in attempts - try again later');
       sendJson(res, 200, await auth.startLogin());
       return;
     }
@@ -954,8 +966,11 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
       const body = method === 'PATCH' ? await readJson(req) : {};
       try {
         if (method === 'PATCH') store.renameCredential(user.id, passkeyMatch[1], str(body.name) ?? '');
-        else if (method === 'DELETE') store.removeCredential(user.id, passkeyMatch[1]);
-        else throw new HttpError(405, 'Method not allowed');
+        else if (method === 'DELETE') {
+          store.removeCredential(user.id, passkeyMatch[1]);
+          // A removed passkey may be the stolen one: end the user's other sessions.
+          auth.destroyUserSessions(user.id, parseCookies(req)[SESSION_COOKIE]);
+        } else throw new HttpError(405, 'Method not allowed');
       } catch (error) {
         if (error instanceof HttpError) throw error;
         throw new HttpError(400, error instanceof Error ? error.message : String(error));
@@ -978,6 +993,8 @@ export async function startHttpServer(opts: HttpServerOptions): Promise<HttpServ
         } else {
           store.clearPassword(user.id);
         }
+        // Other browsers signed in with the old credentials are signed out.
+        auth.destroyUserSessions(user.id, parseCookies(req)[SESSION_COOKIE]);
       } catch (error) {
         if (error instanceof HttpError || error instanceof AuthError) throw error;
         throw new HttpError(400, error instanceof Error ? error.message : String(error));

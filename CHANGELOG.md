@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- **Access token in the URL is now opt-in.** `/mcp?token=<token>` only works with `ALLOW_TOKEN_IN_URL=true` (or *Accept the access token in the URL* in Settings); URLs end up in proxy logs and histories. **Breaking** for clients that used `?token=`: turn the setting on, or send `Authorization: Bearer`.
+- Anonymous OAuth client registrations can no longer push out connectors that are in use: when the 200 slots are full, the oldest never-authorized client is dropped, and registration is refused if every client holds tokens.
+- Passkey sign-in starts (`/admin/api/login/options`) are limited per address, and pending sign-ins are capped and swept.
+- Changing or removing a password, or removing a passkey, signs the user out everywhere else (the session making the change stays signed in).
+- Upstream error bodies from Sonarr/Radarr/Lidarr/Prowlarr, Overseerr and Tautulli are no longer passed to MCP callers: only the status and a short validation message; the full body goes to the server log.
+- `radarr_get_manual_import_candidates` with `folder` only scans inside Radarr's root folders, download-client folders, remote path mappings and output paths of queued downloads (other host paths are refused; `downloadId` is unchanged).
+- CI actions are pinned to commit SHAs, the publish job installs a fixed npm version, the Docker base image is pinned by digest, and Dependabot keeps those pins current.
+
 ### Fixed
 - **Sign in with Plex with several servers.** An account with access to more than one server (e.g. one shared by a friend) got stuck after Allow: the choice was never shown because Plex drops the `#fragment` of the return address. The server the account owns is now saved without asking when it is the only one; the return address uses `?signin=` instead.
 - The web UI connection test names only the missing required fields (it listed every field, optional ones included).

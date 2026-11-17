@@ -12,7 +12,7 @@ test('tools register only for the configured service', async () => {
 });
 test('manual import submits a command without claiming completed import', async () => {
   const candidate = { path: '/downloads/movie.mkv', size: 2000, movie: { id: 42 }, quality: { quality: { id: 19 } }, languages: [{ id: 1, name: 'English' }], rejections: [] };
-  const f = await fixture('radarr', c => c.path.includes('/manualimport?') ? [candidate] : { id: 123, status: 'queued' });
+  const f = await fixture('radarr', c => c.path.includes('/rootfolder') ? [{ path: '/downloads' }] : c.path.includes('/manualimport?') ? [candidate] : { id: 123, status: 'queued' });
   try {
     const result = data(await f.call('radarr_manual_import', { folder: '/downloads', files: [{ path: candidate.path, movieId: 42, expectedSizeBytes: 2000 }], importMode: 'copy', confirmed: true }));
     assert.equal(result.submitted, true);

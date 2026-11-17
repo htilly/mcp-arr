@@ -8,6 +8,10 @@ function fixture() {
   const client = new RadarrClient({ url: 'http://example.invalid', apiKey: '***REDACTED***' });
   client.request = async (endpoint, options) => {
     calls.push({ endpoint, options });
+    if (endpoint === '/rootfolder') return [{ path: '/movies' }];
+    if (endpoint.startsWith('/queue?')) return { records: [{ outputPath: '/downloads/complete/Movie.2024' }] };
+    if (endpoint === '/remotepathmapping') return [{ localPath: '/downloads/' }];
+    if (endpoint === '/downloadclient') return [{ fields: [{ name: 'watchFolder', value: 'D:\\Watch' }, { name: 'category', value: 'radarr' }] }];
     return endpoint.startsWith('/manualimport?') ? [candidate] : { id: 123, status: 'queued' };
   };
   const selection = { path: candidate.path, movieId: 42, expectedSizeBytes: candidate.size, acknowledgedRejections: ['Not an upgrade'] };
@@ -58,8 +62,26 @@ test('inspection validates scope and safely encodes folder paths; command lookup
   await assert.rejects(client.getCommand(-1));
   assert.equal(calls.length, 0);
   await client.getManualImportCandidates({ folder: '/downloads/A & B' });
-  assert.equal(new URLSearchParams(calls[0].endpoint.split('?')[1]).get('folder'), '/downloads/A & B');
+  const scan = calls.find(c => c.endpoint.startsWith('/manualimport?'));
+  assert.equal(new URLSearchParams(scan.endpoint.split('?')[1]).get('folder'), '/downloads/A & B');
+  calls.length = 0;
   await client.getCommand(123);
-  assert.equal(calls[1].endpoint, '/command/123');
-  assert.equal(calls[1].options, undefined);
+  assert.equal(calls[0].endpoint, '/command/123');
+  assert.equal(calls[0].options, undefined);
+});
+
+test('folder scans are limited to root, download and queue folders', async () => {
+  const { client, calls } = fixture();
+  for (const folder of ['/movies', '/movies/Film (2024)', '/downloads', '/downloads/complete/Movie.2024', 'D:\\Watch\\x']) {
+    await client.getManualImportCandidates({ folder });
+  }
+  for (const folder of ['/etc', '/home/user', '/moviesX', '/downloads/../etc', '/movies/./x', '/', 'D:\\Other']) {
+    calls.length = 0;
+    await assert.rejects(client.getManualImportCandidates({ folder }), /outside|Invalid folder/, folder);
+    assert.ok(!calls.some(c => c.endpoint.startsWith('/manualimport?')), `no scan for ${folder}`);
+  }
+  // downloadId scans need no folder check
+  calls.length = 0;
+  await client.getManualImportCandidates({ downloadId: 'abc' });
+  assert.deepEqual(calls.map(c => c.endpoint.split('?')[0]), ['/manualimport']);
 });

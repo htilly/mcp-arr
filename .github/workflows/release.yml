@@ -191,7 +191,7 @@ jobs:
         with:
           node-version: 24.x
       # Trusted publishing needs npm 11.5.1 or later.
-      - run: npm install -g npm@latest
+      - run: npm install -g npm@11.21.2
       - run: npm ci
       # Skip quietly if this version is already on npm (e.g. a re-run).
       - name: Publish
