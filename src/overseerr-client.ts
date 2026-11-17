@@ -6,6 +6,7 @@
  */
 
 import { pathId } from "./security.js";
+import { upstreamErrorDetail } from "./format.js";
 
 export interface OverseerrConfig {
   url: string;
@@ -156,7 +157,7 @@ export class OverseerrClient {
     if (!response.ok) {
       const text = await response.text();
       throw new Error(
-        `Overseerr API error: ${response.status} ${response.statusText} - ${text}`
+        `Overseerr API error: ${response.status} ${response.statusText}${upstreamErrorDetail('Overseerr', response.status, text)}`
       );
     }
 

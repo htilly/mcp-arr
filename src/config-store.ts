@@ -217,6 +217,9 @@ export interface StoredTls {
   };
 }
 
+/** No free slot for another OAuth client (every stored client is in use). */
+export class OAuthClientLimitError extends Error {}
+
 interface ConfigData {
   /** Per service: url plus one entry per field key (e.g. apiKey). */
   services: Partial<Record<ServiceId, Record<string, string>>>;
@@ -795,10 +798,20 @@ export class ConfigStore {
 
   registerOAuthClient(client: Omit<StoredOAuthClient, 'id' | 'createdAt'>): StoredOAuthClient {
     const entry: StoredOAuthClient = { ...client, id: `marr-client-${randomBytes(12).toString('base64url')}`, createdAt: new Date().toISOString() };
-    this.data.oauthClients.push(entry);
-    if (this.data.oauthClients.length > ConfigStore.MAX_OAUTH_CLIENTS) {
-      this.data.oauthClients = this.data.oauthClients.slice(-ConfigStore.MAX_OAUTH_CLIENTS);
+    if (this.data.oauthClients.length >= ConfigStore.MAX_OAUTH_CLIENTS) {
+      // Make room by dropping the oldest client that was never authorized (no
+      // access or refresh token). Clients in use are never evicted, so a flood
+      // of anonymous registrations cannot disconnect a working connector.
+      this.pruneOAuth();
+      const inUse = new Set([
+        ...this.data.tokens.map(t => t.clientId).filter((id): id is string => !!id),
+        ...this.data.oauthRefresh.map(r => r.clientId),
+      ]);
+      const idx = this.data.oauthClients.findIndex(c => !inUse.has(c.id));
+      if (idx === -1) throw new OAuthClientLimitError('Too many OAuth clients are registered - revoke unused connectors first');
+      this.data.oauthClients.splice(idx, 1);
     }
+    this.data.oauthClients.push(entry);
     this.save();
     return entry;
   }

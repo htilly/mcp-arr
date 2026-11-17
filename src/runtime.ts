@@ -44,6 +44,8 @@ export interface Runtime {
   oauthReason: string;
   oauthHosts: string[];
   trustProxy: boolean;
+  /** Accept ?token= on the MCP endpoint (ALLOW_TOKEN_IN_URL). */
+  allowTokenInUrl: boolean;
 }
 
 const splitList = (v?: string) => (v ?? '').split(',').map(x => x.trim()).filter(Boolean);
@@ -103,7 +105,7 @@ export async function buildRuntimeOrFallback(ctx: RuntimeContext, env: NodeJS.Pr
     console.error(`WARNING: ${message}`);
     const tls = temporaryTls(ctx, message);
     await tls.init();
-    return { tls, tlsMode: tls.mode, oauthReason: 'off while the certificate settings have an error', oauthHosts: [], trustProxy: env.TRUST_PROXY === 'true' };
+    return { tls, tlsMode: tls.mode, oauthReason: 'off while the certificate settings have an error', oauthHosts: [], trustProxy: env.TRUST_PROXY === 'true', allowTokenInUrl: env.ALLOW_TOKEN_IN_URL === 'true' };
   }
 }
 
@@ -133,7 +135,7 @@ export async function buildRuntime(ctx: RuntimeContext, env: NodeJS.ProcessEnv, 
       ? previous.oauth
       : new OAuthProvider({ store: ctx.store, issuer: ctx.publicUrl.origin, mcpPath: ctx.mcpPath, allowedRedirectHosts: oauthHosts });
   }
-  return { tls, tlsMode: tls.mode, oauth, oauthReason: decision.reason, oauthHosts, trustProxy: env.TRUST_PROXY === 'true' };
+  return { tls, tlsMode: tls.mode, oauth, oauthReason: decision.reason, oauthHosts, trustProxy: env.TRUST_PROXY === 'true', allowTokenInUrl: env.ALLOW_TOKEN_IN_URL === 'true' };
 }
 
 function sameList(a: string[], b: string[]): boolean {

@@ -22,6 +22,8 @@ import { randomBytes } from 'node:crypto';
 import { ConfigStore, Role, StoredUser, safeEqual } from './config-store.js';
 
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
+/** Pending passkey ceremonies kept in memory at most (the oldest is dropped beyond this). */
+const MAX_FLOWS = 1000;
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
 export class AuthError extends Error {
@@ -99,6 +101,18 @@ export class Auth {
     return Boolean(this.recoveryCode);
   }
 
+  /** Store a pending ceremony: expired ones are swept and the total stays bounded. */
+  private addFlow(flowId: string, flow: Flow): void {
+    const now = Date.now();
+    for (const [id, f] of this.flows) if (f.expires < now) this.flows.delete(id);
+    while (this.flows.size >= MAX_FLOWS) {
+      const oldest = this.flows.keys().next().value;
+      if (oldest === undefined) break;
+      this.flows.delete(oldest);
+    }
+    this.flows.set(flowId, flow);
+  }
+
   /** Remove expired flows and sessions. */
   cleanup(): void {
     const now = Date.now();
@@ -130,8 +144,9 @@ export class Auth {
     if (sid) this.sessions.delete(sid);
   }
 
-  destroyUserSessions(userId: string): void {
-    for (const [id, s] of this.sessions) if (s.userId === userId) this.sessions.delete(id);
+  /** Sign a user out everywhere, optionally keeping one session (the one making the change). */
+  destroyUserSessions(userId: string, keep?: string): void {
+    for (const [id, s] of this.sessions) if (s.userId === userId && id !== keep) this.sessions.delete(id);
   }
 
   get sessionTtlSeconds(): number {
@@ -199,7 +214,7 @@ export class Auth {
     });
 
     const flowId = randomBytes(24).toString('base64url');
-    this.flows.set(flowId, {
+    this.addFlow(flowId, {
       purpose: 'register',
       kind: input.kind,
       challenge: options.challenge,
@@ -335,7 +350,7 @@ export class Auth {
       timeout: CHALLENGE_TTL_MS,
     });
     const flowId = randomBytes(24).toString('base64url');
-    this.flows.set(flowId, { purpose: 'login', challenge: options.challenge, expires: Date.now() + CHALLENGE_TTL_MS });
+    this.addFlow(flowId, { purpose: 'login', challenge: options.challenge, expires: Date.now() + CHALLENGE_TTL_MS });
     return { flowId, options };
   }
 

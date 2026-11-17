@@ -97,6 +97,7 @@ export const SETTING_DEFS: SettingDef[] = [
     ],
   },
   { key: 'OAUTH_ALLOWED_REDIRECT_HOSTS', group: 'access', label: 'Extra connector redirect hosts', type: 'list', placeholder: 'connectors.example.com', help: 'In addition to claude.ai, claude.com, chatgpt.com and openai.com.' },
+  { key: 'ALLOW_TOKEN_IN_URL', group: 'access', label: 'Accept the access token in the URL (?token=)', type: 'bool', default: 'false', help: 'Only for MCP clients that cannot send an Authorization header. URLs end up in proxy logs and history, so a token sent this way can leak.' },
   { key: 'TRUST_PROXY', group: 'access', label: 'Behind my own reverse proxy (trust X-Forwarded-For for rate limiting)', type: 'bool', default: 'false' },
 ];
 

@@ -26,3 +26,32 @@ export function formatDuration(seconds: number): string {
 export function unixToIso(seconds?: number): string | undefined {
   return seconds && seconds > 0 ? new Date(seconds * 1000).toISOString() : undefined;
 }
+
+/**
+ * The short, human-readable part of an upstream error body, or '' when there is none.
+ * *arr validation errors ([{ errorMessage }]) and { message } bodies are kept, at most
+ * 200 characters; anything else (HTML pages, stack traces, raw dumps) is dropped so file
+ * paths and versions of the media hosts do not reach MCP callers. The full body is
+ * written to stderr for the server admin.
+ */
+export function upstreamErrorDetail(service: string, status: number, text: string): string {
+  if (text) console.error(`${service} API error ${status}: ${text.slice(0, 2000)}`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return '';
+  }
+  const messages: string[] = [];
+  const pick = (v: unknown) => {
+    if (v && typeof v === 'object') {
+      const o = v as { errorMessage?: unknown; message?: unknown };
+      const m = typeof o.errorMessage === 'string' ? o.errorMessage : typeof o.message === 'string' ? o.message : undefined;
+      if (m) messages.push(m);
+    }
+  };
+  if (Array.isArray(parsed)) parsed.slice(0, 5).forEach(pick);
+  else pick(parsed);
+  const detail = messages.join('; ').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 200);
+  return detail ? ` - ${detail}` : '';
+}

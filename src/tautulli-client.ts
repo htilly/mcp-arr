@@ -5,6 +5,8 @@
  * API: http://IP:PORT/api/v2?apikey=KEY&cmd=COMMAND
  */
 
+import { upstreamErrorDetail } from "./format.js";
+
 export interface TautulliConfig {
   url: string;
   apiKey: string;
@@ -43,7 +45,7 @@ export class TautulliClient {
     const response = await fetch(url, { method: 'GET' });
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`Tautulli API error: ${response.status} ${response.statusText} - ${text}`);
+      throw new Error(`Tautulli API error: ${response.status} ${response.statusText}${upstreamErrorDetail('Tautulli', response.status, text)}`);
     }
     const json = (await response.json()) as TautulliResponse<T>;
     if (json.response?.result === 'error') {

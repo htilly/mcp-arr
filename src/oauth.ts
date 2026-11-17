@@ -17,7 +17,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import type { ConfigStore, StoredOAuthClient } from './config-store.js';
-import { safeEqual, sha256 } from './config-store.js';
+import { OAuthClientLimitError, safeEqual, sha256 } from './config-store.js';
 
 export const OAUTH_SCOPE = 'mcp';
 
@@ -206,11 +206,17 @@ export class OAuthProvider {
     const name = (typeof body.client_name === 'string' ? body.client_name : '')
       .replace(/[\u0000-\u001f]/g, '').trim().slice(0, 64) || 'MCP client';
     const secret = method === 'none' ? undefined : randomBytes(32).toString('base64url');
-    const client = this.opts.store.registerOAuthClient({
-      name,
-      redirectUris: uris,
-      ...(secret ? { secretHash: sha256(secret) } : {}),
-    });
+    let client: StoredOAuthClient;
+    try {
+      client = this.opts.store.registerOAuthClient({
+        name,
+        redirectUris: uris,
+        ...(secret ? { secretHash: sha256(secret) } : {}),
+      });
+    } catch (error) {
+      if (error instanceof OAuthClientLimitError) throw new OAuthError(503, 'temporarily_unavailable', error.message);
+      throw error;
+    }
     return {
       client_id: client.id,
       ...(secret ? { client_secret: secret, client_secret_expires_at: 0 } : {}),

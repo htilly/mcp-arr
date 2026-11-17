@@ -492,7 +492,7 @@ if (clients.radarr) {
     {
       name: "radarr_get_manual_import_candidates",
       annotations: READ_ONLY,
-      description: "Inspect a completed download folder or downloadId for manual import. Returns exact paths, sizes, parsed movie/quality/languages and rejection reasons. Does not import. Review edition and media quality separately.",
+      description: "Inspect a completed download folder or downloadId for manual import. folder must be inside a Radarr root folder, download-client folder, remote path mapping or the output path of a queued download. Returns exact paths, sizes, parsed movie/quality/languages and rejection reasons. Does not import. Review edition and media quality separately.",
       inputSchema: {
         type: "object",
         properties: { folder: { type: "string" }, downloadId: { type: "string" } },
