@@ -60,11 +60,10 @@ services:
       # Services can also be set here (they become read-only in the UI):
       # SONARR_URL: http://sonarr:8989
       # SONARR_API_KEY: your-sonarr-api-key
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--no-check-certificate", "-O-", "https://127.0.0.1:3000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+    # No healthcheck here: the image ships one (it probes /health with node and
+    # honours PORT and TLS_MODE). The healthcheck this file used to set ran
+    # BusyBox wget, which forks an ssl_client helper that was never reaped -
+    # one leaked zombie process per check. See CHANGELOG.
 
 secrets:
   mcp_arr_key:

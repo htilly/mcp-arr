@@ -21,12 +21,21 @@ FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb836
 
 WORKDIR /app
 
+# A real init as PID 1. Node does not reap orphaned children, so any process
+# reparented to PID 1 inside the container stays a zombie for the life of the
+# container. tini reaps them. Without it, a container healthcheck that forks a
+# helper (BusyBox wget's ssl_client, for HTTPS) leaks one zombie per check.
+RUN apk add --no-cache tini
+
 # Copy package files and install production dependencies only
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 # Copy built output from builder
 COPY --from=builder /app/dist ./dist
+
+# Container healthcheck, run by node rather than BusyBox wget (see above)
+COPY docker/healthcheck.mjs ./docker/healthcheck.mjs
 
 # Non-root user; writable volumes for the encrypted config and the (fallback) key file.
 # Keep /secrets on a different volume/disk than /config - or use a Docker secret instead
@@ -45,6 +54,12 @@ EXPOSE 3000 8080
 
 USER nodejs
 
+# Probes the http-mode listener. In stdio mode there is nothing to probe, and
+# the script reports healthy rather than leaving the container unhealthy.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD ["node", "docker/healthcheck.mjs"]
+
 # Default: stdio (for local MCP clients, e.g. `docker run -i`).
 # Set MCP_TRANSPORT=http and PUBLIC_URL to run as an HTTPS server with the web UI (see docker-compose.yml).
-ENTRYPOINT ["node", "dist/index.js"]
+# tini (PID 1) reaps orphaned processes and forwards signals to node.
+ENTRYPOINT ["/sbin/tini", "--", "node", "dist/index.js"]
